@@ -31,7 +31,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.29";
+const UI_VERSION = "V1.0.30";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -71,6 +71,9 @@ const modalMessage = document.getElementById("modalMessage");
 const modalConfirmInput = document.getElementById("modalConfirmInput");
 const modalFileInput = document.getElementById("modalFileInput");
 const modalEditor = document.getElementById("modalEditor");
+const modalAttach = document.getElementById("modalAttach");
+const modalAttachDescription = document.getElementById("modalAttachDescription");
+const modalAttachStatus = document.getElementById("modalAttachStatus");
 const modalMarkdown = document.getElementById("modalMarkdown");
 const modalMedia = document.getElementById("modalMedia");
 const modalChat = document.getElementById("modalChat");
@@ -1279,6 +1282,9 @@ function closeModal() {
   modalEditor.readOnly = false;
   modalEditor.disabled = false;
   modalEditor.hidden = false;
+  modalAttach.hidden = true;
+  modalAttachDescription.value = "";
+  modalAttachDescription.disabled = false;
   modalMarkdown.hidden = true;
   modalMarkdown.innerHTML = "";
   modalMedia.hidden = true;
@@ -1310,6 +1316,9 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalEditor.disabled = false;
   modalMessage.textContent = "";
   modalEditor.hidden = false;
+  modalAttach.hidden = true;
+  modalAttachDescription.value = "";
+  modalAttachDescription.disabled = false;
   modalMarkdown.hidden = true;
   modalMarkdown.innerHTML = "";
   modalMedia.hidden = true;
@@ -1465,9 +1474,11 @@ async function openNodeModal(action, slug = state.focusSlug) {
   if (action === "attach-file") {
     modalKicker.textContent = "Attach file";
     modalPrimaryButton.textContent = "Attach file";
-    modalMessage.textContent = "Choose a file from Finder. Supported media is copied into the web media root for preview and attached to gbrain when available.";
+    modalMessage.textContent = "Choose a file and optionally describe it for the markdown caption or alt text.";
     modalFileInput.hidden = false;
-    modalEditor.value = "# Optional fallback for host-local paths\nfile_path: ";
+    modalEditor.hidden = true;
+    modalAttach.hidden = false;
+    modalAttachStatus.textContent = "Choose a file from Finder. Supported media is copied into the web media root, attached to gbrain, and added to markdown using the description above.";
     operationModal.hidden = false;
     modalFileInput.focus();
     return;
@@ -1593,6 +1604,7 @@ async function runModalPrimaryAction() {
     modalPrimaryButton.textContent = "Uploading...";
     modalFileInput.disabled = true;
     modalEditor.disabled = true;
+    modalAttachDescription.disabled = true;
   }
   try {
     if (action === "edit") {
@@ -1720,12 +1732,10 @@ async function runModalPrimaryAction() {
       if (selectedFile) {
         const formData = new FormData();
         formData.append("file", selectedFile);
+        formData.append("description", modalAttachDescription.value.trim());
         response = await apiPostForm(`/api/entity-attach-file/${encodeURIComponent(slug)}`, formData);
       } else {
-        const fields = parseOperationFields(modalEditor.value);
-        response = await apiPost(`/api/entity-attach-file/${encodeURIComponent(slug)}`, {
-          file_path: fields.file_path,
-        });
+        throw new Error("Choose a file before attaching.");
       }
       if (!response.ok) throw new Error(response.data?.error || `Attach file failed with ${response.status}`);
       applyGraphPayload(response.data.graph, slug);
@@ -1763,6 +1773,7 @@ async function runModalPrimaryAction() {
     modalCancelButton.disabled = false;
     modalFileInput.disabled = false;
     modalEditor.disabled = false;
+    modalAttachDescription.disabled = false;
     modalChatInput.disabled = false;
     if (action === "attach-file" && state.modalAction?.action === "attach-file") {
       modalPrimaryButton.textContent = primaryButtonText;

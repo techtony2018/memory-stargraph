@@ -58,8 +58,8 @@ class FakeStore:
         self.calls.append(("graph_query", slug, link_type, direction, depth))
         return "graph query"
 
-    def attach_file(self, slug, file_path):
-        self.calls.append(("attach_file", slug, file_path))
+    def attach_file(self, slug, file_path, description=""):
+        self.calls.append(("attach_file", slug, file_path, description))
 
     def history(self, slug):
         self.calls.append(("history", slug))
@@ -117,7 +117,7 @@ class ApiEndpointTests(unittest.TestCase):
                 ("/api/entity-ask/people%2Ftony-guan", {"question": "What should I know?"}),
                 ("/api/entity-backlinks/people%2Ftony-guan", {}),
                 ("/api/entity-graph-query/people%2Ftony-guan", {"link_type": "employed by", "direction": "both", "depth": "1"}),
-                ("/api/entity-attach-file/people%2Ftony-guan", {"file_path": "/tmp/example.pdf"}),
+                ("/api/entity-attach-file/people%2Ftony-guan", {"file_path": "/tmp/example.pdf", "description": "Example file"}),
                 ("/api/entity-history/people%2Ftony-guan", {}),
                 ("/api/entity-embed/people%2Ftony-guan", {}),
             ]

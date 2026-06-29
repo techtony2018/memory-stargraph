@@ -132,7 +132,7 @@ Example config:
 }
 ```
 
-For day-to-day use, choose `Attach file` from a node menu and pick the file in Finder. The service saves the upload, copies supported media into `media_roots`, appends an `## Attachments` markdown reference to the node page, and returns a `/media/...` preview URL. Host-local path entry remains available as a fallback for automation.
+For day-to-day use, choose `Attach file` from a node menu, pick the file in Finder, and optionally add a short description. The service saves the upload, copies supported media into `media_roots`, appends an `## Attachments` markdown reference to the node page using the description as the caption or alt text, and returns a `/media/...` preview URL. Host-local path attachment remains available through the JSON API for automation.
 
 Memory Stargraph exposes supported image/video/audio/PDF files read-only at:
 

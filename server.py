@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.29"
+UI_VERSION = "V1.0.30"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -718,18 +718,18 @@ def escape_markdown_label(label):
     return str(label or "Attachment").replace("[", "\\[").replace("]", "\\]")
 
 
-def attachment_markdown_line(relative_path):
+def attachment_markdown_line(relative_path, description=""):
     safe_path = safe_media_relative_path(str(relative_path or ""))
     if not safe_path:
         return ""
-    label = escape_markdown_label(markdown_link_label(safe_path))
+    label = escape_markdown_label(str(description or "").strip() or markdown_link_label(safe_path))
     url = "/".join(safe_path.parts)
     if media_kind_for_url(url) == "image":
         return f"![{label}]({url})"
     return f"[{label}]({url})"
 
 
-def append_attachment_reference(markdown, relative_path):
+def append_attachment_reference(markdown, relative_path, description=""):
     safe_path = safe_media_relative_path(str(relative_path or ""))
     if not safe_path:
         return markdown
@@ -737,7 +737,7 @@ def append_attachment_reference(markdown, relative_path):
     text = str(markdown or "")
     if url in text or f"/media/{url}" in text:
         return text
-    line = attachment_markdown_line(safe_path)
+    line = attachment_markdown_line(safe_path, description)
     if not line:
         return text
     trimmed = text.rstrip()
@@ -1758,7 +1758,7 @@ class GraphStore:
             command.extend(["--depth", str(depth)])
         return run_gbrain(*command)
 
-    def attach_file(self, slug, file_path):
+    def attach_file(self, slug, file_path, description=""):
         raw = ""
         try:
             raw_output = run_gbrain("get", slug)
@@ -1774,7 +1774,7 @@ class GraphStore:
         markdown_updated = False
         relative_path = relative_path_for_local_media(local_media)
         if raw and relative_path:
-            updated_raw = append_attachment_reference(raw, relative_path)
+            updated_raw = append_attachment_reference(raw, relative_path, description)
             if updated_raw != raw:
                 run_gbrain("put", slug, input_text=updated_raw)
                 markdown_updated = True
@@ -2041,8 +2041,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             try:
                 content_type = getattr(self, "headers", {}).get("Content-Type") or ""
                 uploaded_path = None
+                description = ""
                 if content_type.startswith("multipart/form-data"):
-                    _fields, files = self.read_multipart_body()
+                    fields, files = self.read_multipart_body()
+                    description = str(fields.get("description") or "").strip()
                     upload = files.get("file")
                     if not upload:
                         return self.end_json({"error": "file is required"}, status=HTTPStatus.BAD_REQUEST)
@@ -2051,9 +2053,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 else:
                     payload = self.read_json_body()
                     file_path = str(payload.get("file_path") or "").strip()
+                    description = str(payload.get("description") or "").strip()
                 if not file_path:
                     return self.end_json({"error": "file_path is required"}, status=HTTPStatus.BAD_REQUEST)
-                local_media = STORE.attach_file(slug, file_path)
+                local_media = STORE.attach_file(slug, file_path, description)
                 graph = STORE.get_seed_graph(force=True)
                 return self.end_json(
                     {

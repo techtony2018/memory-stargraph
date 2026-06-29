@@ -348,13 +348,13 @@ cover_image: companies/example-inc/logo.jpg
                 mock.patch.object(store, "invalidate") as invalidate,
             ):
                 run.side_effect = ["# Azul Systems\n\nCompany notes.", "", ""]
-                result = store.attach_file("companies/azul-systems", str(source))
+                result = store.attach_file("companies/azul-systems", str(source), "Azul company logo")
 
             self.assertEqual(result["served_url"], "/media/companies/azul-systems/Azul.jpg")
             self.assertTrue(result["markdown_updated"])
             run.assert_any_call("put", "companies/azul-systems", input_text=mock.ANY)
             put_content = next(call.kwargs["input_text"] for call in run.mock_calls if call.args[:2] == ("put", "companies/azul-systems"))
-            self.assertIn("![Azul](companies/azul-systems/Azul.jpg)", put_content)
+            self.assertIn("![Azul company logo](companies/azul-systems/Azul.jpg)", put_content)
             invalidate.assert_called_once()
 
     def test_part_identity_collapses_slug_and_label(self):

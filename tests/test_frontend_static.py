@@ -51,13 +51,17 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public" / "app.js").read_text()
 
         self.assertIn('id="modalFileInput"', markup)
+        self.assertIn('id="modalAttachDescription"', markup)
+        self.assertIn('id="modalAttachStatus"', markup)
         self.assertIn('type="file"', markup)
         self.assertIn("new FormData()", script)
         self.assertIn('formData.append("file"', script)
+        self.assertIn('formData.append("description"', script)
         self.assertIn("apiPostForm", script)
         self.assertIn('modalPrimaryButton.textContent = "Uploading..."', script)
         self.assertIn("modalFileInput.disabled = true", script)
-        self.assertIn("modalEditor.disabled = true", script)
+        self.assertIn("modalAttachDescription.disabled = true", script)
+        self.assertIn('throw new Error("Choose a file before attaching.")', script)
 
     def test_view_uses_rendered_markdown_modal(self):
         markup = (ROOT / "public" / "index.html").read_text()

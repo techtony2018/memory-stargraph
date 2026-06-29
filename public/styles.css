@@ -829,6 +829,49 @@ h2 {
   line-height: 1.35;
 }
 
+.attach-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.attach-panel[hidden] {
+  display: none;
+}
+
+.attach-description-wrap {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.attach-description-wrap input {
+  width: 100%;
+  border: 1px solid rgba(143, 168, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 8, 22, 0.9);
+  color: var(--text);
+  padding: 12px;
+  font: 14px/1.45 Inter, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.attach-description-wrap input:focus {
+  outline: 2px solid rgba(136, 246, 255, 0.32);
+  outline-offset: 2px;
+}
+
+.attach-status {
+  margin: 0;
+  border: 1px solid rgba(136, 246, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(136, 246, 255, 0.06);
+  color: var(--muted);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .chat-panel {
   display: grid;
   gap: 12px;

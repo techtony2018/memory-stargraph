@@ -176,6 +176,13 @@
         <input id="modalConfirmInput" class="modal-confirm-input" type="text" autocomplete="off" spellcheck="false" hidden />
         <input id="modalFileInput" class="modal-file-input" type="file" hidden />
         <textarea id="modalEditor" spellcheck="false"></textarea>
+        <div id="modalAttach" class="attach-panel" hidden>
+          <label class="attach-description-wrap">
+            <span>Media description</span>
+            <input id="modalAttachDescription" type="text" placeholder="Short caption or alt text for this media" autocomplete="off" />
+          </label>
+          <p id="modalAttachStatus" class="attach-status">Choose a file from Finder. The service will copy supported media into the web media root, attach it to gbrain, and add a markdown reference using the description above.</p>
+        </div>
         <div id="modalMarkdown" class="markdown-view" hidden></div>
         <div id="modalMedia" class="media-grid" hidden></div>
         <div id="modalChat" class="chat-panel" hidden>
