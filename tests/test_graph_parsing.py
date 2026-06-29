@@ -12,6 +12,7 @@ from server import (
     parse_backlinks,
     parse_frontmatter,
     parse_link_types,
+    parse_media_references,
     parse_page_list,
     parse_search_results,
 )
@@ -112,6 +113,20 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(meta["title"], "JTuner")
         self.assertEqual(meta["tags"], ["gc-tuning", "jtuner"])
         self.assertIn("Body text", body)
+
+    def test_parse_media_references_reads_markdown_and_html_media(self):
+        markdown = """# Media
+
+![Cover](https://example.com/cover.jpg)
+[Demo video](https://example.com/demo.mp4)
+<audio src="https://example.com/audio.mp3"></audio>
+[Not media](https://example.com/page)
+"""
+        media = parse_media_references(markdown)
+
+        self.assertEqual([item["kind"] for item in media], ["image", "video", "audio"])
+        self.assertEqual(media[0]["label"], "Cover")
+        self.assertTrue(all(item["embeddable"] for item in media))
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

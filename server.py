@@ -65,7 +65,7 @@ GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.13"
+UI_VERSION = "V1.0.14"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -81,6 +81,7 @@ BLOCKED_LABELS = {
 }
 NODE_OPERATION_ENDPOINTS = [
     {"action": "ask", "method": "POST", "endpoint": "/api/entity-ask/<slug>", "mutates_gbrain": False},
+    {"action": "media", "method": "GET", "endpoint": "/api/entity-media/<slug>", "mutates_gbrain": False},
     {"action": "backlinks", "method": "POST", "endpoint": "/api/entity-backlinks/<slug>", "mutates_gbrain": False},
     {"action": "graph-query", "method": "POST", "endpoint": "/api/entity-graph-query/<slug>", "mutates_gbrain": False},
     {"action": "history", "method": "POST", "endpoint": "/api/entity-history/<slug>", "mutates_gbrain": False},
@@ -91,6 +92,13 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
 ]
+
+MEDIA_EXTENSIONS = {
+    "image": {".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"},
+    "video": {".m4v", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm"},
+    "audio": {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav", ".webm"},
+    "document": {".pdf"},
+}
 
 
 DEMO_GRAPH = {
@@ -349,6 +357,60 @@ def parse_frontmatter(markdown):
             meta[key] = value.strip("'\"")
             current_key = key
     return meta, body
+
+
+def media_kind_for_url(url):
+    clean_url = str(url or "").strip().split("?", 1)[0].split("#", 1)[0].lower()
+    suffix = Path(clean_url).suffix
+    for media_kind, extensions in MEDIA_EXTENSIONS.items():
+        if suffix in extensions:
+            return media_kind
+    if clean_url.startswith("data:image/"):
+        return "image"
+    if clean_url.startswith("data:video/"):
+        return "video"
+    if clean_url.startswith("data:audio/"):
+        return "audio"
+    return "link"
+
+
+def is_embeddable_media_url(url):
+    text = str(url or "").strip()
+    return text.startswith(("http://", "https://", "data:"))
+
+
+def parse_media_references(markdown):
+    items = []
+    seen = set()
+
+    def add_item(kind, url, label="", source="markdown"):
+        clean_url = str(url or "").strip()
+        if not clean_url or clean_url in seen:
+            return
+        seen.add(clean_url)
+        detected_kind = kind if kind != "link" else media_kind_for_url(clean_url)
+        items.append(
+            {
+                "kind": detected_kind,
+                "url": clean_url,
+                "label": str(label or "").strip() or Path(clean_url.split("?", 1)[0]).name or clean_url,
+                "source": source,
+                "embeddable": is_embeddable_media_url(clean_url),
+            }
+        )
+
+    text = str(markdown or "")
+    for match in re.finditer(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):
+        add_item("image", match.group(2), match.group(1), "markdown_image")
+    for match in re.finditer(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):
+        kind = media_kind_for_url(match.group(2))
+        if kind != "link":
+            add_item(kind, match.group(2), match.group(1), "markdown_link")
+    for match in re.finditer(r"""<(img|video|audio|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", text, flags=re.IGNORECASE):
+        tag = match.group(1).lower()
+        kind = "image" if tag == "img" else "video" if tag in {"video", "source"} else "audio"
+        add_item(kind, match.group(2), "", f"html_{tag}")
+    return items
 
 
 def parse_neighbors(raw_text, center_slug):
@@ -1174,6 +1236,12 @@ class GraphStore:
             return None
         return run_gbrain("get", slug)
 
+    def get_entity_media(self, slug):
+        raw = self.get_entity_raw(slug)
+        if raw is None:
+            return None
+        return parse_media_references(raw)
+
     def save_entity_raw(self, slug, content):
         run_gbrain("put", slug, input_text=content)
         self.invalidate()
@@ -1316,6 +1384,15 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             if raw is None:
                 return self.end_json({"error": f"Unknown entity: {slug}"}, status=HTTPStatus.NOT_FOUND)
             return self.end_json({"slug": slug, "content": raw})
+        if parsed.path.startswith("/api/entity-media/"):
+            slug = unquote(parsed.path.split("/api/entity-media/", 1)[1]).strip("/")
+            try:
+                media = STORE.get_entity_media(slug)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+            if media is None:
+                return self.end_json({"error": f"Unknown entity: {slug}"}, status=HTTPStatus.NOT_FOUND)
+            return self.end_json({"slug": slug, "media": media})
         if parsed.path.startswith("/api/entity/"):
             slug = unquote(parsed.path.split("/api/entity/", 1)[1]).strip("/")
             entity = STORE.get_entity(slug)

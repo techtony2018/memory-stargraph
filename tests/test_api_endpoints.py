@@ -68,6 +68,10 @@ class FakeStore:
     def refresh_embedding(self, slug):
         self.calls.append(("refresh_embedding", slug))
 
+    def get_entity_media(self, slug):
+        self.calls.append(("get_entity_media", slug))
+        return [{"kind": "image", "url": "https://example.com/cover.jpg", "label": "Cover", "embeddable": True}]
+
 
 class ApiEndpointTests(unittest.TestCase):
     def dispatch_post(self, path, payload=None):
@@ -137,6 +141,16 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("history", call_names)
         self.assertIn("refresh_embedding", call_names)
 
+    def test_entity_media_endpoint_returns_detected_media(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/entity-media/people%2Ftony-guan")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["slug"], "people/tony-guan")
+        self.assertEqual(data["media"][0]["kind"], "image")
+        self.assertIn(("get_entity_media", "people/tony-guan"), fake_store.calls)
+
     def test_node_operation_manifest_lists_all_operation_endpoints(self):
         status, data = self.dispatch_get("/api/node-operations")
 
@@ -146,6 +160,7 @@ class ApiEndpointTests(unittest.TestCase):
             endpoints,
             {
                 "/api/entity-ask/<slug>",
+                "/api/entity-media/<slug>",
                 "/api/entity-backlinks/<slug>",
                 "/api/entity-graph-query/<slug>",
                 "/api/entity-history/<slug>",

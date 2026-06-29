@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.13";
+const UI_VERSION = "V1.0.14";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -69,6 +69,7 @@ const modalTitle = document.getElementById("modalTitle");
 const modalMessage = document.getElementById("modalMessage");
 const modalConfirmInput = document.getElementById("modalConfirmInput");
 const modalEditor = document.getElementById("modalEditor");
+const modalMedia = document.getElementById("modalMedia");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -908,6 +909,55 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+function renderMediaItems(items) {
+  modalMedia.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("span");
+    empty.textContent = "No image, video, audio, or PDF links were found in this node's markdown.";
+    modalMedia.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "media-card";
+    const label = document.createElement("span");
+    label.textContent = `${item.kind || "media"} · ${item.label || item.url}`;
+    card.appendChild(label);
+
+    if (item.embeddable && item.kind === "image") {
+      const image = document.createElement("img");
+      image.src = item.url;
+      image.alt = item.label || "Node media";
+      image.loading = "lazy";
+      card.appendChild(image);
+    } else if (item.embeddable && item.kind === "video") {
+      const video = document.createElement("video");
+      video.src = item.url;
+      video.controls = true;
+      video.playsInline = true;
+      card.appendChild(video);
+    } else if (item.embeddable && item.kind === "audio") {
+      const audio = document.createElement("audio");
+      audio.src = item.url;
+      audio.controls = true;
+      card.appendChild(audio);
+    }
+
+    const link = document.createElement("a");
+    link.href = item.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = item.embeddable ? "Open original" : "Reference path";
+    card.appendChild(link);
+    if (!item.embeddable) {
+      const note = document.createElement("span");
+      note.textContent = "This looks like a local path. Phones can only open it after it is exposed as an HTTP URL or stored in gbrain with a shareable URL.";
+      card.appendChild(note);
+    }
+    modalMedia.appendChild(card);
+  });
+}
+
 function closeModal() {
   operationModal.hidden = true;
   state.modalAction = null;
@@ -916,6 +966,9 @@ function closeModal() {
   modalConfirmInput.dataset.expected = "";
   modalEditor.value = "";
   modalEditor.readOnly = false;
+  modalEditor.hidden = false;
+  modalMedia.hidden = true;
+  modalMedia.innerHTML = "";
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -951,6 +1004,24 @@ async function openNodeModal(action, slug = state.focusSlug) {
     operationModal.hidden = false;
     const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
     modalEditor.value = response.ok ? response.data.content : `Unable to load raw page: ${response.data?.error || response.status}`;
+    return;
+  }
+
+  if (action === "media") {
+    modalKicker.textContent = "Node media";
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalEditor.hidden = true;
+    modalMedia.hidden = false;
+    modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown. URL media opens on both desktop and mobile.";
+    operationModal.hidden = false;
+    renderMediaItems([]);
+    const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
+    if (!response.ok) {
+      modalMessage.textContent = `Unable to load media: ${response.data?.error || response.status}`;
+      return;
+    }
+    renderMediaItems(response.data.media || []);
     return;
   }
 
@@ -1162,7 +1233,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "result") {
+  if (action === "view" || action === "media" || action === "result") {
     closeModal();
     return;
   }
@@ -1617,10 +1688,7 @@ function bindEvents() {
       if (!node || state.drag.moved) return;
       state.drag.moved = true;
       state.focusSlug = node.slug;
-      window.clearTimeout(state.mobileTooltipTimer);
-      hideGraphTooltip();
-      void loadEntity(node.slug);
-      showContextMenu(node.slug, state.drag.lastX, state.drag.lastY);
+      showMobileNodeHint(node, state.drag.lastX, state.drag.lastY);
     }, 580);
   };
 

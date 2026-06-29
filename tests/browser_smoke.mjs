@@ -285,7 +285,7 @@ try {
   if (firstMenuAction !== "ask") {
     throw new Error("Expected Ask GBrain to be the first node menu action");
   }
-  for (const action of ["ask", "backlinks", "graph-query", "history", "add-link", "remove-link", "tags", "timeline", "attach-file", "embed"]) {
+  for (const action of ["ask", "media", "backlinks", "graph-query", "history", "add-link", "remove-link", "tags", "timeline", "attach-file", "embed"]) {
     await page.click("#nodeMenuButton");
     await page.waitForSelector("#contextMenu:not([hidden])");
     const menuText = await page.evaluate((value) => document.querySelector(`#contextMenu button[data-action="${value}"]`)?.textContent, action);

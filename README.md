@@ -39,7 +39,8 @@ http://127.0.0.1:8788
 - Selected nodes reveal all direct-neighbor labels.
 - Hovering a directly linked node shows a 60% opacity popup near the mouse.
 - On mobile Safari, tap a node to show the same hover-style popup near your finger.
-- On mobile Safari, long-press a node to open the node operation menu.
+- On mobile Safari, long-press a node to show the hover-style popup only.
+- Use the `...` button in the selected-node panel on mobile to open node operations.
 - The hover popup shows entity name/category, a brief summary, then relationship type.
 - The relationship is also drawn on the selected-node edge when hovering a direct neighbor.
 - Direct-link chips in the sidebar show relationship type on hover/focus.
@@ -60,23 +61,25 @@ Supported node operations:
 
 1. `Ask GBrain` - runs a contextual `gbrain query`.
 2. `Show backlinks` - shows incoming links with `gbrain backlinks`.
-3. `Graph query from here` - runs typed/directional graph traversal.
-4. `View history` - shows page version history.
-5. `Add relationship` - creates a typed edge with `gbrain link`.
-6. `Remove relationship` - removes an edge with `gbrain unlink`.
-7. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
-8. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
-9. `Attach file` - uploads a local file with `gbrain files upload --page`.
-10. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
-11. `View raw details` - read-only `gbrain get`.
-12. `Modify markdown` - edits the page with `gbrain put`.
-13. `Hide` - hides a node in the web UI only.
-14. `Copy slug` - copies the exact gbrain slug.
-15. `Delete from gbrain` - deletes after exact node-name confirmation.
+3. `View media` - opens detected image/video/audio/PDF links from the node markdown.
+4. `Graph query from here` - runs typed/directional graph traversal.
+5. `View history` - shows page version history.
+6. `Add relationship` - creates a typed edge with `gbrain link`.
+7. `Remove relationship` - removes an edge with `gbrain unlink`.
+8. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
+9. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
+10. `Attach file` - uploads a local file path into gbrain storage for this page.
+11. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
+12. `View raw details` - read-only `gbrain get`.
+13. `Modify markdown` - edits the page with `gbrain put`.
+14. `Hide` - hides a node in the web UI only.
+15. `Copy slug` - copies the exact gbrain slug.
+16. `Delete from gbrain` - deletes after exact node-name confirmation.
 
 Node operation API contract:
 
 - `GET /api/node-operations` - lists the supported operation endpoints.
+- `GET /api/entity-media/<slug>` - lists detected media references from node markdown.
 - `POST /api/entity-ask/<slug>` - ask gbrain about a node.
 - `POST /api/entity-backlinks/<slug>` - show backlinks.
 - `POST /api/entity-graph-query/<slug>` - run typed/directional graph traversal.
@@ -208,20 +211,21 @@ Verification commands:
 
 Supported node operations to preserve:
 1. Ask GBrain
-2. Show backlinks
-3. Graph query from here
-4. View history
-5. Add relationship
-6. Remove relationship
-7. Edit tags
-8. Add timeline event
-9. Attach file
-10. Refresh embedding
-11. View raw details
-12. Modify markdown
-13. Hide
-14. Copy slug
-15. Delete from gbrain
+2. View media
+3. Show backlinks
+4. Graph query from here
+5. View history
+6. Add relationship
+7. Remove relationship
+8. Edit tags
+9. Add timeline event
+10. Attach file
+11. Refresh embedding
+12. View raw details
+13. Modify markdown
+14. Hide
+15. Copy slug
+16. Delete from gbrain
 
 Behavior requirements:
 - Root `index` should always load eagerly.
