@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.16";
+const UI_VERSION = "V1.0.17";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -919,7 +919,7 @@ function renderMediaItems(items) {
   }
   items.forEach((item) => {
     const displayUrl = item.served_url || item.url;
-    const canEmbed = Boolean(item.embeddable || item.served_url);
+    const canEmbed = Boolean(item.embeddable || item.served_available);
     const card = document.createElement("div");
     card.className = "media-card";
     const label = document.createElement("span");
@@ -953,7 +953,9 @@ function renderMediaItems(items) {
     card.appendChild(link);
     if (item.served_url && item.served_url !== item.url) {
       const note = document.createElement("span");
-      note.textContent = `Served from local media path: ${item.url}`;
+      note.textContent = item.served_available
+        ? `Served from local media path: ${item.url}`
+        : `Expected local media path: ${item.url}. Put the file under a configured media root to enable preview.`;
       card.appendChild(note);
     } else if (!item.embeddable) {
       const note = document.createElement("span");

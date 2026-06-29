@@ -72,7 +72,7 @@ MEDIA_ROOTS = [
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_roots", [])]
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.16"
+UI_VERSION = "V1.0.17"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -468,6 +468,7 @@ def parse_media_references(markdown):
             return
         seen.add(clean_url)
         detected_kind = kind if kind != "link" else media_kind_for_url(clean_url)
+        served_url = serve_url_for_media_reference(clean_url)
         items.append(
             {
                 "kind": detected_kind,
@@ -475,7 +476,8 @@ def parse_media_references(markdown):
                 "label": str(label or "").strip() or Path(clean_url.split("?", 1)[0]).name or clean_url,
                 "source": source,
                 "embeddable": is_embeddable_media_url(clean_url),
-                "served_url": serve_url_for_media_reference(clean_url),
+                "served_url": served_url,
+                "served_available": bool(resolve_media_file_path(served_url)) if served_url else False,
             }
         )
 

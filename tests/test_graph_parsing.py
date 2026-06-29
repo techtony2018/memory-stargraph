@@ -152,6 +152,8 @@ profile_image_uploaded_at: '2026-06-29'
         self.assertEqual(media[0]["label"], "profile image")
         self.assertEqual(media[0]["source"], "frontmatter:profile_image")
         self.assertFalse(media[0]["embeddable"])
+        self.assertEqual(media[0]["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
+        self.assertFalse(media[0]["served_available"])
 
     def test_media_reference_served_url_uses_readonly_media_route(self):
         self.assertEqual(
