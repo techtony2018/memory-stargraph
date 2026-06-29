@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.26";
+const UI_VERSION = "V1.0.27";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -936,8 +936,15 @@ function splitList(value) {
 function mediaDisplayUrl(url) {
   const value = String(url || "").trim();
   if (!value) return "";
-  if (/^https?:\/\//i.test(value) || value.startsWith("/")) return value;
-  return `/media/${value.replace(/^\/+/, "")}`;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("/")) return encodeURI(value);
+  return `/media/${value.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function cleanMarkdownDestination(value) {
+  const text = String(value || "").trim();
+  const title = text.match(/^(.+?)\s+"[^"]*"\s*$/);
+  return (title ? title[1] : text).trim();
 }
 
 function appendTextWithBreaks(parent, text) {
@@ -948,7 +955,7 @@ function appendTextWithBreaks(parent, text) {
 }
 
 function appendInlineMarkdown(parent, text) {
-  const pattern = /(!?)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
+  const pattern = /(!?)\[([^\]]+)\]\(([^)]+)\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
   let cursor = 0;
   String(text || "").replace(pattern, (match, bang, label, url, wikiTarget, wikiLabel, code, boldItalic, bold, italicStar, boldUnderscore, italicUnderscore, strike, offset) => {
     if (offset > cursor) appendTextWithBreaks(parent, text.slice(cursor, offset));
@@ -982,13 +989,13 @@ function appendInlineMarkdown(parent, text) {
       parent.appendChild(link);
     } else if (bang) {
       const image = document.createElement("img");
-      image.src = mediaDisplayUrl(url);
+      image.src = mediaDisplayUrl(cleanMarkdownDestination(url));
       image.alt = label || "Markdown image";
       image.loading = "lazy";
       parent.appendChild(image);
     } else {
       const link = document.createElement("a");
-      link.href = mediaDisplayUrl(url);
+      link.href = mediaDisplayUrl(cleanMarkdownDestination(url));
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = label || url;

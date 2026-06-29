@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.26"
+UI_VERSION = "V1.0.27"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -480,7 +480,14 @@ def serve_url_for_media_reference(value):
     relative_path = safe_media_relative_path(value)
     if not relative_path:
         return None
-    return "/media/" + "/".join(relative_path.parts)
+    return media_served_url_for_relative_path(relative_path)
+
+
+def media_served_url_for_relative_path(relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    return "/media/" + "/".join(quote(part) for part in safe_path.parts)
 
 
 def resolve_media_file_path(request_path):
@@ -553,7 +560,7 @@ def copy_media_source_to_root(source_path, relative_path):
         return None
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
-    served_url = "/media/" + "/".join(safe_media_relative_path(str(relative_path)).parts)
+    served_url = media_served_url_for_relative_path(relative_path)
     return {
         "path": str(destination),
         "served_url": served_url,
@@ -577,7 +584,7 @@ def download_media_url_to_root(url, relative_path):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urlopen(url, timeout=MEDIA_FETCH_TIMEOUT_SECONDS) as response:
         destination.write_bytes(response.read())
-    served_url = "/media/" + "/".join(safe_media_relative_path(str(relative_path)).parts)
+    served_url = media_served_url_for_relative_path(relative_path)
     return {
         "path": str(destination),
         "served_url": served_url,
@@ -677,7 +684,7 @@ def materialize_local_media_for_slug(slug, file_path, raw_markdown=""):
         relative_path = destination.resolve().relative_to(MEDIA_ROOTS[0].resolve())
     except ValueError:
         return None
-    served_url = "/media/" + "/".join(relative_path.parts)
+    served_url = media_served_url_for_relative_path(relative_path)
     return {
         "path": str(destination),
         "served_url": served_url,
@@ -775,6 +782,11 @@ def parse_media_references(markdown):
     items = []
     seen = set()
 
+    def markdown_destination(value):
+        text = str(value or "").strip()
+        title_match = re.match(r'^(?P<url>.+?)\s+"[^"]*"\s*$', text)
+        return (title_match.group("url") if title_match else text).strip()
+
     def add_item(kind, url, label="", source="markdown"):
         clean_url = str(url or "").strip()
         if not clean_url or clean_url in seen:
@@ -803,12 +815,13 @@ def parse_media_references(markdown):
                 add_item(kind, url, label or key.replace("_", " "), f"frontmatter:{key}")
 
     text = body
-    for match in re.finditer(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):
-        add_item("image", match.group(2), match.group(1), "markdown_image")
-    for match in re.finditer(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):
-        kind = media_kind_for_url(match.group(2))
+    for match in re.finditer(r"!\[([^\]]*)\]\(([^)]+)\)", text):
+        add_item("image", markdown_destination(match.group(2)), match.group(1), "markdown_image")
+    for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
+        url = markdown_destination(match.group(2))
+        kind = media_kind_for_url(url)
         if kind != "link":
-            add_item(kind, match.group(2), match.group(1), "markdown_link")
+            add_item(kind, url, match.group(1), "markdown_link")
     for match in re.finditer(r"""<(img|video|audio|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", text, flags=re.IGNORECASE):
         tag = match.group(1).lower()
         kind = "image" if tag == "img" else "video" if tag in {"video", "source"} else "audio"

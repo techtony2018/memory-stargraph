@@ -74,6 +74,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('modalKicker.textContent = action === "view" ? "View"', script)
         self.assertIn("data-entity-query", script)
         self.assertIn("searchEntityLink", script)
+        self.assertIn("function cleanMarkdownDestination", script)
+        self.assertIn("map(encodeURIComponent)", script)
         self.assertIn('document.createElement("strong")', script)
         self.assertIn('document.createElement("em")', script)
         self.assertIn('document.createElement("blockquote")', script)

@@ -145,6 +145,16 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(media[0]["label"], "Cover")
         self.assertTrue(all(item["embeddable"] for item in media))
 
+    def test_parse_media_references_reads_markdown_image_path_with_spaces(self):
+        markdown = "![Profile](people/example-person/Profile Photo.jpeg)"
+
+        media = parse_media_references(markdown)
+
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]["kind"], "image")
+        self.assertEqual(media[0]["url"], "people/example-person/Profile Photo.jpeg")
+        self.assertEqual(media[0]["served_url"], "/media/people/example-person/Profile%20Photo.jpeg")
+
     def test_parse_media_references_reads_frontmatter_profile_image(self):
         with TemporaryDirectory() as tmpdir:
             markdown = """---
@@ -174,6 +184,10 @@ profile_image_uploaded_at: '2026-06-29'
         self.assertEqual(
             serve_url_for_media_reference("people/witty-wang/witty-wang-profile.jpg"),
             "/media/people/witty-wang/witty-wang-profile.jpg",
+        )
+        self.assertEqual(
+            serve_url_for_media_reference("people/example-person/Profile Photo.jpeg"),
+            "/media/people/example-person/Profile%20Photo.jpeg",
         )
         self.assertIsNone(serve_url_for_media_reference("https://example.com/image.jpg"))
         self.assertIsNone(serve_url_for_media_reference("../secret.jpg"))
