@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.17";
+const UI_VERSION = "V1.0.18";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -827,8 +827,8 @@ function setHover(slug) {
   hoverLabel.textContent = node
     ? `${node.label} · ${node.category || node.type} · ${node.degree} direct link${node.degree === 1 ? "" : "s"}${partText}${reportText}${relationshipText}`
     : state.focusSlug
-      ? "Drag to rotate. Hover or tap for full names. Long-press a node for actions."
-      : "Search the sky, drag to rotate, or tap a node to drill down.";
+      ? "Drag to rotate. Hover or tap for full names. Long-press a node to select."
+      : "Search the sky, drag to rotate, tap for details, or long-press a node to select.";
 }
 
 function hideGraphTooltip() {
@@ -1675,10 +1675,29 @@ function bindEvents() {
 
   const usePointerEvents = Boolean(window.PointerEvent);
   let longPressTimer = null;
+  let suppressContextMenuUntil = 0;
+  const activeTouchPointers = new Map();
+  const pinchGesture = { active: false, initialDistance: 0, initialZoom: 1 };
 
   const clearLongPress = () => {
     window.clearTimeout(longPressTimer);
     longPressTimer = null;
+  };
+
+  const safeSetPointerCapture = (pointerId) => {
+    try {
+      canvas.setPointerCapture?.(pointerId);
+    } catch {
+      // Some mobile/synthetic pointer paths do not expose a capturable pointer.
+    }
+  };
+
+  const safeReleasePointerCapture = (pointerId) => {
+    try {
+      canvas.releasePointerCapture?.(pointerId);
+    } catch {
+      // Capture may not have been established on all touch browsers.
+    }
   };
 
   const handleHoverMove = (clientX, clientY) => {
@@ -1688,6 +1707,43 @@ function bindEvents() {
     canvas.style.cursor = node ? "pointer" : "default";
   };
 
+  const touchDistance = (points) => {
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].clientX - points[1].clientX, points[0].clientY - points[1].clientY);
+  };
+
+  const beginPinchZoom = (points) => {
+    const distance = touchDistance(points);
+    if (!distance) return;
+    clearLongPress();
+    cancelCanvasDrag();
+    hideGraphTooltip();
+    pinchGesture.active = true;
+    pinchGesture.initialDistance = distance;
+    pinchGesture.initialZoom = state.zoom;
+  };
+
+  const updatePinchZoom = (points) => {
+    if (!pinchGesture.active) return;
+    const distance = touchDistance(points);
+    if (!distance || !pinchGesture.initialDistance) return;
+    setZoom(pinchGesture.initialZoom * (distance / pinchGesture.initialDistance));
+  };
+
+  const endPinchZoom = () => {
+    pinchGesture.active = false;
+    pinchGesture.initialDistance = 0;
+    pinchGesture.initialZoom = state.zoom;
+  };
+
+  const selectMobileNode = (node) => {
+    if (!node) return;
+    state.focusSlug = node.slug;
+    setHover(node.slug);
+    hideGraphTooltip();
+    void loadEntity(node.slug);
+  };
+
   const beginTouchLikeDrag = (clientX, clientY, pointerId = null) => {
     startCanvasDrag(clientX, clientY, pointerId);
     clearLongPress();
@@ -1695,8 +1751,8 @@ function bindEvents() {
       const node = pickNode(state.drag.lastX, state.drag.lastY);
       if (!node || state.drag.moved) return;
       state.drag.moved = true;
-      state.focusSlug = node.slug;
-      showMobileNodeHint(node, state.drag.lastX, state.drag.lastY);
+      suppressContextMenuUntil = Date.now() + 1200;
+      selectMobileNode(node);
     }, 580);
   };
 
@@ -1704,8 +1760,13 @@ function bindEvents() {
     canvas.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 && event.pointerType !== "touch") return;
       event.preventDefault();
-      canvas.setPointerCapture?.(event.pointerId);
+      safeSetPointerCapture(event.pointerId);
       if (event.pointerType === "touch" || event.pointerType === "pen") {
+        activeTouchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+        if (activeTouchPointers.size >= 2) {
+          beginPinchZoom([...activeTouchPointers.values()]);
+          return;
+        }
         beginTouchLikeDrag(event.clientX, event.clientY, event.pointerId);
       } else {
         startCanvasDrag(event.clientX, event.clientY, event.pointerId);
@@ -1713,6 +1774,14 @@ function bindEvents() {
     });
 
     canvas.addEventListener("pointermove", (event) => {
+      if (activeTouchPointers.has(event.pointerId)) {
+        activeTouchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+      }
+      if (pinchGesture.active && activeTouchPointers.size >= 2) {
+        event.preventDefault();
+        updatePinchZoom([...activeTouchPointers.values()]);
+        return;
+      }
       if (state.drag.active && state.drag.pointerId === event.pointerId) {
         event.preventDefault();
         moveCanvasDrag(event.clientX, event.clientY);
@@ -1725,19 +1794,31 @@ function bindEvents() {
     });
 
     window.addEventListener("pointerup", (event) => {
+      const wasTouchPointer = activeTouchPointers.has(event.pointerId);
+      if (wasTouchPointer) {
+        activeTouchPointers.delete(event.pointerId);
+        if (pinchGesture.active) {
+          event.preventDefault();
+          if (activeTouchPointers.size < 2) endPinchZoom();
+          return;
+        }
+      }
       if (!state.drag.active || state.drag.pointerId !== event.pointerId) return;
       event.preventDefault();
       clearLongPress();
       const wasTap = !state.drag.moved;
       const node = pickNode(event.clientX, event.clientY);
-      canvas.releasePointerCapture?.(event.pointerId);
-      finishCanvasDrag(event.clientX, event.clientY);
+      safeReleasePointerCapture(event.pointerId);
+      const isTouchLike = event.pointerType === "touch" || event.pointerType === "pen" || wasTouchPointer;
+      finishCanvasDrag(event.clientX, event.clientY, { selectOnTap: !isTouchLike });
       if (wasTap && node && (event.pointerType === "touch" || event.pointerType === "pen")) {
         showMobileNodeHint(node, event.clientX, event.clientY);
       }
     });
 
     window.addEventListener("pointercancel", (event) => {
+      activeTouchPointers.delete(event.pointerId);
+      if (pinchGesture.active && activeTouchPointers.size < 2) endPinchZoom();
       if (state.drag.pointerId === event.pointerId) {
         clearLongPress();
         cancelCanvasDrag();
@@ -1763,6 +1844,11 @@ function bindEvents() {
 
   canvas.addEventListener("touchstart", (event) => {
     if (usePointerEvents) return;
+    if (event.touches.length >= 2) {
+      event.preventDefault();
+      beginPinchZoom([...event.touches]);
+      return;
+    }
     const touch = firstTouch(event);
     if (!touch) return;
     event.preventDefault();
@@ -1770,7 +1856,13 @@ function bindEvents() {
   }, { passive: false });
 
   canvas.addEventListener("touchmove", (event) => {
-    if (usePointerEvents || !state.drag.active) return;
+    if (usePointerEvents) return;
+    if (pinchGesture.active && event.touches.length >= 2) {
+      event.preventDefault();
+      updatePinchZoom([...event.touches]);
+      return;
+    }
+    if (!state.drag.active) return;
     const touch = firstTouch(event);
     if (!touch) return;
     event.preventDefault();
@@ -1779,7 +1871,17 @@ function bindEvents() {
   }, { passive: false });
 
   canvas.addEventListener("touchend", (event) => {
-    if (usePointerEvents || !state.drag.active) return;
+    if (usePointerEvents) return;
+    if (pinchGesture.active) {
+      event.preventDefault();
+      if (event.touches.length >= 2) {
+        beginPinchZoom([...event.touches]);
+      } else {
+        endPinchZoom();
+      }
+      return;
+    }
+    if (!state.drag.active) return;
     const touch = firstTouch(event);
     clearLongPress();
     if (!touch) {
@@ -1789,7 +1891,7 @@ function bindEvents() {
     event.preventDefault();
     const wasTap = !state.drag.moved;
     const node = pickNode(touch.clientX, touch.clientY);
-    finishCanvasDrag(touch.clientX, touch.clientY);
+    finishCanvasDrag(touch.clientX, touch.clientY, { selectOnTap: false });
     if (wasTap && node) {
       showMobileNodeHint(node, touch.clientX, touch.clientY);
     }
@@ -1798,11 +1900,16 @@ function bindEvents() {
   canvas.addEventListener("touchcancel", () => {
     if (!usePointerEvents) {
       clearLongPress();
+      endPinchZoom();
       cancelCanvasDrag();
     }
   }, { passive: false });
 
   canvas.addEventListener("contextmenu", (event) => {
+    if (Date.now() < suppressContextMenuUntil) {
+      event.preventDefault();
+      return;
+    }
     const node = pickNode(event.clientX, event.clientY);
     if (!node) return;
     event.preventDefault();

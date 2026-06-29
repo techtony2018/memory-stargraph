@@ -72,7 +72,7 @@ MEDIA_ROOTS = [
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_roots", [])]
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.17"
+UI_VERSION = "V1.0.18"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
