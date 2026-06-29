@@ -1,0 +1,16 @@
+{
+  "dashboard": "All Things Codex Dashboard",
+  "artifact": "memory-stargraph-launcher",
+  "title": "Memory Stargraph",
+  "kind": "external-service",
+  "service_url": "http://127.0.0.1:8788",
+  "launch_path": "/",
+  "health_path": "/api/health",
+  "graph_path": "/api/graph",
+  "summary": "Launches the local Memory Stargraph entity graph service and exposes live source status for dashboard cards or quick links.",
+  "notes": [
+    "Use this artifact when the dashboard repo is not present in the current workspace.",
+    "Service is local-only and expected to bind to 127.0.0.1.",
+    "If live gbrain access fails, the UI will show cache or demo mode explicitly."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "host": "127.0.0.1",
+  "port": 8788,
+  "public_dir": "public",
+  "data_dir": "data",
+  "gbrain_path": "/opt/homebrew/bin/gbrain",
+  "max_list_pages": 140,
+  "graph_depth": 1,
+  "graph_stale_seconds": 300,
+  "graph_command_limit": 140,
+  "graph_command_pause_seconds": 0.2
+}

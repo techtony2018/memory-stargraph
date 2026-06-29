@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Stargraph Art Reference</title>
+    <style>
+      :root {
+        --bg-0: #050816;
+        --bg-1: rgba(11, 16, 36, 0.84);
+        --bg-2: rgba(18, 25, 53, 0.96);
+        --text-0: #f5f7ff;
+        --text-1: #b6c2f2;
+        --text-2: #7d89b8;
+        --accent-cyan: #59e1ff;
+        --accent-violet: #8b7cff;
+        --accent-gold: #ffd76a;
+        --node-idle: rgba(214, 231, 255, 0.78);
+        --link-idle: rgba(137, 164, 255, 0.22);
+        --link-active: rgba(89, 225, 255, 0.8);
+        --border: rgba(255, 255, 255, 0.08);
+        --shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        font-family: Inter, system-ui, sans-serif;
+        background:
+          radial-gradient(circle at 60% 45%, rgba(96, 86, 255, 0.18), transparent 28%),
+          radial-gradient(circle at 45% 56%, rgba(89, 225, 255, 0.08), transparent 24%),
+          var(--bg-0);
+        color: var(--text-0);
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      .frame {
+        position: relative;
+        height: 100%;
+        width: 100%;
+      }
+
+      .stars,
+      .graph {
+        position: absolute;
+        inset: 0;
+      }
+
+      .stars::before,
+      .stars::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          radial-gradient(circle, rgba(255, 255, 255, 0.9) 0 1px, transparent 1.5px),
+          radial-gradient(circle, rgba(137, 164, 255, 0.55) 0 1px, transparent 1.5px),
+          radial-gradient(circle, rgba(89, 225, 255, 0.6) 0 1px, transparent 1.5px);
+        background-size: 140px 140px, 180px 180px, 220px 220px;
+        background-position: 12px 22px, 60px 90px, 110px 50px;
+        opacity: 0.45;
+      }
+
+      .stars::after {
+        transform: scale(1.08);
+        opacity: 0.2;
+        filter: blur(1px);
+      }
+
+      .graph svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .panel {
+        position: absolute;
+        border: 1px solid var(--border);
+        background: var(--bg-1);
+        backdrop-filter: blur(14px);
+        box-shadow: var(--shadow);
+      }
+
+      .search {
+        top: 20px;
+        left: 20px;
+        width: min(320px, calc(100vw - 40px));
+        border-radius: 10px;
+        padding: 14px;
+      }
+
+      .title {
+        margin: 0 0 12px;
+        font-size: 24px;
+        font-weight: 600;
+      }
+
+      .searchbox {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 40px;
+        border-radius: 8px;
+        padding: 0 12px;
+        background: var(--bg-2);
+        color: var(--text-1);
+        box-shadow: inset 0 0 0 1px rgba(89, 225, 255, 0.24);
+      }
+
+      .results {
+        margin-top: 12px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .result {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        min-height: 42px;
+        padding: 0 10px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text-1);
+      }
+
+      .result.active {
+        background: rgba(89, 225, 255, 0.1);
+        box-shadow: inset 0 0 0 1px rgba(89, 225, 255, 0.3);
+      }
+
+      .meta {
+        color: var(--text-2);
+        font-size: 12px;
+      }
+
+      .details {
+        top: 20px;
+        right: 20px;
+        width: min(360px, calc(100vw - 40px));
+        border-radius: 12px;
+        padding: 16px;
+      }
+
+      .eyebrow {
+        color: var(--text-2);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .entity {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--accent-gold);
+        box-shadow: 0 0 18px rgba(255, 215, 106, 0.7);
+      }
+
+      .section {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .related {
+        display: grid;
+        gap: 8px;
+      }
+
+      .related-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .pill {
+        color: var(--accent-cyan);
+        font-size: 12px;
+      }
+
+      @media (max-width: 900px) {
+        .details {
+          top: auto;
+          bottom: 20px;
+          left: 20px;
+          right: 20px;
+          width: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="stars"></div>
+      <div class="graph">
+        <svg viewBox="0 0 1200 800" aria-hidden="true">
+          <defs>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="6" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <g stroke-linecap="round" fill="none">
+            <path d="M330 420 C420 350, 520 350, 625 392" stroke="var(--link-idle)" stroke-width="1.2" />
+            <path d="M625 392 C720 430, 785 500, 910 520" stroke="var(--link-idle)" stroke-width="1" />
+            <path d="M625 392 C705 330, 805 280, 920 260" stroke="var(--link-active)" stroke-width="1.8" filter="url(#glow)" />
+            <path d="M625 392 C560 470, 470 540, 360 580" stroke="var(--link-idle)" stroke-width="1" />
+            <path d="M625 392 C590 300, 520 245, 445 215" stroke="var(--link-idle)" stroke-width="1" />
+          </g>
+
+          <g>
+            <circle cx="330" cy="420" r="10" fill="var(--node-idle)" />
+            <circle cx="445" cy="215" r="8" fill="var(--node-idle)" />
+            <circle cx="360" cy="580" r="7" fill="var(--node-idle)" />
+            <circle cx="920" cy="260" r="12" fill="var(--node-idle)" />
+            <circle cx="910" cy="520" r="9" fill="var(--node-idle)" />
+
+            <circle cx="625" cy="392" r="26" fill="rgba(89, 225, 255, 0.10)" filter="url(#glow)" />
+            <circle cx="625" cy="392" r="18" fill="var(--accent-gold)" />
+            <circle cx="625" cy="392" r="21" fill="none" stroke="var(--accent-cyan)" stroke-width="1.4" opacity="0.9" />
+          </g>
+
+          <g font-family="Inter, system-ui, sans-serif">
+            <text x="650" y="386" fill="var(--text-0)" font-size="14" font-weight="600">Tony Gao</text>
+            <text x="650" y="404" fill="var(--text-2)" font-size="12">31 direct links</text>
+            <text x="938" y="256" fill="var(--text-1)" font-size="12">GBrain</text>
+            <text x="298" y="414" fill="var(--text-1)" font-size="12">OpenClaw</text>
+          </g>
+        </svg>
+      </div>
+
+      <section class="panel search">
+        <h1 class="title">Memory Stargraph</h1>
+        <div class="searchbox">Search entities, notes, people</div>
+        <div class="results">
+          <div class="result active">
+            <span>Tony <span class="pill">match</span></span>
+            <span class="meta">31 links</span>
+          </div>
+          <div class="result">
+            <span>GBrain remote default</span>
+            <span class="meta">12 links</span>
+          </div>
+          <div class="result">
+            <span>Resume Tailor</span>
+            <span class="meta">9 links</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel details">
+        <div class="eyebrow">Entity details</div>
+        <div class="entity">
+          <div class="dot"></div>
+          <div>
+            <div style="font-size: 20px; font-weight: 600">Tony Gao</div>
+            <div class="meta">Person · high-centrality node</div>
+          </div>
+        </div>
+        <div class="meta">31 direct connections</div>
+
+        <div class="section">
+          <div style="font-size: 13px; line-height: 1.5; color: var(--text-1)">
+            Focus state keeps one-hop and two-hop context visible while the rest of the field recedes.
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="eyebrow">Related entities</div>
+          <div class="related">
+            <div class="related-item"><span>GBrain</span><span class="meta">12</span></div>
+            <div class="related-item"><span>OpenClaw</span><span class="meta">8</span></div>
+            <div class="related-item"><span>Resume Tailor</span><span class="meta">6</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </body>
+</html>

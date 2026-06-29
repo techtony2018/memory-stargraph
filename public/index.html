@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Memory Stargraph</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyeline">Constellation View</p>
+          <h1>Memory Stargraph</h1>
+          <span id="uiVersion" class="ui-version">V1.0.8</span>
+        </div>
+        <div class="status-block">
+          <button id="refreshButton" class="ghost-button" type="button">Refresh Graph</button>
+          <label class="top-toggle">
+            <input id="autoRefreshToggle" type="checkbox">
+            <span>Auto</span>
+          </label>
+          <label class="top-interval">
+            <input id="autoRefreshInterval" type="number" min="1" max="120" step="1" value="10">
+            <span>min</span>
+          </label>
+          <div id="sourceBadge" class="source-badge">Loading…</div>
+          <div id="lastRefresh" class="source-badge subtle">Last refresh: —</div>
+        </div>
+      </header>
+
+      <section class="hero-band">
+        <div class="hero-copy">
+          <p class="hero-kicker">Entity Graph Observatory</p>
+          <h2>Explore gbrain as a living star cloud</h2>
+        </div>
+        <div class="metrics" id="metrics">
+          <div class="metric-card">
+            <span class="metric-label">Nodes</span>
+            <strong id="metricNodes">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Edges</span>
+            <strong id="metricEdges">0</strong>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Strongest Hub</span>
+            <strong id="metricDegree">0</strong>
+          </div>
+          <div class="metric-card compact">
+            <span class="metric-label">Collapsed Parts</span>
+            <strong id="metricCollapsed">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-band">
+        <div class="search-group">
+          <label class="search-wrap">
+            <span>Search entities</span>
+            <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
+          </label>
+          <button id="searchButton" class="ghost-button search-button" type="button">Search</button>
+        </div>
+        <label class="toggle-wrap">
+          <input id="matchesOnlyToggle" type="checkbox">
+          <span>Only show matches</span>
+        </label>
+        <label class="filter-wrap">
+          <span>Category</span>
+          <select id="categoryFilter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label class="filter-wrap">
+          <span>Type</span>
+          <select id="typeFilter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label class="filter-wrap short">
+          <span>Min links</span>
+          <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
+        </label>
+        <button id="clearFiltersButton" class="ghost-button compact-button" type="button">Clear Filters</button>
+        <div class="legend">
+          <span><i class="legend-dot hot"></i> focused</span>
+          <span><i class="legend-dot near"></i> neighborhood</span>
+          <span><i class="legend-dot match"></i> search match</span>
+        </div>
+      </section>
+
+      <main class="workspace">
+        <section class="graph-panel">
+          <canvas id="graphCanvas" width="1200" height="760"></canvas>
+          <div class="canvas-overlay">
+            <p id="hoverLabel">Loading star map…</p>
+          </div>
+          <div id="graphTooltip" class="graph-tooltip" hidden></div>
+          <div class="zoom-controls" aria-label="Galaxy zoom controls">
+            <button id="zoomOutButton" class="icon-button" type="button" aria-label="Zoom out">-</button>
+            <span id="zoomLevel">100%</span>
+            <button id="zoomInButton" class="icon-button" type="button" aria-label="Zoom in">+</button>
+          </div>
+        </section>
+
+        <aside class="detail-panel">
+          <div class="panel-section">
+            <p class="panel-label">Selection</p>
+            <div class="detail-heading">
+              <h3 id="detailTitle">Loading…</h3>
+              <button id="nodeMenuButton" class="icon-button" type="button" aria-label="Node actions">...</button>
+            </div>
+            <p id="detailType" class="detail-type"></p>
+            <p id="detailSummary" class="detail-summary"></p>
+          </div>
+
+          <div class="panel-section">
+            <p class="panel-label">Direct links</p>
+            <div id="detailLinks" class="chip-grid"></div>
+          </div>
+
+          <div class="panel-section">
+            <p class="panel-label">Nearby constellation</p>
+            <div id="detailSecondRing" class="chip-grid muted"></div>
+          </div>
+
+          <div class="panel-section">
+            <p class="panel-label">Category legend</p>
+            <div id="categoryLegend" class="category-legend"></div>
+          </div>
+
+          <div class="panel-section">
+            <p class="panel-label">Hidden List</p>
+            <div id="hiddenList" class="hidden-list"></div>
+          </div>
+
+          <div class="panel-section">
+            <p class="panel-label">Graph source</p>
+            <p id="sourceMessage" class="source-message"></p>
+            <ul id="sourceWarnings" class="warning-list"></ul>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="contextMenu" class="context-menu" hidden>
+      <button type="button" data-action="ask">Ask GBrain</button>
+      <button type="button" data-action="view">View raw details</button>
+      <button type="button" data-action="backlinks">Show backlinks</button>
+      <button type="button" data-action="graph-query">Graph query from here</button>
+      <button type="button" data-action="history">View history</button>
+      <button type="button" data-action="edit">Modify markdown</button>
+      <button type="button" data-action="add-link">Add relationship</button>
+      <button type="button" data-action="remove-link">Remove relationship</button>
+      <button type="button" data-action="tags">Edit tags</button>
+      <button type="button" data-action="timeline">Add timeline event</button>
+      <button type="button" data-action="attach-file">Attach file</button>
+      <button type="button" data-action="embed">Refresh embedding</button>
+      <button type="button" data-action="hide">Hide</button>
+      <button type="button" data-action="copy">Copy slug</button>
+      <button type="button" data-action="delete" class="danger">Delete from gbrain</button>
+    </div>
+
+    <div id="operationModal" class="modal-backdrop" hidden>
+      <section class="modal-panel">
+        <div class="modal-header">
+          <div>
+            <p id="modalKicker" class="panel-label">Node operation</p>
+            <h3 id="modalTitle">Node</h3>
+          </div>
+          <button id="modalCloseButton" class="icon-button" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="modalMessage" class="modal-message"></p>
+        <input id="modalConfirmInput" class="modal-confirm-input" type="text" autocomplete="off" spellcheck="false" hidden />
+        <textarea id="modalEditor" spellcheck="false"></textarea>
+        <div class="modal-actions">
+          <button id="modalCancelButton" class="ghost-button" type="button">Cancel</button>
+          <button id="modalPrimaryButton" class="ghost-button primary" type="button">Save</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>
