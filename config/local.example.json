@@ -11,5 +11,6 @@
   "graph_command_pause_seconds": 0.2,
   "media_roots": ["media", "data/media"],
   "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
-  "media_fetch_timeout_seconds": 8
+  "media_fetch_timeout_seconds": 8,
+  "max_upload_bytes": 26214400
 }

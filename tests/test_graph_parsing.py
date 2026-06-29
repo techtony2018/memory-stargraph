@@ -16,6 +16,7 @@ from server import (
     parse_frontmatter,
     parse_link_types,
     materialize_local_media_for_slug,
+    parse_multipart_form,
     parse_media_references,
     parse_page_list,
     parse_search_results,
@@ -201,6 +202,23 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertTrue(result["served_available"])
                 self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
 
+    def test_materialize_local_media_fills_single_existing_media_reference(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "media-root"
+            source = Path(tmpdir) / "IMG_1234.jpg"
+            source.write_bytes(b"fake jpg")
+            markdown = """---
+title: Witty Wang
+profile_image: people/witty-wang/witty-wang-profile.jpg
+---
+"""
+
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                result = materialize_local_media_for_slug("people/witty-wang", source, markdown)
+
+                self.assertEqual(result["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
+                self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+
     def test_ensure_media_references_copies_from_discovery_roots(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "served"
@@ -219,6 +237,21 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertTrue(enriched[0]["served_available"])
                 self.assertEqual(enriched[0]["materialized_from"], str(source.resolve()))
                 self.assertEqual((media_root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+
+    def test_parse_multipart_form_reads_browser_file_upload(self):
+        boundary = "----memory-stargraph-test"
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="witty wang.jpg"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n"
+        ).encode("utf-8") + b"fake jpg" + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        fields, files = parse_multipart_form(f"multipart/form-data; boundary={boundary}", body)
+
+        self.assertEqual(fields, {})
+        self.assertEqual(files["file"]["filename"], "witty wang.jpg")
+        self.assertEqual(files["file"]["content_type"], "image/jpeg")
+        self.assertEqual(files["file"]["data"], b"fake jpg")
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

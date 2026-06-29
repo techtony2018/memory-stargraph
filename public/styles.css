@@ -707,6 +707,26 @@ h2 {
   outline-offset: 2px;
 }
 
+.modal-file-input {
+  width: 100%;
+  border: 1px dashed rgba(136, 246, 255, 0.34);
+  border-radius: 8px;
+  background: rgba(5, 8, 22, 0.9);
+  color: var(--text);
+  padding: 14px;
+  font: 14px/1.4 Inter, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.modal-file-input::file-selector-button {
+  margin-right: 12px;
+  border: 1px solid rgba(136, 246, 255, 0.38);
+  border-radius: 6px;
+  background: rgba(136, 246, 255, 0.12);
+  color: var(--text);
+  padding: 8px 12px;
+  font-weight: 700;
+}
+
 .detail-type {
   margin-top: 8px;
   text-transform: capitalize;

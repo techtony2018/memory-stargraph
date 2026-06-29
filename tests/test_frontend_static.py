@@ -46,6 +46,16 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("/api/entity-media/", script)
         self.assertIn("renderMediaItems", script)
 
+    def test_attach_file_uses_browser_file_picker(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn('id="modalFileInput"', markup)
+        self.assertIn('type="file"', markup)
+        self.assertIn("new FormData()", script)
+        self.assertIn('formData.append("file"', script)
+        self.assertIn("apiPostForm", script)
+
 
 if __name__ == "__main__":
     unittest.main()

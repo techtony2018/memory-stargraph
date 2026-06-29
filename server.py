@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import email
+import email.policy
 import json
 import math
 import mimetypes
@@ -34,6 +36,7 @@ DEFAULT_CONFIG = {
     "media_roots": ["media", "data/media"],
     "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
     "media_fetch_timeout_seconds": 8,
+    "max_upload_bytes": 25 * 1024 * 1024,
 }
 
 
@@ -81,8 +84,9 @@ MEDIA_DISCOVERY_ROOTS = [
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_discovery_roots", [])]
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
+MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.20"
+UI_VERSION = "V1.0.21"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -349,6 +353,52 @@ def parse_search_results(output):
     return results
 
 
+def safe_upload_filename(filename):
+    name = Path(str(filename or "upload.bin")).name.strip()
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .")
+    return name or "upload.bin"
+
+
+def parse_multipart_form(content_type, body):
+    if "boundary=" not in str(content_type or ""):
+        raise ValueError("multipart boundary is missing")
+    message = email.message_from_bytes(
+        b"Content-Type: " + str(content_type).encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body,
+        policy=email.policy.default,
+    )
+    fields = {}
+    files = {}
+    if not message.is_multipart():
+        return fields, files
+    for part in message.iter_parts():
+        disposition = part.get("Content-Disposition", "")
+        if "form-data" not in disposition:
+            continue
+        name = part.get_param("name", header="Content-Disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files[name] = {
+                "filename": safe_upload_filename(filename),
+                "content_type": part.get_content_type(),
+                "data": payload,
+            }
+        else:
+            fields[name] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+    return fields, files
+
+
+def save_uploaded_file(slug, upload):
+    filename = safe_upload_filename(upload.get("filename"))
+    target_dir = DATA_DIR / "uploads" / re.sub(r"[^A-Za-z0-9._-]+", "_", slug.strip("/") or "root")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / filename
+    target.write_bytes(upload.get("data") or b"")
+    return target
+
+
 def parse_frontmatter(markdown):
     if not markdown.startswith("---"):
         return {}, markdown
@@ -564,11 +614,16 @@ def local_media_destination_for_slug(slug, file_path, raw_markdown=""):
     if not source.is_file() or not is_supported_media_path(source.name):
         return None
     candidates = []
+    referenced_paths = []
     if raw_markdown:
         for item in parse_media_references(raw_markdown):
             relative_path = safe_media_relative_path(item.get("url"))
-            if relative_path and relative_path.name == source.name:
-                candidates.append(relative_path)
+            if relative_path:
+                referenced_paths.append(relative_path)
+                if relative_path.name == source.name:
+                    candidates.append(relative_path)
+        if not candidates and len(referenced_paths) == 1:
+            candidates.append(referenced_paths[0])
     fallback_path = safe_media_relative_path(f"{slug.strip('/')}/{source.name}")
     if fallback_path:
         candidates.append(fallback_path)
@@ -1614,6 +1669,15 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         return json.loads(body or "{}")
 
+    def read_multipart_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}, {}
+        if length > MAX_UPLOAD_BYTES:
+            raise ValueError(f"Upload is too large. Limit is {MAX_UPLOAD_BYTES} bytes.")
+        body = self.rfile.read(length)
+        return parse_multipart_form(self.headers.get("Content-Type") or "", body)
+
     def serve_media_file(self, request_path, head_only=False):
         file_path = resolve_media_file_path(request_path)
         if not file_path:
@@ -1830,13 +1894,31 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/entity-attach-file/"):
             slug = unquote(parsed.path.split("/api/entity-attach-file/", 1)[1]).strip("/")
             try:
-                payload = self.read_json_body()
-                file_path = str(payload.get("file_path") or "").strip()
+                content_type = getattr(self, "headers", {}).get("Content-Type") or ""
+                uploaded_path = None
+                if content_type.startswith("multipart/form-data"):
+                    _fields, files = self.read_multipart_body()
+                    upload = files.get("file")
+                    if not upload:
+                        return self.end_json({"error": "file is required"}, status=HTTPStatus.BAD_REQUEST)
+                    uploaded_path = save_uploaded_file(slug, upload)
+                    file_path = str(uploaded_path)
+                else:
+                    payload = self.read_json_body()
+                    file_path = str(payload.get("file_path") or "").strip()
                 if not file_path:
                     return self.end_json({"error": "file_path is required"}, status=HTTPStatus.BAD_REQUEST)
                 local_media = STORE.attach_file(slug, file_path)
                 graph = STORE.get_seed_graph(force=True)
-                return self.end_json({"ok": True, "slug": slug, "graph": graph, "local_media": local_media})
+                return self.end_json(
+                    {
+                        "ok": True,
+                        "slug": slug,
+                        "graph": graph,
+                        "local_media": local_media,
+                        "uploaded_path": str(uploaded_path) if uploaded_path else None,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-history/"):

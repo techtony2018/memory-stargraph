@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.20";
+const UI_VERSION = "V1.0.21";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -68,6 +68,7 @@ const modalKicker = document.getElementById("modalKicker");
 const modalTitle = document.getElementById("modalTitle");
 const modalMessage = document.getElementById("modalMessage");
 const modalConfirmInput = document.getElementById("modalConfirmInput");
+const modalFileInput = document.getElementById("modalFileInput");
 const modalEditor = document.getElementById("modalEditor");
 const modalMedia = document.getElementById("modalMedia");
 const modalCloseButton = document.getElementById("modalCloseButton");
@@ -155,6 +156,17 @@ function apiPost(url, payload = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  }).then(async (response) => ({
+    ok: response.ok,
+    status: response.status,
+    data: await response.json(),
+  }));
+}
+
+function apiPostForm(url, formData) {
+  return window.fetch(url, {
+    method: "POST",
+    body: formData,
   }).then(async (response) => ({
     ok: response.ok,
     status: response.status,
@@ -972,6 +984,8 @@ function closeModal() {
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
   modalConfirmInput.dataset.expected = "";
+  modalFileInput.value = "";
+  modalFileInput.hidden = true;
   modalEditor.value = "";
   modalEditor.readOnly = false;
   modalEditor.hidden = false;
@@ -993,6 +1007,8 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
   modalConfirmInput.dataset.expected = "";
+  modalFileInput.value = "";
+  modalFileInput.hidden = true;
   modalEditor.value = "";
   modalMessage.textContent = "";
   modalEditor.hidden = false;
@@ -1131,10 +1147,11 @@ async function openNodeModal(action, slug = state.focusSlug) {
   if (action === "attach-file") {
     modalKicker.textContent = "Attach file";
     modalPrimaryButton.textContent = "Attach file";
-    modalMessage.textContent = "Uploads a local file path into gbrain storage and copies supported media into the web media root for preview.";
-    modalEditor.value = "file_path: ";
+    modalMessage.textContent = "Choose a file from Finder. Supported media is copied into the web media root for preview and attached to gbrain when available.";
+    modalFileInput.hidden = false;
+    modalEditor.value = "# Optional fallback for host-local paths\nfile_path: ";
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalFileInput.focus();
     return;
   }
 
@@ -1361,10 +1378,18 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "attach-file") {
-      const fields = parseOperationFields(modalEditor.value);
-      const response = await apiPost(`/api/entity-attach-file/${encodeURIComponent(slug)}`, {
-        file_path: fields.file_path,
-      });
+      const selectedFile = modalFileInput.files?.[0];
+      let response;
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        response = await apiPostForm(`/api/entity-attach-file/${encodeURIComponent(slug)}`, formData);
+      } else {
+        const fields = parseOperationFields(modalEditor.value);
+        response = await apiPost(`/api/entity-attach-file/${encodeURIComponent(slug)}`, {
+          file_path: fields.file_path,
+        });
+      }
       if (!response.ok) throw new Error(response.data?.error || `Attach file failed with ${response.status}`);
       applyGraphPayload(response.data.graph, slug);
       await loadEntity(slug, { source: "system" });

@@ -68,7 +68,7 @@ Supported node operations:
 7. `Remove relationship` - removes an edge with `gbrain unlink`.
 8. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
 9. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
-10. `Attach file` - uploads a local file path into gbrain storage for this page.
+10. `Attach file` - opens a browser file picker, uploads the selected file, and previews supported media.
 11. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
 12. `View raw details` - read-only `gbrain get`.
 13. `Modify markdown` - edits the page with `gbrain put`.
@@ -124,9 +124,12 @@ Example config:
 {
   "media_roots": ["media", "data/media"],
   "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
-  "media_fetch_timeout_seconds": 8
+  "media_fetch_timeout_seconds": 8,
+  "max_upload_bytes": 26214400
 }
 ```
+
+For day-to-day use, choose `Attach file` from a node menu and pick the file in Finder. The service saves the upload, copies supported media into `media_roots`, and returns a `/media/...` preview URL. Host-local path entry remains available as a fallback for automation.
 
 Memory Stargraph exposes supported image/video/audio/PDF files read-only at:
 
