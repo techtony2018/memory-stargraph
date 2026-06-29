@@ -1,10 +1,16 @@
 import { createRequire } from "node:module";
+import path from "node:path";
 
 const require = createRequire(import.meta.url);
+const pathPlaywrightCandidates = (process.env.PATH || "")
+  .split(path.delimiter)
+  .filter((entry) => path.basename(entry) === ".bin")
+  .map((entry) => path.join(path.dirname(entry), "playwright"));
 const playwrightCandidates = [
   process.env.PLAYWRIGHT_MODULE,
   "/Users/tony/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright",
   "playwright",
+  ...pathPlaywrightCandidates,
 ].filter(Boolean);
 
 let chromium;
@@ -35,6 +41,7 @@ try {
     const state = window.__MEMORY_STARGRAPH__.getState();
     const slugs = state.graph.nodes.map((node) => node.slug);
     const usageNode = state.graph.nodes.find((node) => node.slug === "agent/reports/gbrain-usage");
+    const datedUsageNodes = slugs.filter((slug) => /^agent\/reports\/gbrain-usage-\d{4}-\d{2}-\d{2}$/i.test(slug));
     return {
       title: document.title,
       h1: document.querySelector("h1")?.textContent,
@@ -47,6 +54,7 @@ try {
         label: usageNode.label,
         reportCount: usageNode.report_count,
       } : null,
+      datedUsageNodeCount: datedUsageNodes.length,
       categoryLegendItems: document.querySelectorAll("#categoryLegend span").length,
       lastRefreshText: document.querySelector("#lastRefresh")?.textContent,
       autoRefreshPresent: Boolean(document.querySelector("#autoRefreshToggle") && document.querySelector("#autoRefreshInterval")),
@@ -67,8 +75,8 @@ try {
   if (initial.hasDarshaGhost) {
     throw new Error("Deleted people/darsha-krana ghost entity is visible in the graph");
   }
-  if (initial.usageNode && initial.usageNode.label !== "Agent/reports/gbrain Usage") {
-    throw new Error("Expected loaded dated gbrain usage reports to collapse into one usage node");
+  if (initial.datedUsageNodeCount > 0) {
+    throw new Error("Expected dated gbrain usage reports to collapse into one usage node");
   }
   if (initial.categoryLegendItems < 2) {
     throw new Error("Expected category legend to render in the right panel");
