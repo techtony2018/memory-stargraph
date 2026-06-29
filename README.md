@@ -72,6 +72,20 @@ Supported node operations:
 14. `Copy slug` - copies the exact gbrain slug.
 15. `Delete from gbrain` - deletes after exact node-name confirmation.
 
+Node operation API contract:
+
+- `GET /api/node-operations` - lists the supported operation endpoints.
+- `POST /api/entity-ask/<slug>` - ask gbrain about a node.
+- `POST /api/entity-backlinks/<slug>` - show backlinks.
+- `POST /api/entity-graph-query/<slug>` - run typed/directional graph traversal.
+- `POST /api/entity-history/<slug>` - show page history.
+- `POST /api/entity-link/<slug>` - add a typed relationship.
+- `POST /api/entity-unlink/<slug>` - remove a relationship.
+- `POST /api/entity-tags/<slug>` - add/remove tags.
+- `POST /api/entity-timeline/<slug>` - add a timeline event.
+- `POST /api/entity-attach-file/<slug>` - attach a file to the node.
+- `POST /api/entity-embed/<slug>` - refresh embedding where supported.
+
 ### 5. Keep The View Clean
 
 - Hide nodes from the galaxy without modifying gbrain.

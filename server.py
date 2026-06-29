@@ -65,7 +65,7 @@ GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.10"
+UI_VERSION = "V1.0.11"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -79,6 +79,18 @@ BLOCKED_LABELS = {
     "people/tony-gu",
     "tony gu",
 }
+NODE_OPERATION_ENDPOINTS = [
+    {"action": "ask", "method": "POST", "endpoint": "/api/entity-ask/<slug>", "mutates_gbrain": False},
+    {"action": "backlinks", "method": "POST", "endpoint": "/api/entity-backlinks/<slug>", "mutates_gbrain": False},
+    {"action": "graph-query", "method": "POST", "endpoint": "/api/entity-graph-query/<slug>", "mutates_gbrain": False},
+    {"action": "history", "method": "POST", "endpoint": "/api/entity-history/<slug>", "mutates_gbrain": False},
+    {"action": "add-link", "method": "POST", "endpoint": "/api/entity-link/<slug>", "mutates_gbrain": True},
+    {"action": "remove-link", "method": "POST", "endpoint": "/api/entity-unlink/<slug>", "mutates_gbrain": True},
+    {"action": "tags", "method": "POST", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": True},
+    {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
+    {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
+    {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
+]
 
 
 DEMO_GRAPH = {
@@ -1281,6 +1293,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json(graph)
         if parsed.path == "/api/hidden":
             return self.end_json({"slugs": sorted(read_hidden_slugs())})
+        if parsed.path == "/api/node-operations":
+            return self.end_json({"operations": NODE_OPERATION_ENDPOINTS})
         if parsed.path == "/api/search":
             query = (parse_qs(parsed.query).get("q") or [""])[0].strip()
             if len(query) < 2:
