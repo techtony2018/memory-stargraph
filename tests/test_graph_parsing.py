@@ -152,8 +152,7 @@ class GraphParsingTests(unittest.TestCase):
                 },
             ],
         }
-        with mock.patch("server.read_deleted_slugs", return_value={"people/darsha-krana"}):
-            graph = finalize_graph(raw_graph)
+        graph = finalize_graph(raw_graph)
         slugs = {node["slug"] for node in graph["nodes"]}
         collapsed = next(node for node in graph["nodes"] if node["slug"] == "products/jtuner/rfc")
 
@@ -236,7 +235,8 @@ class GraphParsingTests(unittest.TestCase):
                 },
             ],
         }
-        graph = finalize_graph(raw_graph)
+        with mock.patch("server.read_deleted_slugs", return_value={"people/darsha-krana"}):
+            graph = finalize_graph(raw_graph)
         slugs = {node["slug"] for node in graph["nodes"]}
 
         self.assertNotIn("people/darsha-krana", slugs)
