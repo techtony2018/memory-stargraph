@@ -98,6 +98,22 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("history.push({ role: \"user\", content: question })", script)
         self.assertIn("history[history.length - 1]", script)
 
+    def test_node_operations_use_guided_controls(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn('id="modalForm"', markup)
+        self.assertIn("function renderTagOperationForm", script)
+        self.assertIn("Existing tags to add", script)
+        self.assertIn("Applied tags to remove", script)
+        self.assertIn("operationNewTag", script)
+        self.assertIn("function renderAddRelationshipForm", script)
+        self.assertIn("operationTargetOptions", script)
+        self.assertIn("operationLinkTypeOptions", script)
+        self.assertIn("function renderRemoveRelationshipForm", script)
+        self.assertIn("operationExistingRelationshipOptions", script)
+        self.assertIn("Choose one of the existing relationships from the list.", script)
+
 
 if __name__ == "__main__":
     unittest.main()

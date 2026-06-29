@@ -31,7 +31,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.31";
+const UI_VERSION = "V1.0.32";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -70,6 +70,7 @@ const modalTitle = document.getElementById("modalTitle");
 const modalMessage = document.getElementById("modalMessage");
 const modalConfirmInput = document.getElementById("modalConfirmInput");
 const modalFileInput = document.getElementById("modalFileInput");
+const modalForm = document.getElementById("modalForm");
 const modalEditor = document.getElementById("modalEditor");
 const modalAttach = document.getElementById("modalAttach");
 const modalAttachDescription = document.getElementById("modalAttachDescription");
@@ -1269,6 +1270,167 @@ function renderAskChat(slug, label) {
   modalChatLog.scrollTop = modalChatLog.scrollHeight;
 }
 
+function allKnownTags() {
+  const tags = new Set();
+  state.nodes.forEach((node) => (node.tags || []).forEach((tag) => {
+    const value = String(tag || "").trim();
+    if (value) tags.add(value);
+  }));
+  return [...tags].sort((left, right) => left.localeCompare(right));
+}
+
+function allKnownRelationshipTypes() {
+  const types = new Set();
+  state.edgeTypeMap.forEach((values) => (values || []).forEach((type) => {
+    const value = String(type || "").trim();
+    if (value) types.add(value);
+  }));
+  return [...types].sort((left, right) => left.localeCompare(right));
+}
+
+function nodeOptionsExcept(slug) {
+  return state.nodes
+    .filter((node) => node.slug !== slug && !isHidden(node.slug))
+    .sort((left, right) => (left.label || left.slug).localeCompare(right.label || right.slug));
+}
+
+function makeDatalist(id, options, valueFor, labelFor) {
+  const list = document.createElement("datalist");
+  list.id = id;
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = valueFor(option);
+    item.label = labelFor(option);
+    list.appendChild(item);
+  });
+  return list;
+}
+
+function appendField(container, labelText, input) {
+  const label = document.createElement("label");
+  label.className = "operation-field";
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  label.append(span, input);
+  container.appendChild(label);
+  return input;
+}
+
+function renderCheckboxGroup(container, title, values, name) {
+  const group = document.createElement("div");
+  group.className = "operation-group";
+  const label = document.createElement("span");
+  label.textContent = title;
+  group.appendChild(label);
+  if (!values.length) {
+    const empty = document.createElement("p");
+    empty.className = "operation-empty";
+    empty.textContent = "No matching tags";
+    group.appendChild(empty);
+  } else {
+    const grid = document.createElement("div");
+    grid.className = "operation-choice-grid";
+    values.forEach((value) => {
+      const choice = document.createElement("label");
+      choice.className = "operation-choice";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.name = name;
+      checkbox.value = value;
+      const text = document.createElement("span");
+      text.textContent = value;
+      choice.append(checkbox, text);
+      grid.appendChild(choice);
+    });
+    group.appendChild(grid);
+  }
+  container.appendChild(group);
+}
+
+function renderTagOperationForm(slug) {
+  modalForm.innerHTML = "";
+  const node = state.nodeMap.get(slug);
+  const applied = new Set((node?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean));
+  const addable = allKnownTags().filter((tag) => !applied.has(tag));
+
+  renderCheckboxGroup(modalForm, "Existing tags to add", addable, "addTag");
+  const newTag = document.createElement("input");
+  newTag.id = "operationNewTag";
+  newTag.placeholder = "New tag";
+  appendField(modalForm, "New tag", newTag);
+  renderCheckboxGroup(modalForm, "Applied tags to remove", [...applied].sort(), "removeTag");
+}
+
+function renderAddRelationshipForm(slug) {
+  modalForm.innerHTML = "";
+  const targetInput = document.createElement("input");
+  targetInput.id = "operationTarget";
+  targetInput.setAttribute("list", "operationTargetOptions");
+  targetInput.placeholder = "Search by node name or slug";
+  appendField(modalForm, "Target entity", targetInput);
+  modalForm.appendChild(makeDatalist(
+    "operationTargetOptions",
+    nodeOptionsExcept(slug),
+    (node) => node.slug,
+    (node) => `${node.label || node.slug} · ${node.category || node.type || "entity"}`,
+  ));
+
+  const typeInput = document.createElement("input");
+  typeInput.id = "operationLinkType";
+  typeInput.setAttribute("list", "operationLinkTypeOptions");
+  typeInput.placeholder = "Search existing type or enter a new one";
+  appendField(modalForm, "Relationship type", typeInput);
+  modalForm.appendChild(makeDatalist(
+    "operationLinkTypeOptions",
+    allKnownRelationshipTypes(),
+    (type) => type,
+    (type) => type,
+  ));
+
+  const contextInput = document.createElement("textarea");
+  contextInput.id = "operationContext";
+  contextInput.placeholder = "Optional context";
+  appendField(modalForm, "Context", contextInput);
+}
+
+function existingRelationshipOptions(slug) {
+  const node = state.nodeMap.get(slug);
+  if (!node) return [];
+  const options = [];
+  (node.links || []).forEach((targetSlug) => {
+    const target = state.nodeMap.get(targetSlug);
+    const types = relationshipTypes(slug, targetSlug);
+    if (types.length) {
+      types.forEach((type) => options.push({ targetSlug, type, label: `${target?.label || targetSlug} · ${type}` }));
+    } else {
+      options.push({ targetSlug, type: "", label: `${target?.label || targetSlug} · all relationship types` });
+    }
+  });
+  return options.sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function renderRemoveRelationshipForm(slug) {
+  modalForm.innerHTML = "";
+  const input = document.createElement("input");
+  input.id = "operationExistingRelationship";
+  input.setAttribute("list", "operationExistingRelationshipOptions");
+  input.placeholder = "Search existing relationship";
+  appendField(modalForm, "Relationship to remove", input);
+  const list = document.createElement("datalist");
+  list.id = "operationExistingRelationshipOptions";
+  existingRelationshipOptions(slug).forEach((option) => {
+    const item = document.createElement("option");
+    item.value = `${option.targetSlug} | ${option.type || "all"}`;
+    item.label = option.label;
+    list.appendChild(item);
+  });
+  modalForm.appendChild(list);
+}
+
+function checkedValues(name) {
+  return [...modalForm.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+}
+
 function closeModal() {
   operationModal.hidden = true;
   state.modalAction = null;
@@ -1278,6 +1440,8 @@ function closeModal() {
   modalFileInput.value = "";
   modalFileInput.hidden = true;
   modalFileInput.disabled = false;
+  modalForm.hidden = true;
+  modalForm.innerHTML = "";
   modalEditor.value = "";
   modalEditor.readOnly = false;
   modalEditor.disabled = false;
@@ -1312,6 +1476,8 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalFileInput.value = "";
   modalFileInput.hidden = true;
   modalFileInput.disabled = false;
+  modalForm.hidden = true;
+  modalForm.innerHTML = "";
   modalEditor.value = "";
   modalEditor.disabled = false;
   modalMessage.textContent = "";
@@ -1391,10 +1557,12 @@ async function openNodeModal(action, slug = state.focusSlug) {
   if (action === "add-link") {
     modalKicker.textContent = "Add typed relationship";
     modalPrimaryButton.textContent = "Add relationship";
-    modalMessage.textContent = "Creates a typed gbrain edge from this node to another slug.";
-    modalEditor.value = "target: \nlink_type: \ncontext: ";
+    modalMessage.textContent = "Search/select the target entity and relationship type, or type a new relationship type.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderAddRelationshipForm(slug);
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalForm.querySelector("#operationTarget")?.focus();
     return;
   }
 
@@ -1444,20 +1612,24 @@ async function openNodeModal(action, slug = state.focusSlug) {
   if (action === "remove-link") {
     modalKicker.textContent = "Remove relationship";
     modalPrimaryButton.textContent = "Remove relationship";
-    modalMessage.textContent = "Removes a gbrain edge from this node to another slug. Leave link_type empty to remove all edge types between them.";
-    modalEditor.value = "target: \nlink_type: ";
+    modalMessage.textContent = "Only existing relationships for this node can be removed.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderRemoveRelationshipForm(slug);
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalForm.querySelector("#operationExistingRelationship")?.focus();
     return;
   }
 
   if (action === "tags") {
     modalKicker.textContent = "Edit tags";
     modalPrimaryButton.textContent = "Save tags";
-    modalMessage.textContent = "Comma-separate tags to add or remove.";
-    modalEditor.value = "add: \nremove: ";
+    modalMessage.textContent = "Select existing tags to add, enter a new tag, or remove tags already applied to this entity.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderTagOperationForm(slug);
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalForm.querySelector("#operationNewTag")?.focus();
     return;
   }
 
@@ -1622,11 +1794,16 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "add-link") {
-      const fields = parseOperationFields(modalEditor.value);
+      const target = modalForm.querySelector("#operationTarget")?.value.trim() || "";
+      const linkType = modalForm.querySelector("#operationLinkType")?.value.trim() || "";
+      const context = modalForm.querySelector("#operationContext")?.value.trim() || "";
+      if (!target || !linkType) {
+        throw new Error("Choose a target entity and relationship type first.");
+      }
       const response = await apiPost(`/api/entity-link/${encodeURIComponent(slug)}`, {
-        target: fields.target,
-        link_type: fields.link_type,
-        context: fields.context,
+        target,
+        link_type: linkType,
+        context,
       });
       if (!response.ok) throw new Error(response.data?.error || `Add relationship failed with ${response.status}`);
       closeModal();
@@ -1635,10 +1812,19 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "remove-link") {
-      const fields = parseOperationFields(modalEditor.value);
+      const selected = modalForm.querySelector("#operationExistingRelationship")?.value || "";
+      if (!selected) {
+        throw new Error("Choose an existing relationship to remove.");
+      }
+      const [target = "", rawType = ""] = selected.split(" | ");
+      const linkType = rawType === "all" ? "" : rawType;
+      const isExisting = existingRelationshipOptions(slug).some((option) => option.targetSlug === target && option.type === linkType);
+      if (!isExisting) {
+        throw new Error("Choose one of the existing relationships from the list.");
+      }
       const response = await apiPost(`/api/entity-unlink/${encodeURIComponent(slug)}`, {
-        target: fields.target,
-        link_type: fields.link_type,
+        target,
+        link_type: linkType,
       });
       if (!response.ok) throw new Error(response.data?.error || `Remove relationship failed with ${response.status}`);
       closeModal();
@@ -1647,10 +1833,12 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "tags") {
-      const fields = parseOperationFields(modalEditor.value);
+      const newTag = modalForm.querySelector("#operationNewTag")?.value.trim() || "";
+      const addTags = checkedValues("addTag");
+      if (newTag) addTags.push(newTag);
       const response = await apiPost(`/api/entity-tags/${encodeURIComponent(slug)}`, {
-        add: splitList(fields.add),
-        remove: splitList(fields.remove),
+        add: addTags,
+        remove: checkedValues("removeTag"),
       });
       if (!response.ok) throw new Error(response.data?.error || `Tag update failed with ${response.status}`);
       closeModal();

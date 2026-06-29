@@ -65,9 +65,9 @@ Supported node operations:
 4. `Show backlinks` - shows incoming links with `gbrain backlinks`.
 5. `Graph query from here` - runs typed/directional graph traversal.
 6. `View history` - shows page version history.
-7. `Add relationship` - creates a typed edge with `gbrain link`.
-8. `Remove relationship` - removes an edge with `gbrain unlink`.
-9. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
+7. `Add relationship` - searches/selects a target node and relationship type, while still allowing a new relationship type.
+8. `Remove relationship` - searches/selects from existing relationships only, then removes that edge with `gbrain unlink`.
+9. `Edit tags` - selects existing tags to add, accepts a new tag, and removes only tags already applied to the entity.
 10. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
 11. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
 12. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
