@@ -8,5 +8,6 @@
   "graph_depth": 1,
   "graph_stale_seconds": 300,
   "graph_command_limit": 140,
-  "graph_command_pause_seconds": 0.2
+  "graph_command_pause_seconds": 0.2,
+  "media_roots": ["media", "data/media"]
 }

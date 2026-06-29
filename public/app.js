@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.15";
+const UI_VERSION = "V1.0.16";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -918,38 +918,44 @@ function renderMediaItems(items) {
     return;
   }
   items.forEach((item) => {
+    const displayUrl = item.served_url || item.url;
+    const canEmbed = Boolean(item.embeddable || item.served_url);
     const card = document.createElement("div");
     card.className = "media-card";
     const label = document.createElement("span");
     label.textContent = `${item.kind || "media"} · ${item.label || item.url}`;
     card.appendChild(label);
 
-    if (item.embeddable && item.kind === "image") {
+    if (canEmbed && item.kind === "image") {
       const image = document.createElement("img");
-      image.src = item.url;
+      image.src = displayUrl;
       image.alt = item.label || "Node media";
       image.loading = "lazy";
       card.appendChild(image);
-    } else if (item.embeddable && item.kind === "video") {
+    } else if (canEmbed && item.kind === "video") {
       const video = document.createElement("video");
-      video.src = item.url;
+      video.src = displayUrl;
       video.controls = true;
       video.playsInline = true;
       card.appendChild(video);
-    } else if (item.embeddable && item.kind === "audio") {
+    } else if (canEmbed && item.kind === "audio") {
       const audio = document.createElement("audio");
-      audio.src = item.url;
+      audio.src = displayUrl;
       audio.controls = true;
       card.appendChild(audio);
     }
 
     const link = document.createElement("a");
-    link.href = item.url;
+    link.href = displayUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.textContent = item.embeddable ? "Open original" : "Reference path";
+    link.textContent = item.served_url ? "Open media URL" : item.embeddable ? "Open original" : "Reference path";
     card.appendChild(link);
-    if (!item.embeddable) {
+    if (item.served_url && item.served_url !== item.url) {
+      const note = document.createElement("span");
+      note.textContent = `Served from local media path: ${item.url}`;
+      card.appendChild(note);
+    } else if (!item.embeddable) {
       const note = document.createElement("span");
       note.textContent = "This looks like a local path. Phones can only open it after it is exposed as an HTTP URL or stored in gbrain with a shareable URL.";
       card.appendChild(note);
@@ -1013,7 +1019,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalCancelButton.hidden = true;
     modalEditor.hidden = true;
     modalMedia.hidden = false;
-    modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown. URL media opens on both desktop and mobile.";
+    modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown/frontmatter. Hosted or locally served media opens on desktop and mobile.";
     operationModal.hidden = false;
     renderMediaItems([]);
     const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);

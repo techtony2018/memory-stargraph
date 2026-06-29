@@ -61,7 +61,7 @@ Supported node operations:
 
 1. `Ask GBrain` - runs a contextual `gbrain query`.
 2. `Show backlinks` - shows incoming links with `gbrain backlinks`.
-3. `View media` - opens detected image/video/audio/PDF links from the node markdown.
+3. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
 4. `Graph query from here` - runs typed/directional graph traversal.
 5. `View history` - shows page version history.
 6. `Add relationship` - creates a typed edge with `gbrain link`.
@@ -79,7 +79,8 @@ Supported node operations:
 Node operation API contract:
 
 - `GET /api/node-operations` - lists the supported operation endpoints.
-- `GET /api/entity-media/<slug>` - lists detected media references from node markdown.
+- `GET /api/entity-media/<slug>` - lists detected media references from node markdown/frontmatter.
+- `GET /media/<relative-path>` - serves configured local media files read-only.
 - `POST /api/entity-ask/<slug>` - ask gbrain about a node.
 - `POST /api/entity-backlinks/<slug>` - show backlinks.
 - `POST /api/entity-graph-query/<slug>` - run typed/directional graph traversal.
@@ -100,6 +101,36 @@ Node operation API contract:
 - Repeated dated reports such as `agent/reports/gbrain-usage-YYYY-MM-DD` are collapsed into one aggregate node.
 - Document parts like `The RFC - JTuner - Part xx` are collapsed into one parent node.
 - Path-style labels are humanized, such as `companies/uber` to `Uber`.
+
+### Local Media URLs
+
+Use normal HTTP/HTTPS links when media is already hosted:
+
+```yaml
+profile_image: https://example.com/people/witty-wang/witty-wang-profile.jpg
+```
+
+For local gbrain media, keep a relative path in the node and put the file under one configured `media_roots` entry:
+
+```yaml
+profile_image: people/witty-wang/witty-wang-profile.jpg
+```
+
+Example config:
+
+```json
+{
+  "media_roots": ["/Users/toddy/gbrain-media", "media", "data/media"]
+}
+```
+
+Memory Stargraph exposes supported image/video/audio/PDF files read-only at:
+
+```text
+http://<host>:8788/media/people/witty-wang/witty-wang-profile.jpg
+```
+
+The media route rejects path traversal and non-media extensions.
 
 ### 6. Refresh and Freshness
 
@@ -194,7 +225,7 @@ Expected local service:
 Setup steps:
 1. Inspect `git status --short` and do not revert unrelated user changes.
 2. If needed, copy `config/local.example.json` to `config/local.json` and adjust only local machine values.
-3. On remote Mac minis, set `config/local.json` to use `"host": "0.0.0.0"` and `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"`.
+3. On remote Mac minis, set `config/local.json` to use `"host": "0.0.0.0"`, `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"`, and a `media_roots` entry for any local gbrain image folder.
 4. Start the service with `python3 server.py --host 127.0.0.1 --port 8788`.
 5. Open `http://127.0.0.1:8788` and verify the graph loads.
 6. Search `Tony Guan`, select the node, hover `Azul Systems`, and confirm the mouse-near popup shows `relationship: employed by`.

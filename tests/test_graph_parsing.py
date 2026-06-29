@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from server import (
@@ -15,6 +17,8 @@ from server import (
     parse_media_references,
     parse_page_list,
     parse_search_results,
+    resolve_media_file_path,
+    serve_url_for_media_reference,
 )
 
 
@@ -148,6 +152,32 @@ profile_image_uploaded_at: '2026-06-29'
         self.assertEqual(media[0]["label"], "profile image")
         self.assertEqual(media[0]["source"], "frontmatter:profile_image")
         self.assertFalse(media[0]["embeddable"])
+
+    def test_media_reference_served_url_uses_readonly_media_route(self):
+        self.assertEqual(
+            serve_url_for_media_reference("people/witty-wang/witty-wang-profile.jpg"),
+            "/media/people/witty-wang/witty-wang-profile.jpg",
+        )
+        self.assertIsNone(serve_url_for_media_reference("https://example.com/image.jpg"))
+        self.assertIsNone(serve_url_for_media_reference("../secret.jpg"))
+        self.assertIsNone(serve_url_for_media_reference("notes/private.txt"))
+
+    def test_resolve_media_file_path_blocks_traversal_and_non_media(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            media_file = root / "people" / "witty-wang" / "witty-wang-profile.jpg"
+            media_file.parent.mkdir(parents=True)
+            media_file.write_bytes(b"fake jpg")
+            text_file = root / "people" / "witty-wang" / "notes.txt"
+            text_file.write_text("private", encoding="utf-8")
+
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                self.assertEqual(
+                    resolve_media_file_path("/media/people/witty-wang/witty-wang-profile.jpg"),
+                    media_file.resolve(),
+                )
+                self.assertIsNone(resolve_media_file_path("/media/people/witty-wang/notes.txt"))
+                self.assertIsNone(resolve_media_file_path("/media/../secret.jpg"))
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

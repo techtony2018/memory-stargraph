@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import mimetypes
 import os
 import re
 import subprocess
@@ -28,6 +29,7 @@ DEFAULT_CONFIG = {
     "graph_stale_seconds": 300,
     "graph_command_limit": 140,
     "graph_command_pause_seconds": 0.2,
+    "media_roots": ["media", "data/media"],
 }
 
 
@@ -64,8 +66,13 @@ GRAPH_DEPTH = int(CONFIG["graph_depth"])
 GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
+MEDIA_ROOTS = [
+    resolve_project_path(root)
+    for root in str(os.environ.get("MEMORY_STARGRAPH_MEDIA_ROOTS", "")).split(",")
+    if root.strip()
+] or [resolve_project_path(root) for root in CONFIG.get("media_roots", [])]
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.15"
+UI_VERSION = "V1.0.16"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -379,6 +386,46 @@ def is_embeddable_media_url(url):
     return text.startswith(("http://", "https://", "data:"))
 
 
+def is_supported_media_path(path):
+    return media_kind_for_url(path) != "link"
+
+
+def safe_media_relative_path(value):
+    text = str(value or "").strip()
+    if not text or urlparse(text).scheme or text.startswith(("/", "\\")):
+        return None
+    parts = Path(unquote(text)).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    if not is_supported_media_path(text):
+        return None
+    return Path(*parts)
+
+
+def serve_url_for_media_reference(value):
+    relative_path = safe_media_relative_path(value)
+    if not relative_path:
+        return None
+    return "/media/" + "/".join(relative_path.parts)
+
+
+def resolve_media_file_path(request_path):
+    if not str(request_path or "").startswith("/media/"):
+        return None
+    relative_path = safe_media_relative_path(str(request_path).split("/media/", 1)[1])
+    if not relative_path:
+        return None
+    for root in MEDIA_ROOTS:
+        candidate = (root / relative_path).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def looks_like_media_key(key):
     normalized = str(key or "").lower()
     return any(
@@ -428,6 +475,7 @@ def parse_media_references(markdown):
                 "label": str(label or "").strip() or Path(clean_url.split("?", 1)[0]).name or clean_url,
                 "source": source,
                 "embeddable": is_embeddable_media_url(clean_url),
+                "served_url": serve_url_for_media_reference(clean_url),
             }
         )
 
@@ -1383,8 +1431,31 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         return json.loads(body or "{}")
 
+    def serve_media_file(self, request_path, head_only=False):
+        file_path = resolve_media_file_path(request_path)
+        if not file_path:
+            self.send_error(HTTPStatus.NOT_FOUND, "Media file not found")
+            return
+        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        content_length = file_path.stat().st_size
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(file_path.read_bytes())
+
+    def do_HEAD(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/media/"):
+            return self.serve_media_file(parsed.path, head_only=True)
+        return super().do_HEAD()
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/media/"):
+            return self.serve_media_file(parsed.path)
         if parsed.path == "/api/health":
             return self.end_json(
                 {
