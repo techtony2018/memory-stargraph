@@ -86,7 +86,7 @@ MEDIA_DISCOVERY_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.22"
+UI_VERSION = "V1.0.23"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -653,6 +653,60 @@ def materialize_local_media_for_slug(slug, file_path, raw_markdown=""):
         "served_url": served_url,
         "served_available": bool(resolve_media_file_path(served_url)),
     }
+
+
+def relative_path_for_local_media(local_media):
+    if not local_media:
+        return None
+    served_url = str(local_media.get("served_url") or "")
+    if served_url.startswith("/media/"):
+        return safe_media_relative_path(served_url.split("/media/", 1)[1])
+    media_path = local_media.get("path")
+    if media_path:
+        path = Path(media_path).expanduser()
+        for root in MEDIA_ROOTS:
+            try:
+                return path.resolve().relative_to(root.resolve())
+            except ValueError:
+                continue
+    return None
+
+
+def markdown_link_label(relative_path):
+    stem = Path(str(relative_path or "attachment")).stem.replace("-", " ").replace("_", " ").strip()
+    return stem or "Attachment"
+
+
+def escape_markdown_label(label):
+    return str(label or "Attachment").replace("[", "\\[").replace("]", "\\]")
+
+
+def attachment_markdown_line(relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return ""
+    label = escape_markdown_label(markdown_link_label(safe_path))
+    url = "/".join(safe_path.parts)
+    if media_kind_for_url(url) == "image":
+        return f"![{label}]({url})"
+    return f"[{label}]({url})"
+
+
+def append_attachment_reference(markdown, relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return markdown
+    url = "/".join(safe_path.parts)
+    text = str(markdown or "")
+    if url in text or f"/media/{url}" in text:
+        return text
+    line = attachment_markdown_line(safe_path)
+    if not line:
+        return text
+    trimmed = text.rstrip()
+    if re.search(r"^##\s+Attachments\s*$", trimmed, flags=re.MULTILINE):
+        return f"{trimmed}\n\n{line}\n"
+    return f"{trimmed}\n\n## Attachments\n\n{line}\n" if trimmed else f"## Attachments\n\n{line}\n"
 
 
 def looks_like_media_key(key):
@@ -1640,7 +1694,16 @@ class GraphStore:
         except RuntimeError:
             if not local_media:
                 raise
+        markdown_updated = False
+        relative_path = relative_path_for_local_media(local_media)
+        if raw and relative_path:
+            updated_raw = append_attachment_reference(raw, relative_path)
+            if updated_raw != raw:
+                run_gbrain("put", slug, input_text=updated_raw)
+                markdown_updated = True
         self.invalidate()
+        if local_media:
+            local_media["markdown_updated"] = markdown_updated
         return local_media
 
     def history(self, slug):

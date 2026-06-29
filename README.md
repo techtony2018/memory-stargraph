@@ -1,6 +1,6 @@
 # Memory Stargraph
 
-Memory Stargraph is a local web service for exploring Tony's `gbrain` as an interactive star-cloud entity graph.
+Memory Stargraph is a local web service for exploring a `gbrain` knowledge base as an interactive star-cloud entity graph.
 
 It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it runs without `npm install`.
 
@@ -68,9 +68,9 @@ Supported node operations:
 7. `Remove relationship` - removes an edge with `gbrain unlink`.
 8. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
 9. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
-10. `Attach file` - opens a browser file picker, uploads the selected file, and previews supported media.
+10. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
 11. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
-12. `View raw details` - read-only `gbrain get`.
+12. `View` - renders the node's gbrain markdown read-only.
 13. `Modify markdown` - edits the page with `gbrain put`.
 14. `Hide` - hides a node in the web UI only.
 15. `Copy slug` - copies the exact gbrain slug.
@@ -107,13 +107,13 @@ Node operation API contract:
 Use normal HTTP/HTTPS links when media is already hosted:
 
 ```yaml
-profile_image: https://example.com/people/witty-wang/witty-wang-profile.jpg
+cover_image: https://example.com/assets/project-cover.jpg
 ```
 
 For local gbrain media, keep a relative path in the node:
 
 ```yaml
-profile_image: people/witty-wang/witty-wang-profile.jpg
+cover_image: projects/example-project/project-cover.jpg
 ```
 
 When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
@@ -129,12 +129,12 @@ Example config:
 }
 ```
 
-For day-to-day use, choose `Attach file` from a node menu and pick the file in Finder. The service saves the upload, copies supported media into `media_roots`, and returns a `/media/...` preview URL. Host-local path entry remains available as a fallback for automation.
+For day-to-day use, choose `Attach file` from a node menu and pick the file in Finder. The service saves the upload, copies supported media into `media_roots`, appends an `## Attachments` markdown reference to the node page, and returns a `/media/...` preview URL. Host-local path entry remains available as a fallback for automation.
 
 Memory Stargraph exposes supported image/video/audio/PDF files read-only at:
 
 ```text
-http://<host>:8788/media/people/witty-wang/witty-wang-profile.jpg
+http://<host>:8788/media/projects/example-project/project-cover.jpg
 ```
 
 The media route rejects path traversal and non-media extensions.
@@ -193,25 +193,23 @@ data/hidden_entities.json
 data/deleted_entities.json
 ```
 
-Remote host notes:
+Deployment notes:
 
-- `.102` LAN host: `toddy@192.168.1.102` (`toddys-mac-mini-1`)
-- Other live Mac mini: `toddy@100.100.126.85` (`toddys-mac-mini`, hostname observed as `toddys-mini-3.lan`)
-- Clone target on both hosts: `/Users/toddy/memory-stargraph`
-- Node and npx path: `/usr/local/bin`
-- Bun and gbrain path: `/Users/toddy/.bun/bin`
-- Use `config/local.json` with `"host": "0.0.0.0"` and `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"` on those hosts.
-- For SSH-run verification, export `PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"` first.
+- Keep `config/local.json` uncommitted and machine-specific.
+- For LAN or remote access, set `"host": "0.0.0.0"` in `config/local.json` or pass `--host 0.0.0.0`.
+- Set `"gbrain_path"` to the absolute `gbrain` binary path on the target machine.
+- If `gbrain` is installed in a user-local package manager path, export that path before starting or testing the service.
+- Keep media roots local to the target machine and avoid committing uploaded media or runtime cache files.
 
 ## AI Agent Setup Prompt
 
 Use this prompt when asking an AI coding agent to set up, verify, or continue Memory Stargraph:
 
 ```text
-You are working on Memory Stargraph in `/Users/tony/Documents/Collective Knowledge System`.
+You are working on Memory Stargraph from a clean clone of `git@github.com:techtony2018/memory-stargraph.git`.
 
 Goal:
-- Set up and verify the local Memory Stargraph web service for Tony's gbrain entity graph.
+- Set up and verify the local Memory Stargraph web service for a gbrain entity graph.
 - Keep local runtime state separate from public repo files.
 - Do not commit `data/*.json`, `config/local.json`, `.DS_Store`, caches, screenshots, or private `.project/` notes.
 
@@ -227,15 +225,15 @@ Expected local service:
 - URL: `http://127.0.0.1:8788`
 - Health check: `curl -sS http://127.0.0.1:8788/api/health`
 - Default gbrain path: `/opt/homebrew/bin/gbrain`
-- On remote Mac minis, use `/Users/toddy/.bun/bin/gbrain`, set `"host": "0.0.0.0"` in `config/local.json`, and export `PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"` for SSH-run checks.
+- On other machines, set `"gbrain_path"` to the installed gbrain binary, set `"host": "0.0.0.0"` only when remote access is intended, and export any required package-manager paths before starting the service.
 
 Setup steps:
 1. Inspect `git status --short` and do not revert unrelated user changes.
 2. If needed, copy `config/local.example.json` to `config/local.json` and adjust only local machine values.
-3. On remote Mac minis, set `config/local.json` to use `"host": "0.0.0.0"`, `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"`, and a `media_roots` entry for any local gbrain image folder.
+3. On remote or shared machines, set `config/local.json` to use the target machine's `"gbrain_path"` and a `media_roots` entry for any local gbrain image folder.
 4. Start the service with `python3 server.py --host 127.0.0.1 --port 8788`.
 5. Open `http://127.0.0.1:8788` and verify the graph loads.
-6. Search `Tony Guan`, select the node, hover `Azul Systems`, and confirm the mouse-near popup shows `relationship: employed by`.
+6. Search for a known entity in your gbrain, select it, hover a direct neighbor, and confirm the mouse-near popup shows the relationship type.
 7. Confirm `Ask GBrain` is the first node menu item and all node operations render.
 
 Verification commands:
@@ -259,7 +257,7 @@ Supported node operations to preserve:
 9. Add timeline event
 10. Attach file
 11. Refresh embedding
-12. View raw details
+12. View
 13. Modify markdown
 14. Hide
 15. Copy slug
@@ -308,6 +306,10 @@ Useful live checks:
 curl -sS http://127.0.0.1:8788/api/health
 curl -sS http://127.0.0.1:8788/api/graph
 ```
+
+## License
+
+Memory Stargraph is released under the MIT License. See [LICENSE](LICENSE).
 
 ## Notes
 

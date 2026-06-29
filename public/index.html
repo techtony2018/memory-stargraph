@@ -146,7 +146,7 @@
 
     <div id="contextMenu" class="context-menu" hidden>
       <button type="button" data-action="ask">Ask GBrain</button>
-      <button type="button" data-action="view">View raw details</button>
+      <button type="button" data-action="view">View</button>
       <button type="button" data-action="media">View media</button>
       <button type="button" data-action="backlinks">Show backlinks</button>
       <button type="button" data-action="graph-query">Graph query from here</button>
@@ -176,6 +176,7 @@
         <input id="modalConfirmInput" class="modal-confirm-input" type="text" autocomplete="off" spellcheck="false" hidden />
         <input id="modalFileInput" class="modal-file-input" type="file" hidden />
         <textarea id="modalEditor" spellcheck="false"></textarea>
+        <div id="modalMarkdown" class="markdown-view" hidden></div>
         <div id="modalMedia" class="media-grid" hidden></div>
         <div class="modal-actions">
           <button id="modalCancelButton" class="ghost-button" type="button">Cancel</button>

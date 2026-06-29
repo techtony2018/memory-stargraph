@@ -251,15 +251,16 @@ try {
     }));
   });
   await page.waitForSelector("#operationModal:not([hidden])");
-  await page.waitForFunction(() => document.querySelector("#modalEditor")?.value.length > 0, null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector("#modalMarkdown")?.textContent.length > 0, null, { timeout: 20000 });
   const doubleClickModal = await page.evaluate(() => ({
     title: document.querySelector("#modalTitle")?.textContent,
-    editorReadOnly: document.querySelector("#modalEditor")?.readOnly,
+    markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
+    editorHidden: document.querySelector("#modalEditor")?.hidden,
     cancelHidden: document.querySelector("#modalCancelButton")?.hidden,
     primary: document.querySelector("#modalPrimaryButton")?.textContent,
   }));
-  if (!doubleClickModal.editorReadOnly || !doubleClickModal.cancelHidden || doubleClickModal.primary !== "Close") {
-    throw new Error("Expected double-clicking a node to open read-only raw details");
+  if (!doubleClickModal.markdownVisible || !doubleClickModal.editorHidden || !doubleClickModal.cancelHidden || doubleClickModal.primary !== "Close") {
+    throw new Error("Expected double-clicking a node to open rendered read-only details");
   }
   await page.click("#modalCloseButton");
 
@@ -267,16 +268,17 @@ try {
   await page.waitForSelector("#contextMenu:not([hidden])");
   await page.click('#contextMenu button[data-action="view"]');
   await page.waitForSelector("#operationModal:not([hidden])");
-  await page.waitForFunction(() => document.querySelector("#modalEditor")?.value.length > 0, null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector("#modalMarkdown")?.textContent.length > 0, null, { timeout: 20000 });
   const operationModal = await page.evaluate(() => ({
     title: document.querySelector("#modalTitle")?.textContent,
-    contentLength: document.querySelector("#modalEditor")?.value.length,
+    contentLength: document.querySelector("#modalMarkdown")?.textContent.length,
     primary: document.querySelector("#modalPrimaryButton")?.textContent,
-    editorReadOnly: document.querySelector("#modalEditor")?.readOnly,
+    markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
+    editorHidden: document.querySelector("#modalEditor")?.hidden,
     cancelHidden: document.querySelector("#modalCancelButton")?.hidden,
   }));
-  if (!operationModal.editorReadOnly || !operationModal.cancelHidden || operationModal.primary !== "Close") {
-    throw new Error("Expected View raw details to be read-only with no Cancel button and a Close action");
+  if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close") {
+    throw new Error("Expected View to render markdown with no Cancel button and a Close action");
   }
   await page.click("#modalCloseButton");
 

@@ -5,6 +5,7 @@ from unittest import mock
 
 from server import (
     GraphStore,
+    append_attachment_reference,
     collapse_part_identity,
     ensure_media_references_available,
     expand_raw_graph,
@@ -137,7 +138,8 @@ class GraphParsingTests(unittest.TestCase):
         self.assertTrue(all(item["embeddable"] for item in media))
 
     def test_parse_media_references_reads_frontmatter_profile_image(self):
-        markdown = """---
+        with TemporaryDirectory() as tmpdir:
+            markdown = """---
 type: reporter
 title: Witty Wang
 date: '2026-06-28T00:00:00.000Z'
@@ -148,16 +150,17 @@ profile_image_uploaded_at: '2026-06-29'
 
 
 """
-        media = parse_media_references(markdown)
+            with mock.patch("server.MEDIA_ROOTS", [Path(tmpdir) / "empty-media-root"]):
+                media = parse_media_references(markdown)
 
-        self.assertEqual(len(media), 1)
-        self.assertEqual(media[0]["kind"], "image")
-        self.assertEqual(media[0]["url"], "people/witty-wang/witty-wang-profile.jpg")
-        self.assertEqual(media[0]["label"], "profile image")
-        self.assertEqual(media[0]["source"], "frontmatter:profile_image")
-        self.assertFalse(media[0]["embeddable"])
-        self.assertEqual(media[0]["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
-        self.assertFalse(media[0]["served_available"])
+            self.assertEqual(len(media), 1)
+            self.assertEqual(media[0]["kind"], "image")
+            self.assertEqual(media[0]["url"], "people/witty-wang/witty-wang-profile.jpg")
+            self.assertEqual(media[0]["label"], "profile image")
+            self.assertEqual(media[0]["source"], "frontmatter:profile_image")
+            self.assertFalse(media[0]["embeddable"])
+            self.assertEqual(media[0]["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
+            self.assertFalse(media[0]["served_available"])
 
     def test_media_reference_served_url_uses_readonly_media_route(self):
         self.assertEqual(
@@ -220,6 +223,13 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertEqual(result["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
                 self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
 
+    def test_append_attachment_reference_adds_image_to_markdown(self):
+        updated = append_attachment_reference("# Azul Systems\n\nCompany notes.", "companies/azul-systems/Azul.jpg")
+
+        self.assertIn("## Attachments", updated)
+        self.assertIn("![Azul](companies/azul-systems/Azul.jpg)", updated)
+        self.assertEqual(updated, append_attachment_reference(updated, "companies/azul-systems/Azul.jpg"))
+
     def test_ensure_media_references_copies_from_discovery_roots(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "served"
@@ -227,12 +237,11 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
             source = discovery_root / "people/witty-wang/witty-wang-profile.jpg"
             source.parent.mkdir(parents=True)
             source.write_bytes(b"fake jpg")
-            media = parse_media_references("""---
+            with mock.patch("server.MEDIA_ROOTS", [media_root]), mock.patch("server.MEDIA_DISCOVERY_ROOTS", [discovery_root]):
+                media = parse_media_references("""---
 profile_image: people/witty-wang/witty-wang-profile.jpg
 ---
 """)
-
-            with mock.patch("server.MEDIA_ROOTS", [media_root]), mock.patch("server.MEDIA_DISCOVERY_ROOTS", [discovery_root]):
                 enriched = ensure_media_references_available(media)
 
                 self.assertTrue(enriched[0]["served_available"])
@@ -264,6 +273,28 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
 
         self.assertIn("uploaded", output)
         self.assertIn("\ufffd", output)
+
+    def test_graph_store_attach_file_updates_markdown_reference(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "Azul.jpg"
+            source.write_bytes(b"fake jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                run.side_effect = ["# Azul Systems\n\nCompany notes.", "", ""]
+                result = store.attach_file("companies/azul-systems", str(source))
+
+            self.assertEqual(result["served_url"], "/media/companies/azul-systems/Azul.jpg")
+            self.assertTrue(result["markdown_updated"])
+            run.assert_any_call("put", "companies/azul-systems", input_text=mock.ANY)
+            put_content = next(call.kwargs["input_text"] for call in run.mock_calls if call.args[:2] == ("put", "companies/azul-systems"))
+            self.assertIn("![Azul](companies/azul-systems/Azul.jpg)", put_content)
+            invalidate.assert_called_once()
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

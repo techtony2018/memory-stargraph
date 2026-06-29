@@ -59,6 +59,16 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("modalFileInput.disabled = true", script)
         self.assertIn("modalEditor.disabled = true", script)
 
+    def test_view_uses_rendered_markdown_modal(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn('data-action="view">View</button>', markup)
+        self.assertIn('id="modalMarkdown"', markup)
+        self.assertIn("function renderMarkdownView", script)
+        self.assertIn("renderMarkdownView(content)", script)
+        self.assertIn('modalKicker.textContent = action === "view" ? "View"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

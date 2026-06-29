@@ -650,6 +650,80 @@ h2 {
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.markdown-view {
+  min-height: 340px;
+  max-height: min(58vh, 620px);
+  overflow: auto;
+  border: 1px solid rgba(143, 168, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 8, 22, 0.72);
+  color: var(--text);
+  padding: 18px;
+  font-size: 14px;
+  line-height: 1.58;
+}
+
+.markdown-view h1,
+.markdown-view h2,
+.markdown-view h3 {
+  margin: 14px 0 8px;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.markdown-view h1 {
+  font-size: 24px;
+}
+
+.markdown-view h2 {
+  font-size: 19px;
+}
+
+.markdown-view h3 {
+  font-size: 16px;
+}
+
+.markdown-view p,
+.markdown-view ul,
+.markdown-view pre {
+  margin: 0 0 12px;
+}
+
+.markdown-view ul {
+  padding-left: 20px;
+}
+
+.markdown-view code,
+.markdown-view pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.markdown-view code {
+  color: var(--accent);
+}
+
+.markdown-view pre {
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.26);
+  padding: 12px;
+}
+
+.markdown-view a {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.markdown-view img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  margin: 8px 0 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
 .media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

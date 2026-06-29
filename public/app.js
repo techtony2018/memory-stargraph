@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.22";
+const UI_VERSION = "V1.0.23";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -70,6 +70,7 @@ const modalMessage = document.getElementById("modalMessage");
 const modalConfirmInput = document.getElementById("modalConfirmInput");
 const modalFileInput = document.getElementById("modalFileInput");
 const modalEditor = document.getElementById("modalEditor");
+const modalMarkdown = document.getElementById("modalMarkdown");
 const modalMedia = document.getElementById("modalMedia");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
@@ -921,6 +922,105 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+function mediaDisplayUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value) || value.startsWith("/")) return value;
+  return `/media/${value.replace(/^\/+/, "")}`;
+}
+
+function appendInlineMarkdown(parent, text) {
+  const pattern = /(!?)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|`([^`]+)`/g;
+  let cursor = 0;
+  String(text || "").replace(pattern, (match, bang, label, url, code, offset) => {
+    if (offset > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, offset)));
+    if (code !== undefined) {
+      const codeNode = document.createElement("code");
+      codeNode.textContent = code;
+      parent.appendChild(codeNode);
+    } else if (bang) {
+      const image = document.createElement("img");
+      image.src = mediaDisplayUrl(url);
+      image.alt = label || "Markdown image";
+      image.loading = "lazy";
+      parent.appendChild(image);
+    } else {
+      const link = document.createElement("a");
+      link.href = mediaDisplayUrl(url);
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = label || url;
+      parent.appendChild(link);
+    }
+    cursor = offset + match.length;
+    return match;
+  });
+  if (cursor < String(text || "").length) parent.appendChild(document.createTextNode(String(text || "").slice(cursor)));
+}
+
+function renderMarkdownView(markdown) {
+  modalMarkdown.innerHTML = "";
+  const lines = String(markdown || "").split(/\r?\n/);
+  let list = null;
+  let codeBlock = null;
+
+  function closeList() {
+    list = null;
+  }
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith("```")) {
+      closeList();
+      if (codeBlock) {
+        codeBlock = null;
+      } else {
+        codeBlock = document.createElement("code");
+        const pre = document.createElement("pre");
+        pre.appendChild(codeBlock);
+        modalMarkdown.appendChild(pre);
+      }
+      return;
+    }
+    if (codeBlock) {
+      codeBlock.textContent += `${line}\n`;
+      return;
+    }
+    if (!line.trim()) {
+      closeList();
+      return;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const node = document.createElement(`h${heading[1].length}`);
+      appendInlineMarkdown(node, heading[2]);
+      modalMarkdown.appendChild(node);
+      return;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!list) {
+        list = document.createElement("ul");
+        modalMarkdown.appendChild(list);
+      }
+      const item = document.createElement("li");
+      appendInlineMarkdown(item, bullet[1]);
+      list.appendChild(item);
+      return;
+    }
+    closeList();
+    const paragraph = document.createElement("p");
+    appendInlineMarkdown(paragraph, line);
+    modalMarkdown.appendChild(paragraph);
+  });
+
+  if (!modalMarkdown.childElementCount) {
+    const empty = document.createElement("p");
+    empty.textContent = "(Empty page)";
+    modalMarkdown.appendChild(empty);
+  }
+}
+
 function renderMediaItems(items) {
   modalMedia.innerHTML = "";
   if (!items.length) {
@@ -991,6 +1091,8 @@ function closeModal() {
   modalEditor.readOnly = false;
   modalEditor.disabled = false;
   modalEditor.hidden = false;
+  modalMarkdown.hidden = true;
+  modalMarkdown.innerHTML = "";
   modalMedia.hidden = true;
   modalMedia.innerHTML = "";
   modalPrimaryButton.hidden = false;
@@ -1016,22 +1118,31 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalEditor.disabled = false;
   modalMessage.textContent = "";
   modalEditor.hidden = false;
+  modalMarkdown.hidden = true;
+  modalMarkdown.innerHTML = "";
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
   modalPrimaryButton.classList.remove("danger");
 
   if (action === "view" || action === "edit") {
-    modalKicker.textContent = action === "view" ? "Raw gbrain page" : "Modify gbrain page";
+    modalKicker.textContent = action === "view" ? "View" : "Modify gbrain page";
     modalPrimaryButton.textContent = action === "view" ? "Close" : "Save";
     modalEditor.readOnly = action === "view";
     modalCancelButton.hidden = action === "view";
     modalMessage.textContent = action === "view"
-      ? "Rendered from `gbrain get`. Use Modify markdown if you want to edit this page."
+      ? "Rendered from gbrain markdown. Use Modify markdown if you want to edit this page."
       : "Editing writes this markdown back with `gbrain put`, then refreshes the graph.";
+    modalEditor.hidden = action === "view";
+    modalMarkdown.hidden = action !== "view";
     operationModal.hidden = false;
     const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
-    modalEditor.value = response.ok ? response.data.content : `Unable to load raw page: ${response.data?.error || response.status}`;
+    const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
+    if (action === "view") {
+      renderMarkdownView(content);
+    } else {
+      modalEditor.value = content;
+    }
     return;
   }
 
