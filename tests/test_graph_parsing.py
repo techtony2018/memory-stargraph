@@ -14,6 +14,7 @@ from server import (
     parse_backlinks,
     parse_frontmatter,
     parse_link_types,
+    materialize_local_media_for_slug,
     parse_media_references,
     parse_page_list,
     parse_search_results,
@@ -180,6 +181,24 @@ profile_image_uploaded_at: '2026-06-29'
                 )
                 self.assertIsNone(resolve_media_file_path("/media/people/witty-wang/notes.txt"))
                 self.assertIsNone(resolve_media_file_path("/media/../secret.jpg"))
+
+    def test_materialize_local_media_uses_existing_frontmatter_reference(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "media-root"
+            source = Path(tmpdir) / "witty-wang-profile.jpg"
+            source.write_bytes(b"fake jpg")
+            markdown = """---
+title: Witty Wang
+profile_image: people/witty-wang/witty-wang-profile.jpg
+---
+"""
+
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                result = materialize_local_media_for_slug("people/witty-wang", source, markdown)
+
+                self.assertEqual(result["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
+                self.assertTrue(result["served_available"])
+                self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(
@@ -401,6 +420,7 @@ profile_image_uploaded_at: '2026-06-29'
                 mock.call("query", "What should I know? Related node: people/tony-guan"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
+                mock.call("get", "people/tony-guan"),
                 mock.call("files", "upload", "/tmp/example.pdf", "--page", "people/tony-guan"),
                 mock.call("history", "people/tony-guan"),
                 mock.call("embed", "people/tony-guan"),

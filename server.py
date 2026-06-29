@@ -5,6 +5,7 @@ import math
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -72,7 +73,7 @@ MEDIA_ROOTS = [
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_roots", [])]
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.18"
+UI_VERSION = "V1.0.19"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -424,6 +425,42 @@ def resolve_media_file_path(request_path):
         if candidate.is_file():
             return candidate
     return None
+
+
+def local_media_destination_for_slug(slug, file_path, raw_markdown=""):
+    source = Path(str(file_path or "")).expanduser()
+    if not source.is_file() or not is_supported_media_path(source.name):
+        return None
+    candidates = []
+    if raw_markdown:
+        for item in parse_media_references(raw_markdown):
+            relative_path = safe_media_relative_path(item.get("url"))
+            if relative_path and relative_path.name == source.name:
+                candidates.append(relative_path)
+    fallback_path = safe_media_relative_path(f"{slug.strip('/')}/{source.name}")
+    if fallback_path:
+        candidates.append(fallback_path)
+    if not candidates or not MEDIA_ROOTS:
+        return None
+    return MEDIA_ROOTS[0] / candidates[0]
+
+
+def materialize_local_media_for_slug(slug, file_path, raw_markdown=""):
+    destination = local_media_destination_for_slug(slug, file_path, raw_markdown)
+    if not destination:
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(Path(str(file_path)).expanduser(), destination)
+    try:
+        relative_path = destination.resolve().relative_to(MEDIA_ROOTS[0].resolve())
+    except ValueError:
+        return None
+    served_url = "/media/" + "/".join(relative_path.parts)
+    return {
+        "path": str(destination),
+        "served_url": served_url,
+        "served_available": bool(resolve_media_file_path(served_url)),
+    }
 
 
 def looks_like_media_key(key):
@@ -1399,8 +1436,20 @@ class GraphStore:
         return run_gbrain(*command)
 
     def attach_file(self, slug, file_path):
-        run_gbrain("files", "upload", file_path, "--page", slug)
+        raw = ""
+        try:
+            raw_output = run_gbrain("get", slug)
+            raw = raw_output if isinstance(raw_output, str) else ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+        local_media = materialize_local_media_for_slug(slug, file_path, raw)
+        try:
+            run_gbrain("files", "upload", file_path, "--page", slug)
+        except RuntimeError:
+            if not local_media:
+                raise
         self.invalidate()
+        return local_media
 
     def history(self, slug):
         return run_gbrain("history", slug)
@@ -1653,9 +1702,9 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 file_path = str(payload.get("file_path") or "").strip()
                 if not file_path:
                     return self.end_json({"error": "file_path is required"}, status=HTTPStatus.BAD_REQUEST)
-                STORE.attach_file(slug, file_path)
+                local_media = STORE.attach_file(slug, file_path)
                 graph = STORE.get_seed_graph(force=True)
-                return self.end_json({"ok": True, "slug": slug, "graph": graph})
+                return self.end_json({"ok": True, "slug": slug, "graph": graph, "local_media": local_media})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-history/"):

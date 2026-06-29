@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.18";
+const UI_VERSION = "V1.0.19";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -1131,7 +1131,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   if (action === "attach-file") {
     modalKicker.textContent = "Attach file";
     modalPrimaryButton.textContent = "Attach file";
-    modalMessage.textContent = "Uploads a local file path into gbrain storage for this page.";
+    modalMessage.textContent = "Uploads a local file path into gbrain storage and copies supported media into the web media root for preview.";
     modalEditor.value = "file_path: ";
     operationModal.hidden = false;
     modalEditor.focus();
@@ -1366,9 +1366,18 @@ async function runModalPrimaryAction() {
         file_path: fields.file_path,
       });
       if (!response.ok) throw new Error(response.data?.error || `Attach file failed with ${response.status}`);
-      closeModal();
       applyGraphPayload(response.data.graph, slug);
       await loadEntity(slug, { source: "system" });
+      if (response.data.local_media?.served_url) {
+        state.modalAction = { action: "result", slug, label };
+        modalKicker.textContent = "Local media ready";
+        modalPrimaryButton.textContent = "Close";
+        modalCancelButton.hidden = true;
+        modalEditor.readOnly = true;
+        modalEditor.value = `Preview URL: ${response.data.local_media.served_url}\nFilesystem path: ${response.data.local_media.path}`;
+      } else {
+        closeModal();
+      }
       return;
     }
     if (action === "embed") {
