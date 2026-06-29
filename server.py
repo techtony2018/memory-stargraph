@@ -86,7 +86,7 @@ MEDIA_DISCOVERY_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.21"
+UI_VERSION = "V1.0.22"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -264,6 +264,12 @@ def normalize_slug(value):
     return cleaned or "entity"
 
 
+def decode_process_output(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
 def run_gbrain(*args, input_text=None):
     if not GBRAIN.exists():
         raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
@@ -275,18 +281,17 @@ def run_gbrain(*args, input_text=None):
         command,
         cwd=ROOT,
         capture_output=True,
-        text=True,
         timeout=20,
         check=False,
         env=env,
-        input=input_text,
+        input=input_text.encode("utf-8") if isinstance(input_text, str) else input_text,
     )
     if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        stdout = (result.stdout or "").strip()
+        stderr = decode_process_output(result.stderr).strip()
+        stdout = decode_process_output(result.stdout).strip()
         message = stderr or stdout or f"gbrain exited with status {result.returncode}"
         raise RuntimeError(message)
-    return result.stdout
+    return decode_process_output(result.stdout)
 
 
 def parse_slugs(raw_text):

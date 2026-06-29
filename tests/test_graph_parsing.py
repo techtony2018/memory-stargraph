@@ -21,6 +21,7 @@ from server import (
     parse_page_list,
     parse_search_results,
     resolve_media_file_path,
+    run_gbrain,
     serve_url_for_media_reference,
 )
 
@@ -252,6 +253,17 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
         self.assertEqual(files["file"]["filename"], "witty wang.jpg")
         self.assertEqual(files["file"]["content_type"], "image/jpeg")
         self.assertEqual(files["file"]["data"], b"fake jpg")
+
+    def test_run_gbrain_tolerates_non_utf8_output(self):
+        completed = mock.Mock(returncode=0, stdout=b"uploaded \xff image", stderr=b"")
+        with mock.patch("server.GBRAIN") as gbrain, mock.patch("server.subprocess.run", return_value=completed):
+            gbrain.exists.return_value = True
+            gbrain.__str__ = lambda _self: "/usr/local/bin/gbrain"
+
+            output = run_gbrain("files", "upload", "/tmp/photo.jpg", "--page", "people/witty-wang")
+
+        self.assertIn("uploaded", output)
+        self.assertIn("\ufffd", output)
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

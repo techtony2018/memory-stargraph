@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.21";
+const UI_VERSION = "V1.0.22";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -986,8 +986,10 @@ function closeModal() {
   modalConfirmInput.dataset.expected = "";
   modalFileInput.value = "";
   modalFileInput.hidden = true;
+  modalFileInput.disabled = false;
   modalEditor.value = "";
   modalEditor.readOnly = false;
+  modalEditor.disabled = false;
   modalEditor.hidden = false;
   modalMedia.hidden = true;
   modalMedia.innerHTML = "";
@@ -1009,7 +1011,9 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalConfirmInput.dataset.expected = "";
   modalFileInput.value = "";
   modalFileInput.hidden = true;
+  modalFileInput.disabled = false;
   modalEditor.value = "";
+  modalEditor.disabled = false;
   modalMessage.textContent = "";
   modalEditor.hidden = false;
   modalPrimaryButton.hidden = false;
@@ -1269,6 +1273,12 @@ async function runModalPrimaryAction() {
   }
   modalPrimaryButton.disabled = true;
   modalCancelButton.disabled = true;
+  const primaryButtonText = modalPrimaryButton.textContent;
+  if (action === "attach-file") {
+    modalPrimaryButton.textContent = "Uploading...";
+    modalFileInput.disabled = true;
+    modalEditor.disabled = true;
+  }
   try {
     if (action === "edit") {
       const response = await apiPost(`/api/entity-save/${encodeURIComponent(slug)}`, { content: modalEditor.value });
@@ -1417,6 +1427,11 @@ async function runModalPrimaryAction() {
   } finally {
     modalPrimaryButton.disabled = false;
     modalCancelButton.disabled = false;
+    modalFileInput.disabled = false;
+    modalEditor.disabled = false;
+    if (action === "attach-file" && state.modalAction?.action === "attach-file") {
+      modalPrimaryButton.textContent = primaryButtonText;
+    }
   }
 }
 

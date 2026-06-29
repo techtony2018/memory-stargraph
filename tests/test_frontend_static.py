@@ -55,6 +55,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("new FormData()", script)
         self.assertIn('formData.append("file"', script)
         self.assertIn("apiPostForm", script)
+        self.assertIn('modalPrimaryButton.textContent = "Uploading..."', script)
+        self.assertIn("modalFileInput.disabled = true", script)
+        self.assertIn("modalEditor.disabled = true", script)
 
 
 if __name__ == "__main__":
