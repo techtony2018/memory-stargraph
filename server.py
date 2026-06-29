@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.30"
+UI_VERSION = "V1.0.31"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -664,8 +664,6 @@ def local_media_destination_for_slug(slug, file_path, raw_markdown=""):
                 referenced_paths.append(relative_path)
                 if relative_path.name == source.name:
                     candidates.append(relative_path)
-        if not candidates and len(referenced_paths) == 1:
-            candidates.append(referenced_paths[0])
     fallback_path = safe_media_relative_path(f"{slug.strip('/')}/{source.name}")
     if fallback_path:
         candidates.append(fallback_path)

@@ -228,7 +228,7 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertTrue(result["served_available"])
                 self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
 
-    def test_materialize_local_media_fills_single_existing_media_reference(self):
+    def test_materialize_local_media_does_not_overwrite_different_existing_media_reference(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "media-root"
             source = Path(tmpdir) / "IMG_1234.jpg"
@@ -242,8 +242,9 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
             with mock.patch("server.MEDIA_ROOTS", [root]):
                 result = materialize_local_media_for_slug("people/witty-wang", source, markdown)
 
-                self.assertEqual(result["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
-                self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+                self.assertEqual(result["served_url"], "/media/people/witty-wang/IMG_1234.jpg")
+                self.assertEqual((root / "people/witty-wang/IMG_1234.jpg").read_bytes(), b"fake jpg")
+                self.assertFalse((root / "people/witty-wang/witty-wang-profile.jpg").exists())
 
     def test_append_attachment_reference_adds_image_to_markdown(self):
         updated = append_attachment_reference("# Azul Systems\n\nCompany notes.", "companies/azul-systems/Azul.jpg")
