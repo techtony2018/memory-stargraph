@@ -116,7 +116,7 @@ For local gbrain media, keep a relative path in the node:
 cover_image: projects/example-project/project-cover.jpg
 ```
 
-When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
+When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. By default, discovery stays inside app-owned directories such as `media`, `data/media`, and `data/uploads` so macOS does not ask for access to user folders like Downloads or Desktop. Add user folders only as an explicit local opt-in. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
 
 When the web service runs on a different host than the gbrain data/media host, configure `remote_media_base_urls` on the web host. Each base URL should point to a trusted read-only `/media/` endpoint on a machine that can see the original media files. The web host will fetch missing media from that endpoint, cache it into its own first `media_roots` entry, and then serve it locally.
 
@@ -125,7 +125,7 @@ Example config:
 ```json
 {
   "media_roots": ["media", "data/media"],
-  "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+  "media_discovery_roots": ["media", "data/media", "data/uploads"],
   "remote_media_base_urls": ["https://gbrain-media.example.com/media/"],
   "media_fetch_timeout_seconds": 8,
   "max_upload_bytes": 26214400

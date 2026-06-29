@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from server import (
+    DEFAULT_CONFIG,
     GraphStore,
     append_attachment_reference,
     collapse_part_identity,
@@ -29,6 +30,12 @@ from server import (
 
 
 class GraphParsingTests(unittest.TestCase):
+    def test_default_media_discovery_roots_avoid_user_folders(self):
+        roots = DEFAULT_CONFIG["media_discovery_roots"]
+
+        self.assertIn("data/uploads", roots)
+        self.assertFalse(any(root.startswith("~/") for root in roots))
+
     def test_parse_page_list_reads_gbrain_tabular_output(self):
         output = "people/tony-guan\tperson\t2026-06-27\tTony Guan\nproducts/jtuner\tproduct\t2026-06-28\tJTuner\n"
         rows = parse_page_list(output)

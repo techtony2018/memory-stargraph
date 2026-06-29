@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     "graph_command_limit": 140,
     "graph_command_pause_seconds": 0.2,
     "media_roots": ["media", "data/media"],
-    "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+    "media_discovery_roots": ["media", "data/media", "data/uploads"],
     "remote_media_base_urls": [],
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.25"
+UI_VERSION = "V1.0.26"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
