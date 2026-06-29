@@ -6,6 +6,7 @@ from unittest import mock
 from server import (
     GraphStore,
     collapse_part_identity,
+    ensure_media_references_available,
     expand_raw_graph,
     finalize_graph,
     friendly_label,
@@ -199,6 +200,25 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertEqual(result["served_url"], "/media/people/witty-wang/witty-wang-profile.jpg")
                 self.assertTrue(result["served_available"])
                 self.assertEqual((root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+
+    def test_ensure_media_references_copies_from_discovery_roots(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+            discovery_root = Path(tmpdir) / "uploads"
+            source = discovery_root / "people/witty-wang/witty-wang-profile.jpg"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"fake jpg")
+            media = parse_media_references("""---
+profile_image: people/witty-wang/witty-wang-profile.jpg
+---
+""")
+
+            with mock.patch("server.MEDIA_ROOTS", [media_root]), mock.patch("server.MEDIA_DISCOVERY_ROOTS", [discovery_root]):
+                enriched = ensure_media_references_available(media)
+
+                self.assertTrue(enriched[0]["served_available"])
+                self.assertEqual(enriched[0]["materialized_from"], str(source.resolve()))
+                self.assertEqual((media_root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(

@@ -110,17 +110,21 @@ Use normal HTTP/HTTPS links when media is already hosted:
 profile_image: https://example.com/people/witty-wang/witty-wang-profile.jpg
 ```
 
-For local gbrain media, keep a relative path in the node and put the file under one configured `media_roots` entry:
+For local gbrain media, keep a relative path in the node:
 
 ```yaml
 profile_image: people/witty-wang/witty-wang-profile.jpg
 ```
 
+When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
+
 Example config:
 
 ```json
 {
-  "media_roots": ["/Users/toddy/gbrain-media", "media", "data/media"]
+  "media_roots": ["media", "data/media"],
+  "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+  "media_fetch_timeout_seconds": 8
 }
 ```
 

@@ -15,6 +15,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.parse import parse_qs
+from urllib.request import urlopen
 
 
 APP_NAME = "Memory Stargraph"
@@ -31,6 +32,8 @@ DEFAULT_CONFIG = {
     "graph_command_limit": 140,
     "graph_command_pause_seconds": 0.2,
     "media_roots": ["media", "data/media"],
+    "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+    "media_fetch_timeout_seconds": 8,
 }
 
 
@@ -72,8 +75,14 @@ MEDIA_ROOTS = [
     for root in str(os.environ.get("MEMORY_STARGRAPH_MEDIA_ROOTS", "")).split(",")
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_roots", [])]
+MEDIA_DISCOVERY_ROOTS = [
+    resolve_project_path(root)
+    for root in str(os.environ.get("MEMORY_STARGRAPH_MEDIA_DISCOVERY_ROOTS", "")).split(",")
+    if root.strip()
+] or [resolve_project_path(root) for root in CONFIG.get("media_discovery_roots", [])]
+MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.19"
+UI_VERSION = "V1.0.20"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -425,6 +434,129 @@ def resolve_media_file_path(request_path):
         if candidate.is_file():
             return candidate
     return None
+
+
+def media_destination_for_relative_path(relative_path):
+    if not MEDIA_ROOTS:
+        return None
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    return MEDIA_ROOTS[0] / safe_path
+
+
+def find_media_source_file(relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    for root in MEDIA_DISCOVERY_ROOTS:
+        expanded_root = root.expanduser()
+        exact = (expanded_root / safe_path).resolve()
+        try:
+            exact.relative_to(expanded_root.resolve())
+        except ValueError:
+            continue
+        if exact.is_file():
+            return exact
+        by_name = (expanded_root / safe_path.name).resolve()
+        try:
+            by_name.relative_to(expanded_root.resolve())
+        except ValueError:
+            continue
+        if by_name.is_file():
+            return by_name
+    for root in MEDIA_DISCOVERY_ROOTS:
+        expanded_root = root.expanduser()
+        if not expanded_root.is_dir():
+            continue
+        checked = 0
+        for dirpath, dirnames, filenames in os.walk(expanded_root):
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")][:20]
+            checked += len(filenames)
+            if checked > 5000:
+                break
+            if safe_path.name in filenames:
+                return Path(dirpath) / safe_path.name
+    return None
+
+
+def copy_media_source_to_root(source_path, relative_path):
+    destination = media_destination_for_relative_path(relative_path)
+    if not destination:
+        return None
+    source = Path(source_path).expanduser()
+    if not source.is_file() or not is_supported_media_path(source.name):
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    served_url = "/media/" + "/".join(safe_media_relative_path(str(relative_path)).parts)
+    return {
+        "path": str(destination),
+        "served_url": served_url,
+        "served_available": bool(resolve_media_file_path(served_url)),
+        "source": str(source),
+    }
+
+
+def extract_first_http_url(text):
+    match = re.search(r"https?://[^\s\"'<>]+", str(text or ""))
+    return match.group(0) if match else None
+
+
+def download_media_url_to_root(url, relative_path):
+    destination = media_destination_for_relative_path(relative_path)
+    if not destination:
+        return None
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with urlopen(url, timeout=MEDIA_FETCH_TIMEOUT_SECONDS) as response:
+        destination.write_bytes(response.read())
+    served_url = "/media/" + "/".join(safe_media_relative_path(str(relative_path)).parts)
+    return {
+        "path": str(destination),
+        "served_url": served_url,
+        "served_available": bool(resolve_media_file_path(served_url)),
+        "source": url,
+    }
+
+
+def try_gbrain_signed_media_url(relative_path):
+    try:
+        output = run_gbrain("files", "signed-url", str(relative_path))
+    except Exception:  # noqa: BLE001
+        return None
+    return extract_first_http_url(output)
+
+
+def ensure_media_reference_available(item):
+    served_url = item.get("served_url")
+    if not served_url or item.get("served_available"):
+        return item
+    relative_path = safe_media_relative_path(str(served_url).split("/media/", 1)[1] if "/media/" in served_url else item.get("url"))
+    if not relative_path:
+        return item
+    result = None
+    source_file = find_media_source_file(relative_path)
+    if source_file:
+        result = copy_media_source_to_root(source_file, relative_path)
+    if not result:
+        signed_url = try_gbrain_signed_media_url(relative_path)
+        if signed_url:
+            try:
+                result = download_media_url_to_root(signed_url, relative_path)
+            except Exception:  # noqa: BLE001
+                result = None
+    if result:
+        item = dict(item)
+        item["served_available"] = result["served_available"]
+        item["materialized_from"] = result["source"]
+    return item
+
+
+def ensure_media_references_available(items):
+    return [ensure_media_reference_available(dict(item)) for item in items]
 
 
 def local_media_destination_for_slug(slug, file_path, raw_markdown=""):
@@ -1367,7 +1499,7 @@ class GraphStore:
         raw = self.get_entity_raw(slug)
         if raw is None:
             return None
-        return parse_media_references(raw)
+        return ensure_media_references_available(parse_media_references(raw))
 
     def save_entity_raw(self, slug, content):
         run_gbrain("put", slug, input_text=content)

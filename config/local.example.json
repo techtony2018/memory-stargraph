@@ -9,5 +9,7 @@
   "graph_stale_seconds": 300,
   "graph_command_limit": 140,
   "graph_command_pause_seconds": 0.2,
-  "media_roots": ["media", "data/media"]
+  "media_roots": ["media", "data/media"],
+  "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+  "media_fetch_timeout_seconds": 8
 }
