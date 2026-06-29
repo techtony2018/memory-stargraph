@@ -280,12 +280,50 @@ try {
   if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close") {
     throw new Error("Expected View to render markdown with no Cancel button and a Close action");
   }
+  const markdownFormatting = await page.evaluate(() => {
+    window.__MEMORY_STARGRAPH__.renderMarkdownView([
+      "# Format Probe",
+      "",
+      "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, `code`, and ~~old~~ text.",
+      "",
+      "> Quoted note",
+      "",
+      "1. Ordered item",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| Status | **Ready** |",
+    ].join("\n"));
+    const root = document.querySelector("#modalMarkdown");
+    return {
+      wiki: root.querySelector("a[data-entity-query]")?.dataset.entityQuery,
+      strong: root.querySelector("strong")?.textContent,
+      em: root.querySelector("em")?.textContent,
+      code: root.querySelector("code")?.textContent,
+      del: root.querySelector("del")?.textContent,
+      quote: root.querySelector("blockquote")?.textContent,
+      ordered: root.querySelector("ol li")?.textContent,
+      tableRows: root.querySelectorAll("table tr").length,
+    };
+  });
+  if (
+    markdownFormatting.wiki !== "Signal Foundry" ||
+    markdownFormatting.strong !== "bold" ||
+    markdownFormatting.em !== "italic" ||
+    markdownFormatting.code !== "code" ||
+    markdownFormatting.del !== "old" ||
+    markdownFormatting.quote !== "Quoted note" ||
+    markdownFormatting.ordered !== "Ordered item" ||
+    markdownFormatting.tableRows !== 2
+  ) {
+    throw new Error(`Expected rendered markdown formatting support: ${JSON.stringify(markdownFormatting)}`);
+  }
   await page.click("#modalCloseButton");
 
   const gbrainOperationTemplates = [];
   const firstMenuAction = await page.evaluate(() => document.querySelector("#contextMenu button")?.dataset.action);
-  if (firstMenuAction !== "ask") {
-    throw new Error("Expected Ask GBrain to be the first node menu action");
+  if (firstMenuAction !== "view") {
+    throw new Error("Expected View to be the first node menu action");
   }
   for (const action of ["ask", "media", "backlinks", "graph-query", "history", "add-link", "remove-link", "tags", "timeline", "attach-file", "embed"]) {
     await page.click("#nodeMenuButton");

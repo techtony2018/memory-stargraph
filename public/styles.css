@@ -685,11 +685,15 @@ h2 {
 
 .markdown-view p,
 .markdown-view ul,
-.markdown-view pre {
+.markdown-view ol,
+.markdown-view pre,
+.markdown-view blockquote,
+.markdown-view table {
   margin: 0 0 12px;
 }
 
-.markdown-view ul {
+.markdown-view ul,
+.markdown-view ol {
   padding-left: 20px;
 }
 
@@ -712,6 +716,46 @@ h2 {
 .markdown-view a {
   color: var(--accent);
   overflow-wrap: anywhere;
+}
+
+.markdown-view a[data-entity-query] {
+  border-bottom: 1px dashed rgba(136, 246, 255, 0.5);
+  text-decoration: none;
+}
+
+.markdown-view blockquote {
+  border-left: 3px solid rgba(136, 246, 255, 0.42);
+  padding: 8px 12px;
+  background: rgba(136, 246, 255, 0.06);
+  color: var(--muted);
+}
+
+.markdown-view hr {
+  width: 100%;
+  height: 1px;
+  margin: 14px 0;
+  border: 0;
+  background: rgba(143, 168, 255, 0.2);
+}
+
+.markdown-view table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.markdown-view th,
+.markdown-view td {
+  border: 1px solid rgba(143, 168, 255, 0.16);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-view th {
+  background: rgba(136, 246, 255, 0.08);
+  color: var(--text);
 }
 
 .markdown-view img {

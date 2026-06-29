@@ -63,11 +63,18 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public" / "app.js").read_text()
 
+        self.assertLess(markup.index('data-action="view"'), markup.index('data-action="ask"'))
         self.assertIn('data-action="view">View</button>', markup)
         self.assertIn('id="modalMarkdown"', markup)
         self.assertIn("function renderMarkdownView", script)
         self.assertIn("renderMarkdownView(content)", script)
         self.assertIn('modalKicker.textContent = action === "view" ? "View"', script)
+        self.assertIn("data-entity-query", script)
+        self.assertIn("searchEntityLink", script)
+        self.assertIn('document.createElement("strong")', script)
+        self.assertIn('document.createElement("em")', script)
+        self.assertIn('document.createElement("blockquote")', script)
+        self.assertIn('document.createElement("table")', script)
 
 
 if __name__ == "__main__":

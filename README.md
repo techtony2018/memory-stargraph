@@ -55,22 +55,22 @@ http://127.0.0.1:8788
 
 ### 4. Use GBrain From Node Menus
 
-Right-click a node or use the `...` button beside the node summary. `Ask GBrain` is intentionally first because it is the most common daily action.
+Right-click a node or use the `...` button beside the node summary. `View` is intentionally first for quick reading, followed by `Ask GBrain` for contextual questions.
 
 Supported node operations:
 
-1. `Ask GBrain` - runs a contextual `gbrain query`.
-2. `Show backlinks` - shows incoming links with `gbrain backlinks`.
+1. `View` - renders the node's gbrain markdown read-only, including wiki-style `[[Entity]]` links.
+2. `Ask GBrain` - runs a contextual `gbrain query`.
 3. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
-4. `Graph query from here` - runs typed/directional graph traversal.
-5. `View history` - shows page version history.
-6. `Add relationship` - creates a typed edge with `gbrain link`.
-7. `Remove relationship` - removes an edge with `gbrain unlink`.
-8. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
-9. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
-10. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
-11. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
-12. `View` - renders the node's gbrain markdown read-only.
+4. `Show backlinks` - shows incoming links with `gbrain backlinks`.
+5. `Graph query from here` - runs typed/directional graph traversal.
+6. `View history` - shows page version history.
+7. `Add relationship` - creates a typed edge with `gbrain link`.
+8. `Remove relationship` - removes an edge with `gbrain unlink`.
+9. `Edit tags` - adds/removes tags with `gbrain tag` and `gbrain untag`.
+10. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
+11. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
+12. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
 13. `Modify markdown` - edits the page with `gbrain put`.
 14. `Hide` - hides a node in the web UI only.
 15. `Copy slug` - copies the exact gbrain slug.
@@ -234,7 +234,7 @@ Setup steps:
 4. Start the service with `python3 server.py --host 127.0.0.1 --port 8788`.
 5. Open `http://127.0.0.1:8788` and verify the graph loads.
 6. Search for a known entity in your gbrain, select it, hover a direct neighbor, and confirm the mouse-near popup shows the relationship type.
-7. Confirm `Ask GBrain` is the first node menu item and all node operations render.
+7. Confirm `View` is the first node menu item and all node operations render.
 
 Verification commands:
 - export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
@@ -246,18 +246,18 @@ Verification commands:
 - If Playwright is not locally resolvable, use `npx --yes --package playwright node tests/browser_smoke.mjs`.
 
 Supported node operations to preserve:
-1. Ask GBrain
-2. View media
-3. Show backlinks
-4. Graph query from here
-5. View history
-6. Add relationship
-7. Remove relationship
-8. Edit tags
-9. Add timeline event
-10. Attach file
-11. Refresh embedding
-12. View
+1. View
+2. Ask GBrain
+3. View media
+4. Show backlinks
+5. Graph query from here
+6. View history
+7. Add relationship
+8. Remove relationship
+9. Edit tags
+10. Add timeline event
+11. Attach file
+12. Refresh embedding
 13. Modify markdown
 14. Hide
 15. Copy slug

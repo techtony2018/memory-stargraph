@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.23";
+const UI_VERSION = "V1.0.24";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -253,6 +253,17 @@ async function submitSearch() {
   const query = state.query.trim();
   if (!query || query.length < 3 || state.lazySearch.loading) return;
   await runLazySearch(query);
+}
+
+async function searchEntityLink(query) {
+  const value = String(query || "").trim();
+  if (value.length < 3 || state.lazySearch.loading) return;
+  closeModal();
+  state.query = value;
+  searchInput.value = value;
+  matchesOnlyToggle.checked = false;
+  state.matchesOnly = false;
+  await runLazySearch(value);
 }
 
 function isHidden(slug) {
@@ -929,15 +940,46 @@ function mediaDisplayUrl(url) {
   return `/media/${value.replace(/^\/+/, "")}`;
 }
 
+function appendTextWithBreaks(parent, text) {
+  String(text || "").split(/ {2,}\n|\n/).forEach((part, index) => {
+    if (index) parent.appendChild(document.createElement("br"));
+    if (part) parent.appendChild(document.createTextNode(part));
+  });
+}
+
 function appendInlineMarkdown(parent, text) {
-  const pattern = /(!?)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|`([^`]+)`/g;
+  const pattern = /(!?)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
   let cursor = 0;
-  String(text || "").replace(pattern, (match, bang, label, url, code, offset) => {
-    if (offset > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, offset)));
+  String(text || "").replace(pattern, (match, bang, label, url, wikiTarget, wikiLabel, code, boldItalic, bold, italicStar, boldUnderscore, italicUnderscore, strike, offset) => {
+    if (offset > cursor) appendTextWithBreaks(parent, text.slice(cursor, offset));
     if (code !== undefined) {
       const codeNode = document.createElement("code");
       codeNode.textContent = code;
       parent.appendChild(codeNode);
+    } else if (boldItalic !== undefined) {
+      const strong = document.createElement("strong");
+      const em = document.createElement("em");
+      appendInlineMarkdown(em, boldItalic);
+      strong.appendChild(em);
+      parent.appendChild(strong);
+    } else if (bold !== undefined || boldUnderscore !== undefined) {
+      const strong = document.createElement("strong");
+      appendInlineMarkdown(strong, bold ?? boldUnderscore);
+      parent.appendChild(strong);
+    } else if (italicStar !== undefined || italicUnderscore !== undefined) {
+      const em = document.createElement("em");
+      appendInlineMarkdown(em, italicStar ?? italicUnderscore);
+      parent.appendChild(em);
+    } else if (strike !== undefined) {
+      const del = document.createElement("del");
+      appendInlineMarkdown(del, strike);
+      parent.appendChild(del);
+    } else if (wikiTarget !== undefined) {
+      const link = document.createElement("a");
+      link.href = `#entity:${encodeURIComponent(wikiTarget.trim())}`;
+      link.dataset.entityQuery = wikiTarget.trim();
+      link.textContent = (wikiLabel || wikiTarget).trim();
+      parent.appendChild(link);
     } else if (bang) {
       const image = document.createElement("img");
       image.src = mediaDisplayUrl(url);
@@ -955,22 +997,67 @@ function appendInlineMarkdown(parent, text) {
     cursor = offset + match.length;
     return match;
   });
-  if (cursor < String(text || "").length) parent.appendChild(document.createTextNode(String(text || "").slice(cursor)));
+  if (cursor < String(text || "").length) appendTextWithBreaks(parent, String(text || "").slice(cursor));
 }
 
 function renderMarkdownView(markdown) {
   modalMarkdown.innerHTML = "";
   const lines = String(markdown || "").split(/\r?\n/);
   let list = null;
+  let listType = "";
   let codeBlock = null;
+  let table = null;
+  let tableRows = [];
 
   function closeList() {
     list = null;
+    listType = "";
   }
 
-  lines.forEach((line) => {
+  function flushTable() {
+    if (!tableRows.length) return;
+    table = document.createElement("table");
+    const header = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    tableRows[0].forEach((cell) => {
+      const th = document.createElement("th");
+      appendInlineMarkdown(th, cell.trim());
+      headerRow.appendChild(th);
+    });
+    header.appendChild(headerRow);
+    table.appendChild(header);
+    const body = document.createElement("tbody");
+    tableRows.slice(1).forEach((row) => {
+      const tr = document.createElement("tr");
+      row.forEach((cell) => {
+        const td = document.createElement("td");
+        appendInlineMarkdown(td, cell.trim());
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    modalMarkdown.appendChild(table);
+    tableRows = [];
+    table = null;
+  }
+
+  function parseTableRow(line) {
+    const trimmed = line.trim();
+    if (!trimmed.includes("|")) return null;
+    const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+    return cells.length > 1 ? cells : null;
+  }
+
+  function isTableSeparator(line) {
+    const cells = parseTableRow(line);
+    return Boolean(cells && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim())));
+  }
+
+  lines.forEach((line, index) => {
     if (line.trim().startsWith("```")) {
       closeList();
+      flushTable();
       if (codeBlock) {
         codeBlock = null;
       } else {
@@ -985,26 +1072,60 @@ function renderMarkdownView(markdown) {
       codeBlock.textContent += `${line}\n`;
       return;
     }
+    const nextLine = lines[index + 1] || "";
+    const tableRow = parseTableRow(line);
+    if (tableRow && (tableRows.length || isTableSeparator(nextLine))) {
+      closeList();
+      if (!isTableSeparator(line)) tableRows.push(tableRow);
+      return;
+    }
+    flushTable();
     if (!line.trim()) {
       closeList();
       return;
     }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (/^\s*---+\s*$/.test(line)) {
+      closeList();
+      modalMarkdown.appendChild(document.createElement("hr"));
+      return;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       closeList();
-      const node = document.createElement(`h${heading[1].length}`);
+      const node = document.createElement(`h${Math.min(3, heading[1].length)}`);
       appendInlineMarkdown(node, heading[2]);
       modalMarkdown.appendChild(node);
       return;
     }
+    const quote = line.match(/^\s*>\s?(.+)$/);
+    if (quote) {
+      closeList();
+      const blockquote = document.createElement("blockquote");
+      appendInlineMarkdown(blockquote, quote[1]);
+      modalMarkdown.appendChild(blockquote);
+      return;
+    }
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
     if (bullet) {
-      if (!list) {
+      if (!list || listType !== "ul") {
         list = document.createElement("ul");
+        listType = "ul";
         modalMarkdown.appendChild(list);
       }
       const item = document.createElement("li");
       appendInlineMarkdown(item, bullet[1]);
+      list.appendChild(item);
+      return;
+    }
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      if (!list || listType !== "ol") {
+        list = document.createElement("ol");
+        listType = "ol";
+        modalMarkdown.appendChild(list);
+      }
+      const item = document.createElement("li");
+      appendInlineMarkdown(item, ordered[1]);
       list.appendChild(item);
       return;
     }
@@ -1013,6 +1134,7 @@ function renderMarkdownView(markdown) {
     appendInlineMarkdown(paragraph, line);
     modalMarkdown.appendChild(paragraph);
   });
+  flushTable();
 
   if (!modalMarkdown.childElementCount) {
     const empty = document.createElement("p");
@@ -1751,6 +1873,13 @@ function bindEvents() {
     void submitSearch();
   });
 
+  modalMarkdown.addEventListener("click", (event) => {
+    const link = event.target.closest("a[data-entity-query]");
+    if (!link) return;
+    event.preventDefault();
+    void searchEntityLink(link.dataset.entityQuery);
+  });
+
   matchesOnlyToggle.addEventListener("change", (event) => {
     state.matchesOnly = event.target.checked;
     applyFilter();
@@ -2162,5 +2291,7 @@ window.__MEMORY_STARGRAPH__ = {
   relationshipTypes,
   submitSearch,
   setHover,
+  renderMarkdownView,
+  searchEntityLink,
 };
 window.__TGKS__ = window.__MEMORY_STARGRAPH__;
