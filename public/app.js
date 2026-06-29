@@ -25,11 +25,12 @@ const state = {
   selectionVersion: 0,
   zoom: 1,
   rotation: { x: -0.34, y: 0.58, vx: 0.0012, vy: 0.0022 },
-  drag: { active: false, moved: false, lastX: 0, lastY: 0 },
+  drag: { active: false, moved: false, lastX: 0, lastY: 0, pointerId: null },
+  mobileTooltipTimer: null,
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.8";
+const UI_VERSION = "V1.0.12";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -825,8 +826,8 @@ function setHover(slug) {
   hoverLabel.textContent = node
     ? `${node.label} · ${node.category || node.type} · ${node.degree} direct link${node.degree === 1 ? "" : "s"}${partText}${reportText}${relationshipText}`
     : state.focusSlug
-      ? "Drag to rotate. Hover for full names. Click a node to drill down."
-      : "Search the sky, drag to rotate, or click a node to drill down.";
+      ? "Drag to rotate. Hover or tap for full names. Long-press a node for actions."
+      : "Search the sky, drag to rotate, or tap a node to drill down.";
 }
 
 function hideGraphTooltip() {
@@ -1437,6 +1438,64 @@ function pickNode(clientX, clientY) {
   return winner;
 }
 
+function startCanvasDrag(clientX, clientY, pointerId = null) {
+  state.drag.active = true;
+  state.drag.moved = false;
+  state.drag.lastX = clientX;
+  state.drag.lastY = clientY;
+  state.drag.pointerId = pointerId;
+  state.rotation.vx = 0;
+  state.rotation.vy = 0;
+  hideGraphTooltip();
+  canvas.style.cursor = "grabbing";
+}
+
+function moveCanvasDrag(clientX, clientY) {
+  hideGraphTooltip();
+  const dx = clientX - state.drag.lastX;
+  const dy = clientY - state.drag.lastY;
+  if (Math.abs(dx) + Math.abs(dy) > 3) {
+    state.drag.moved = true;
+  }
+  state.rotation.y += dx * 0.006;
+  state.rotation.x = Math.max(-1.15, Math.min(1.15, state.rotation.x + dy * 0.006));
+  state.rotation.vy = dx * 0.0007;
+  state.rotation.vx = dy * 0.0007;
+  state.drag.lastX = clientX;
+  state.drag.lastY = clientY;
+}
+
+function finishCanvasDrag(clientX, clientY, options = {}) {
+  if (!state.drag.active) return;
+  state.drag.active = false;
+  state.drag.pointerId = null;
+  const node = pickNode(clientX, clientY);
+  if (!state.drag.moved && node && options.selectOnTap !== false) {
+    void loadEntity(node.slug);
+  }
+  canvas.style.cursor = node ? "pointer" : "default";
+}
+
+function cancelCanvasDrag() {
+  state.drag.active = false;
+  state.drag.pointerId = null;
+  canvas.style.cursor = "default";
+}
+
+function firstTouch(event) {
+  return event.changedTouches?.[0] || event.touches?.[0] || null;
+}
+
+function showMobileNodeHint(node, clientX, clientY) {
+  if (!node) return;
+  window.clearTimeout(state.mobileTooltipTimer);
+  setHover(node.slug);
+  showGraphTooltip(node, clientX, clientY);
+  state.mobileTooltipTimer = window.setTimeout(() => {
+    hideGraphTooltip();
+  }, 3200);
+}
+
 function bindEvents() {
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -1535,37 +1594,136 @@ function bindEvents() {
     }
   });
 
-  canvas.addEventListener("mousedown", (event) => {
-    state.drag.active = true;
-    state.drag.moved = false;
-    state.drag.lastX = event.clientX;
-    state.drag.lastY = event.clientY;
-    state.rotation.vx = 0;
-    state.rotation.vy = 0;
-    canvas.style.cursor = "grabbing";
-  });
+  const usePointerEvents = Boolean(window.PointerEvent);
+  let longPressTimer = null;
 
-  canvas.addEventListener("mousemove", (event) => {
-    if (state.drag.active) {
-      hideGraphTooltip();
-      const dx = event.clientX - state.drag.lastX;
-      const dy = event.clientY - state.drag.lastY;
-      if (Math.abs(dx) + Math.abs(dy) > 3) {
-        state.drag.moved = true;
+  const clearLongPress = () => {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = null;
+  };
+
+  const handleHoverMove = (clientX, clientY) => {
+    const node = pickNode(clientX, clientY);
+    setHover(node ? node.slug : null);
+    showGraphTooltip(node, clientX, clientY);
+    canvas.style.cursor = node ? "pointer" : "default";
+  };
+
+  const beginTouchLikeDrag = (clientX, clientY, pointerId = null) => {
+    startCanvasDrag(clientX, clientY, pointerId);
+    clearLongPress();
+    longPressTimer = window.setTimeout(() => {
+      const node = pickNode(state.drag.lastX, state.drag.lastY);
+      if (!node || state.drag.moved) return;
+      state.drag.moved = true;
+      state.focusSlug = node.slug;
+      void loadEntity(node.slug);
+      showMobileNodeHint(node, state.drag.lastX, state.drag.lastY);
+      showContextMenu(node.slug, state.drag.lastX, state.drag.lastY);
+    }, 580);
+  };
+
+  if (usePointerEvents) {
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 && event.pointerType !== "touch") return;
+      event.preventDefault();
+      canvas.setPointerCapture?.(event.pointerId);
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        beginTouchLikeDrag(event.clientX, event.clientY, event.pointerId);
+      } else {
+        startCanvasDrag(event.clientX, event.clientY, event.pointerId);
       }
-      state.rotation.y += dx * 0.006;
-      state.rotation.x = Math.max(-1.15, Math.min(1.15, state.rotation.x + dy * 0.006));
-      state.rotation.vy = dx * 0.0007;
-      state.rotation.vx = dy * 0.0007;
-      state.drag.lastX = event.clientX;
-      state.drag.lastY = event.clientY;
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      if (state.drag.active && state.drag.pointerId === event.pointerId) {
+        event.preventDefault();
+        moveCanvasDrag(event.clientX, event.clientY);
+        if (state.drag.moved) clearLongPress();
+        return;
+      }
+      if (event.pointerType !== "touch") {
+        handleHoverMove(event.clientX, event.clientY);
+      }
+    });
+
+    window.addEventListener("pointerup", (event) => {
+      if (!state.drag.active || state.drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      clearLongPress();
+      const wasTap = !state.drag.moved;
+      const node = pickNode(event.clientX, event.clientY);
+      canvas.releasePointerCapture?.(event.pointerId);
+      finishCanvasDrag(event.clientX, event.clientY);
+      if (wasTap && node && (event.pointerType === "touch" || event.pointerType === "pen")) {
+        showMobileNodeHint(node, event.clientX, event.clientY);
+      }
+    });
+
+    window.addEventListener("pointercancel", (event) => {
+      if (state.drag.pointerId === event.pointerId) {
+        clearLongPress();
+        cancelCanvasDrag();
+      }
+    });
+  } else {
+    canvas.addEventListener("mousedown", (event) => {
+      startCanvasDrag(event.clientX, event.clientY);
+    });
+
+    canvas.addEventListener("mousemove", (event) => {
+      if (state.drag.active) {
+        moveCanvasDrag(event.clientX, event.clientY);
+        return;
+      }
+      handleHoverMove(event.clientX, event.clientY);
+    });
+
+    window.addEventListener("mouseup", (event) => {
+      finishCanvasDrag(event.clientX, event.clientY);
+    });
+  }
+
+  canvas.addEventListener("touchstart", (event) => {
+    if (usePointerEvents) return;
+    const touch = firstTouch(event);
+    if (!touch) return;
+    event.preventDefault();
+    beginTouchLikeDrag(touch.clientX, touch.clientY);
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", (event) => {
+    if (usePointerEvents || !state.drag.active) return;
+    const touch = firstTouch(event);
+    if (!touch) return;
+    event.preventDefault();
+    moveCanvasDrag(touch.clientX, touch.clientY);
+    if (state.drag.moved) clearLongPress();
+  }, { passive: false });
+
+  canvas.addEventListener("touchend", (event) => {
+    if (usePointerEvents || !state.drag.active) return;
+    const touch = firstTouch(event);
+    clearLongPress();
+    if (!touch) {
+      cancelCanvasDrag();
       return;
     }
-    const node = pickNode(event.clientX, event.clientY);
-    setHover(node ? node.slug : null);
-    showGraphTooltip(node, event.clientX, event.clientY);
-    canvas.style.cursor = node ? "pointer" : "default";
-  });
+    event.preventDefault();
+    const wasTap = !state.drag.moved;
+    const node = pickNode(touch.clientX, touch.clientY);
+    finishCanvasDrag(touch.clientX, touch.clientY);
+    if (wasTap && node) {
+      showMobileNodeHint(node, touch.clientX, touch.clientY);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("touchcancel", () => {
+    if (!usePointerEvents) {
+      clearLongPress();
+      cancelCanvasDrag();
+    }
+  }, { passive: false });
 
   canvas.addEventListener("contextmenu", (event) => {
     const node = pickNode(event.clientX, event.clientY);
@@ -1590,16 +1748,6 @@ function bindEvents() {
     event.preventDefault();
     zoomBy(event.deltaY < 0 ? 1 : -1);
   }, { passive: false });
-
-  window.addEventListener("mouseup", (event) => {
-    if (!state.drag.active) return;
-    state.drag.active = false;
-    const node = pickNode(event.clientX, event.clientY);
-    if (!state.drag.moved && node) {
-      void loadEntity(node.slug);
-    }
-    canvas.style.cursor = node ? "pointer" : "default";
-  });
 
   canvas.addEventListener("mouseleave", () => {
     if (state.drag.active) return;

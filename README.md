@@ -38,6 +38,8 @@ http://127.0.0.1:8788
 - Node size scales with direct connection count.
 - Selected nodes reveal all direct-neighbor labels.
 - Hovering a directly linked node shows a 60% opacity popup near the mouse.
+- On mobile Safari, tap a node to show the same hover-style popup near your finger.
+- On mobile Safari, long-press a node to open the node operation menu.
 - The hover popup shows entity name/category, a brief summary, then relationship type.
 - The relationship is also drawn on the selected-node edge when hovering a direct neighbor.
 - Direct-link chips in the sidebar show relationship type on hover/focus.
