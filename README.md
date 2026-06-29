@@ -136,12 +136,14 @@ data/hidden_entities.json
 data/deleted_entities.json
 ```
 
-Remote host note for `toddy@192.168.1.102`:
+Remote host notes:
 
-- Clone target: `/Users/toddy/memory-stargraph`
+- `.102` LAN host: `toddy@192.168.1.102` (`toddys-mac-mini-1`)
+- Other live Mac mini: `toddy@100.100.126.85` (`toddys-mac-mini`, hostname observed as `toddys-mini-3.lan`)
+- Clone target on both hosts: `/Users/toddy/memory-stargraph`
 - Node and npx path: `/usr/local/bin`
 - Bun and gbrain path: `/Users/toddy/.bun/bin`
-- Use `config/local.json` with `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"` on that host.
+- Use `config/local.json` with `"host": "0.0.0.0"` and `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"` on those hosts.
 - For SSH-run verification, export `PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"` first.
 
 ## AI Agent Setup Prompt
@@ -168,12 +170,12 @@ Expected local service:
 - URL: `http://127.0.0.1:8788`
 - Health check: `curl -sS http://127.0.0.1:8788/api/health`
 - Default gbrain path: `/opt/homebrew/bin/gbrain`
-- On `toddy@192.168.1.102`, use `/Users/toddy/.bun/bin/gbrain` and export `PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"` for SSH-run checks.
+- On remote Mac minis, use `/Users/toddy/.bun/bin/gbrain`, set `"host": "0.0.0.0"` in `config/local.json`, and export `PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"` for SSH-run checks.
 
 Setup steps:
 1. Inspect `git status --short` and do not revert unrelated user changes.
 2. If needed, copy `config/local.example.json` to `config/local.json` and adjust only local machine values.
-3. On `.102`, set `config/local.json` to use `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"`.
+3. On remote Mac minis, set `config/local.json` to use `"host": "0.0.0.0"` and `"gbrain_path": "/Users/toddy/.bun/bin/gbrain"`.
 4. Start the service with `python3 server.py --host 127.0.0.1 --port 8788`.
 5. Open `http://127.0.0.1:8788` and verify the graph loads.
 6. Search `Tony Guan`, select the node, hover `Azul Systems`, and confirm the mouse-near popup shows `relationship: employed by`.
