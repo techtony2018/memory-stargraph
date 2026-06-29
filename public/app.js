@@ -30,7 +30,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.12";
+const UI_VERSION = "V1.0.13";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -1617,8 +1617,9 @@ function bindEvents() {
       if (!node || state.drag.moved) return;
       state.drag.moved = true;
       state.focusSlug = node.slug;
+      window.clearTimeout(state.mobileTooltipTimer);
+      hideGraphTooltip();
       void loadEntity(node.slug);
-      showMobileNodeHint(node, state.drag.lastX, state.drag.lastY);
       showContextMenu(node.slug, state.drag.lastX, state.drag.lastY);
     }, 580);
   };
