@@ -21,6 +21,7 @@ const state = {
   lazySearch: { timer: null, query: "", loading: false },
   menuSlug: null,
   modalAction: null,
+  askChats: new Map(),
   entityLoadId: 0,
   selectionVersion: 0,
   zoom: 1,
@@ -30,7 +31,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.27";
+const UI_VERSION = "V1.0.28";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -72,6 +73,9 @@ const modalFileInput = document.getElementById("modalFileInput");
 const modalEditor = document.getElementById("modalEditor");
 const modalMarkdown = document.getElementById("modalMarkdown");
 const modalMedia = document.getElementById("modalMedia");
+const modalChat = document.getElementById("modalChat");
+const modalChatLog = document.getElementById("modalChatLog");
+const modalChatInput = document.getElementById("modalChatInput");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -1221,6 +1225,47 @@ function renderMediaItems(items) {
   });
 }
 
+function chatHistoryFor(slug, label) {
+  if (!state.askChats.has(slug)) {
+    state.askChats.set(slug, [
+      {
+        role: "system",
+        content: `Ask GBrain about ${label}. Each question runs against the current node context.`,
+      },
+    ]);
+  }
+  return state.askChats.get(slug);
+}
+
+function renderAskChat(slug, label) {
+  const history = chatHistoryFor(slug, label);
+  modalChatLog.innerHTML = "";
+  if (!history.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty";
+    empty.textContent = "Ask a question to start a GBrain conversation for this node.";
+    modalChatLog.appendChild(empty);
+    return;
+  }
+  history.forEach((message) => {
+    const row = document.createElement("article");
+    row.className = `chat-message ${message.role}`;
+
+    const speaker = document.createElement("span");
+    speaker.className = "chat-speaker";
+    speaker.textContent = message.role === "user" ? "You" : message.role === "assistant" ? "GBrain" : "Context";
+    row.appendChild(speaker);
+
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.textContent = message.content;
+    row.appendChild(bubble);
+
+    modalChatLog.appendChild(row);
+  });
+  modalChatLog.scrollTop = modalChatLog.scrollHeight;
+}
+
 function closeModal() {
   operationModal.hidden = true;
   state.modalAction = null;
@@ -1238,6 +1283,10 @@ function closeModal() {
   modalMarkdown.innerHTML = "";
   modalMedia.hidden = true;
   modalMedia.innerHTML = "";
+  modalChat.hidden = true;
+  modalChatLog.innerHTML = "";
+  modalChatInput.value = "";
+  modalChatInput.disabled = false;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -1263,6 +1312,12 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalEditor.hidden = false;
   modalMarkdown.hidden = true;
   modalMarkdown.innerHTML = "";
+  modalMedia.hidden = true;
+  modalMedia.innerHTML = "";
+  modalChat.hidden = true;
+  modalChatLog.innerHTML = "";
+  modalChatInput.value = "";
+  modalChatInput.disabled = false;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -1336,11 +1391,14 @@ async function openNodeModal(action, slug = state.focusSlug) {
 
   if (action === "ask") {
     modalKicker.textContent = "Ask GBrain";
-    modalPrimaryButton.textContent = "Ask";
-    modalMessage.textContent = "Runs a gbrain query with this node as context.";
-    modalEditor.value = `question: What should I know about ${label}?`;
+    modalPrimaryButton.textContent = "Send";
+    modalMessage.textContent = "Chat with GBrain using this node as context.";
+    modalEditor.hidden = true;
+    modalChat.hidden = false;
+    modalChatInput.value = "";
+    renderAskChat(slug, label);
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalChatInput.focus();
     return;
   }
 
@@ -1530,6 +1588,7 @@ async function runModalPrimaryAction() {
   modalPrimaryButton.disabled = true;
   modalCancelButton.disabled = true;
   const primaryButtonText = modalPrimaryButton.textContent;
+  let pendingAskHistory = null;
   if (action === "attach-file") {
     modalPrimaryButton.textContent = "Uploading...";
     modalFileInput.disabled = true;
@@ -1602,17 +1661,29 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "ask") {
-      const fields = parseOperationFields(modalEditor.value);
+      const question = modalChatInput.value.trim();
+      if (!question) {
+        modalMessage.textContent = "Type a question for GBrain first.";
+        modalChatInput.focus();
+        return;
+      }
+      const history = chatHistoryFor(slug, label);
+      pendingAskHistory = history;
+      history.push({ role: "user", content: question });
+      history.push({ role: "assistant", content: "Thinking..." });
+      renderAskChat(slug, label);
+      modalChatInput.value = "";
+      modalChatInput.disabled = true;
+      modalMessage.textContent = "Asking GBrain...";
       const response = await apiPost(`/api/entity-ask/${encodeURIComponent(slug)}`, {
-        question: fields.question,
+        question,
       });
       if (!response.ok) throw new Error(response.data?.error || `Ask GBrain failed with ${response.status}`);
-      state.modalAction = { action: "result", slug, label };
-      modalKicker.textContent = "GBrain answer";
-      modalPrimaryButton.textContent = "Close";
-      modalCancelButton.hidden = true;
-      modalEditor.readOnly = true;
-      modalEditor.value = response.data.output || "(No output)";
+      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)" };
+      renderAskChat(slug, label);
+      modalMessage.textContent = "Ask another question or close the chat.";
+      modalChatInput.disabled = false;
+      modalChatInput.focus();
       return;
     }
     if (action === "backlinks" || action === "history") {
@@ -1679,12 +1750,20 @@ async function runModalPrimaryAction() {
       await loadEntity(slug, { source: "system" });
     }
   } catch (error) {
+    if (action === "ask" && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
+      pendingAskHistory[pendingAskHistory.length - 1] = {
+        role: "assistant",
+        content: `Ask GBrain failed: ${error.message || String(error)}`,
+      };
+      renderAskChat(slug, label);
+    }
     modalMessage.textContent = error.message || String(error);
   } finally {
     modalPrimaryButton.disabled = false;
     modalCancelButton.disabled = false;
     modalFileInput.disabled = false;
     modalEditor.disabled = false;
+    modalChatInput.disabled = false;
     if (action === "attach-file" && state.modalAction?.action === "attach-file") {
       modalPrimaryButton.textContent = primaryButtonText;
     }

@@ -81,6 +81,19 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('document.createElement("blockquote")', script)
         self.assertIn('document.createElement("table")', script)
 
+    def test_ask_gbrain_uses_chat_modal(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn('id="modalChat"', markup)
+        self.assertIn('id="modalChatLog"', markup)
+        self.assertIn('id="modalChatInput"', markup)
+        self.assertIn("askChats: new Map()", script)
+        self.assertIn("function renderAskChat", script)
+        self.assertIn('modalPrimaryButton.textContent = "Send"', script)
+        self.assertIn("history.push({ role: \"user\", content: question })", script)
+        self.assertIn("history[history.length - 1]", script)
+
 
 if __name__ == "__main__":
     unittest.main()

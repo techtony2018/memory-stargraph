@@ -12,7 +12,7 @@
         <div>
           <p class="eyeline">Constellation View</p>
           <h1>Memory Stargraph</h1>
-          <span id="uiVersion" class="ui-version">V1.0.8</span>
+          <span id="uiVersion" class="ui-version">V1.0.28</span>
         </div>
         <div class="status-block">
           <button id="refreshButton" class="ghost-button" type="button">Refresh Graph</button>
@@ -178,6 +178,13 @@
         <textarea id="modalEditor" spellcheck="false"></textarea>
         <div id="modalMarkdown" class="markdown-view" hidden></div>
         <div id="modalMedia" class="media-grid" hidden></div>
+        <div id="modalChat" class="chat-panel" hidden>
+          <div id="modalChatLog" class="chat-log" aria-live="polite"></div>
+          <label class="chat-input-wrap">
+            <span>Ask a follow-up</span>
+            <textarea id="modalChatInput" rows="3" placeholder="Ask GBrain about this node"></textarea>
+          </label>
+        </div>
         <div class="modal-actions">
           <button id="modalCancelButton" class="ghost-button" type="button">Cancel</button>
           <button id="modalPrimaryButton" class="ghost-button primary" type="button">Save</button>

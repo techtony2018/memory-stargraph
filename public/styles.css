@@ -829,6 +829,112 @@ h2 {
   line-height: 1.35;
 }
 
+.chat-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-panel[hidden] {
+  display: none;
+}
+
+.chat-log {
+  min-height: 300px;
+  max-height: min(50vh, 520px);
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(143, 168, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 8, 22, 0.72);
+}
+
+.chat-empty {
+  align-self: center;
+  justify-self: center;
+  max-width: 420px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-message {
+  display: grid;
+  gap: 5px;
+  max-width: 88%;
+}
+
+.chat-message.user {
+  justify-self: end;
+}
+
+.chat-message.assistant,
+.chat-message.system {
+  justify-self: start;
+}
+
+.chat-speaker {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-bubble {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(143, 168, 255, 0.16);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-message.user .chat-bubble {
+  border-color: rgba(136, 246, 255, 0.28);
+  background: rgba(136, 246, 255, 0.12);
+}
+
+.chat-message.assistant .chat-bubble {
+  border-color: rgba(255, 198, 111, 0.22);
+  background: rgba(255, 198, 111, 0.08);
+}
+
+.chat-message.system .chat-bubble {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.chat-input-wrap {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-input-wrap textarea {
+  resize: vertical;
+  min-height: 88px;
+  border: 1px solid rgba(143, 168, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(5, 8, 22, 0.9);
+  color: var(--text);
+  padding: 12px;
+  font: 14px/1.45 Inter, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.chat-input-wrap textarea:focus {
+  outline: 2px solid rgba(136, 246, 255, 0.32);
+  outline-offset: 2px;
+}
+
 .modal-confirm-input {
   width: 100%;
   border: 1px solid rgba(255, 143, 179, 0.35);
