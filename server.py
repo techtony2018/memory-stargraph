@@ -65,13 +65,20 @@ GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.9"
+UI_VERSION = "V1.0.10"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
 GBRAIN_USAGE_RE = re.compile(r"^agent/reports/gbrain-usage-\d{4}-\d{2}-\d{2}$", re.IGNORECASE)
-BLOCKED_SLUGS = {"people/tony-gu"}
-BLOCKED_LABELS = {"people/tony gu", "people/tony-gu", "tony gu"}
+BLOCKED_SLUGS = {"people/darsha-krana", "people/tony-gu"}
+BLOCKED_LABELS = {
+    "people/darsha krana",
+    "people/darsha-krana",
+    "darsha krana",
+    "people/tony gu",
+    "people/tony-gu",
+    "tony gu",
+}
 
 
 DEMO_GRAPH = {

@@ -211,6 +211,31 @@ class GraphParsingTests(unittest.TestCase):
         self.assertFalse(any("people/tony-gu" in node["links"] for node in graph["nodes"]))
         self.assertFalse(any(edge["source"] == "people/tony-gu" or edge["target"] == "people/tony-gu" for edge in graph["edges"]))
 
+    def test_finalize_graph_blocks_unwanted_darsha_entity_without_local_state(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "nodes": [
+                {
+                    "slug": "people/darsha-krana",
+                    "label": "People/darsha Krana",
+                    "type": "person",
+                    "links": ["index"],
+                },
+                {
+                    "slug": "index",
+                    "label": "Brain Index",
+                    "type": "note",
+                    "links": ["people/darsha-krana"],
+                },
+            ],
+        }
+        graph = finalize_graph(raw_graph)
+        slugs = {node["slug"] for node in graph["nodes"]}
+
+        self.assertNotIn("people/darsha-krana", slugs)
+        self.assertFalse(any("people/darsha-krana" in node["links"] for node in graph["nodes"]))
+        self.assertFalse(any(edge["source"] == "people/darsha-krana" or edge["target"] == "people/darsha-krana" for edge in graph["edges"]))
+
     def test_finalize_graph_filters_deleted_entities_and_backlinks(self):
         raw_graph = {
             "title": "Memory Stargraph",
