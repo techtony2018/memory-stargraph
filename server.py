@@ -65,7 +65,7 @@ GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.14"
+UI_VERSION = "V1.0.15"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -379,6 +379,38 @@ def is_embeddable_media_url(url):
     return text.startswith(("http://", "https://", "data:"))
 
 
+def looks_like_media_key(key):
+    normalized = str(key or "").lower()
+    return any(
+        token in normalized
+        for token in ("image", "photo", "picture", "avatar", "thumbnail", "media", "attachment", "file")
+    )
+
+
+def looks_like_media_location(value):
+    text = str(value or "").strip()
+    return bool(re.search(r"^(https?://|data:|/|\./|\.\./)", text) or re.search(r"[\\/].+\.[A-Za-z0-9]{2,6}$", text))
+
+
+def iter_frontmatter_media_values(value):
+    if isinstance(value, str):
+        yield value, ""
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                yield item, ""
+            elif isinstance(item, dict):
+                url = item.get("url") or item.get("path") or item.get("src") or item.get("href")
+                label = item.get("label") or item.get("title") or item.get("name") or ""
+                if url:
+                    yield url, label
+    elif isinstance(value, dict):
+        url = value.get("url") or value.get("path") or value.get("src") or value.get("href")
+        label = value.get("label") or value.get("title") or value.get("name") or ""
+        if url:
+            yield url, label
+
+
 def parse_media_references(markdown):
     items = []
     seen = set()
@@ -400,6 +432,14 @@ def parse_media_references(markdown):
         )
 
     text = str(markdown or "")
+    meta, body = parse_frontmatter(text)
+    for key, value in meta.items():
+        for url, label in iter_frontmatter_media_values(value):
+            kind = media_kind_for_url(url)
+            if kind != "link" or (looks_like_media_key(key) and looks_like_media_location(url)):
+                add_item(kind, url, label or key.replace("_", " "), f"frontmatter:{key}")
+
+    text = body
     for match in re.finditer(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):
         add_item("image", match.group(2), match.group(1), "markdown_image")
     for match in re.finditer(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", text):

@@ -128,6 +128,27 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(media[0]["label"], "Cover")
         self.assertTrue(all(item["embeddable"] for item in media))
 
+    def test_parse_media_references_reads_frontmatter_profile_image(self):
+        markdown = """---
+type: reporter
+title: Witty Wang
+date: '2026-06-28T00:00:00.000Z'
+source: user-provided
+profile_image: people/witty-wang/witty-wang-profile.jpg
+profile_image_uploaded_at: '2026-06-29'
+---
+
+
+"""
+        media = parse_media_references(markdown)
+
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]["kind"], "image")
+        self.assertEqual(media[0]["url"], "people/witty-wang/witty-wang-profile.jpg")
+        self.assertEqual(media[0]["label"], "profile image")
+        self.assertEqual(media[0]["source"], "frontmatter:profile_image")
+        self.assertFalse(media[0]["embeddable"])
+
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(
             "products/jtuner/rfc/part-09",
