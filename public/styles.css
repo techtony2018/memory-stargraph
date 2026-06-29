@@ -639,6 +639,25 @@ h2 {
   font-size: 14px;
 }
 
+.inline-link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.inline-link-button:focus-visible {
+  outline: 2px solid rgba(136, 246, 255, 0.65);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 #modalEditor {
   min-height: 340px;
   resize: vertical;

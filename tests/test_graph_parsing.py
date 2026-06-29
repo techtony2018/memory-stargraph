@@ -21,6 +21,7 @@ from server import (
     parse_media_references,
     parse_page_list,
     parse_search_results,
+    remote_media_url_for_relative_path,
     resolve_media_file_path,
     run_gbrain,
     serve_url_for_media_reference,
@@ -247,6 +248,45 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertTrue(enriched[0]["served_available"])
                 self.assertEqual(enriched[0]["materialized_from"], str(source.resolve()))
                 self.assertEqual((media_root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+
+    def test_remote_media_url_for_relative_path_encodes_path_segments(self):
+        self.assertEqual(
+            remote_media_url_for_relative_path("https://example.test/media", "companies/azul systems/Azul Logo.jpg"),
+            "https://example.test/media/companies/azul%20systems/Azul%20Logo.jpg",
+        )
+        self.assertIsNone(remote_media_url_for_relative_path("file:///tmp/media", "companies/example/logo.jpg"))
+        self.assertIsNone(remote_media_url_for_relative_path("https://example.test/media", "../secret.jpg"))
+
+    def test_ensure_media_references_fetches_from_remote_media_base(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+            media = parse_media_references("""---
+cover_image: companies/example-inc/logo.jpg
+---
+""")
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    return False
+
+                def read(self):
+                    return b"remote jpg"
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.MEDIA_DISCOVERY_ROOTS", []),
+                mock.patch("server.REMOTE_MEDIA_BASE_URLS", ["https://gbrain-host.example/media/"]),
+                mock.patch("server.urlopen", return_value=FakeResponse()) as urlopen_mock,
+            ):
+                enriched = ensure_media_references_available(media)
+
+            self.assertTrue(enriched[0]["served_available"])
+            self.assertEqual(enriched[0]["materialized_from"], "https://gbrain-host.example/media/companies/example-inc/logo.jpg")
+            self.assertEqual((media_root / "companies/example-inc/logo.jpg").read_bytes(), b"remote jpg")
+            urlopen_mock.assert_called_once()
 
     def test_parse_multipart_form_reads_browser_file_upload(self):
         boundary = "----memory-stargraph-test"

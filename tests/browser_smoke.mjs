@@ -318,6 +318,19 @@ try {
   ) {
     throw new Error(`Expected rendered markdown formatting support: ${JSON.stringify(markdownFormatting)}`);
   }
+  await page.click("#modalMessage .inline-link-button");
+  await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Modify gbrain page", null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector("#modalEditor")?.value.length > 0, null, { timeout: 20000 });
+  const editJump = await page.evaluate(() => ({
+    kicker: document.querySelector("#modalKicker")?.textContent,
+    editorHidden: document.querySelector("#modalEditor")?.hidden,
+    markdownHidden: document.querySelector("#modalMarkdown")?.hidden,
+    primary: document.querySelector("#modalPrimaryButton")?.textContent,
+    editorLength: document.querySelector("#modalEditor")?.value.length,
+  }));
+  if (editJump.editorHidden || !editJump.markdownHidden || editJump.primary !== "Save" || editJump.editorLength < 1) {
+    throw new Error(`Expected Modify markdown link to reopen edit mode: ${JSON.stringify(editJump)}`);
+  }
   await page.click("#modalCloseButton");
 
   const gbrainOperationTemplates = [];

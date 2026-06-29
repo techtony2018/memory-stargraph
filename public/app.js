@@ -1143,6 +1143,20 @@ function renderMarkdownView(markdown) {
   }
 }
 
+function renderViewModalMessage(slug) {
+  modalMessage.textContent = "";
+  modalMessage.appendChild(document.createTextNode("Rendered from gbrain markdown. Use "));
+  const editButton = document.createElement("button");
+  editButton.type = "button";
+  editButton.className = "inline-link-button";
+  editButton.textContent = "Modify markdown";
+  editButton.addEventListener("click", () => {
+    void openNodeModal("edit", slug);
+  });
+  modalMessage.appendChild(editButton);
+  modalMessage.appendChild(document.createTextNode(" if you want to edit this page."));
+}
+
 function renderMediaItems(items) {
   modalMedia.innerHTML = "";
   if (!items.length) {
@@ -1252,9 +1266,11 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalPrimaryButton.textContent = action === "view" ? "Close" : "Save";
     modalEditor.readOnly = action === "view";
     modalCancelButton.hidden = action === "view";
-    modalMessage.textContent = action === "view"
-      ? "Rendered from gbrain markdown. Use Modify markdown if you want to edit this page."
-      : "Editing writes this markdown back with `gbrain put`, then refreshes the graph.";
+    if (action === "view") {
+      renderViewModalMessage(slug);
+    } else {
+      modalMessage.textContent = "Editing writes this markdown back with `gbrain put`, then refreshes the graph.";
+    }
     modalEditor.hidden = action === "view";
     modalMarkdown.hidden = action !== "view";
     operationModal.hidden = false;

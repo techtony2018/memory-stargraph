@@ -15,7 +15,7 @@ from collections import defaultdict
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.parse import parse_qs
 from urllib.request import urlopen
 
@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     "graph_command_pause_seconds": 0.2,
     "media_roots": ["media", "data/media"],
     "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+    "remote_media_base_urls": [],
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
 }
@@ -83,10 +84,18 @@ MEDIA_DISCOVERY_ROOTS = [
     for root in str(os.environ.get("MEMORY_STARGRAPH_MEDIA_DISCOVERY_ROOTS", "")).split(",")
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("media_discovery_roots", [])]
+REMOTE_MEDIA_BASE_URLS = [
+    url.rstrip("/") + "/"
+    for url in (
+        [value.strip() for value in str(os.environ.get("MEMORY_STARGRAPH_REMOTE_MEDIA_BASE_URLS", "")).split(",") if value.strip()]
+        or CONFIG.get("remote_media_base_urls", [])
+    )
+    if str(url).strip()
+]
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.24"
+UI_VERSION = "V1.0.25"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -577,6 +586,16 @@ def download_media_url_to_root(url, relative_path):
     }
 
 
+def remote_media_url_for_relative_path(base_url, relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    parsed = urlparse(str(base_url or ""))
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    return str(base_url).rstrip("/") + "/" + "/".join(quote(part) for part in safe_path.parts)
+
+
 def try_gbrain_signed_media_url(relative_path):
     try:
         output = run_gbrain("files", "signed-url", str(relative_path))
@@ -596,6 +615,17 @@ def ensure_media_reference_available(item):
     source_file = find_media_source_file(relative_path)
     if source_file:
         result = copy_media_source_to_root(source_file, relative_path)
+    if not result:
+        for base_url in REMOTE_MEDIA_BASE_URLS:
+            remote_url = remote_media_url_for_relative_path(base_url, relative_path)
+            if not remote_url:
+                continue
+            try:
+                result = download_media_url_to_root(remote_url, relative_path)
+            except Exception:  # noqa: BLE001
+                result = None
+            if result:
+                break
     if not result:
         signed_url = try_gbrain_signed_media_url(relative_path)
         if signed_url:

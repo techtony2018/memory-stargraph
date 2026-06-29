@@ -118,12 +118,15 @@ cover_image: projects/example-project/project-cover.jpg
 
 When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
 
+When the web service runs on a different host than the gbrain data/media host, configure `remote_media_base_urls` on the web host. Each base URL should point to a trusted read-only `/media/` endpoint on a machine that can see the original media files. The web host will fetch missing media from that endpoint, cache it into its own first `media_roots` entry, and then serve it locally.
+
 Example config:
 
 ```json
 {
   "media_roots": ["media", "data/media"],
   "media_discovery_roots": ["media", "data/media", "~/Pictures", "~/Downloads", "~/Desktop", "~/.gbrain"],
+  "remote_media_base_urls": ["https://gbrain-media.example.com/media/"],
   "media_fetch_timeout_seconds": 8,
   "max_upload_bytes": 26214400
 }
@@ -199,6 +202,7 @@ Deployment notes:
 - For LAN or remote access, set `"host": "0.0.0.0"` in `config/local.json` or pass `--host 0.0.0.0`.
 - Set `"gbrain_path"` to the absolute `gbrain` binary path on the target machine.
 - If `gbrain` is installed in a user-local package manager path, export that path before starting or testing the service.
+- If the web host is not the media storage host, set `"remote_media_base_urls"` to a trusted media endpoint on the storage host.
 - Keep media roots local to the target machine and avoid committing uploaded media or runtime cache files.
 
 ## AI Agent Setup Prompt
@@ -225,12 +229,12 @@ Expected local service:
 - URL: `http://127.0.0.1:8788`
 - Health check: `curl -sS http://127.0.0.1:8788/api/health`
 - Default gbrain path: `/opt/homebrew/bin/gbrain`
-- On other machines, set `"gbrain_path"` to the installed gbrain binary, set `"host": "0.0.0.0"` only when remote access is intended, and export any required package-manager paths before starting the service.
+- On other machines, set `"gbrain_path"` to the installed gbrain binary, set `"host": "0.0.0.0"` only when remote access is intended, set `"remote_media_base_urls"` when media lives on another host, and export any required package-manager paths before starting the service.
 
 Setup steps:
 1. Inspect `git status --short` and do not revert unrelated user changes.
 2. If needed, copy `config/local.example.json` to `config/local.json` and adjust only local machine values.
-3. On remote or shared machines, set `config/local.json` to use the target machine's `"gbrain_path"` and a `media_roots` entry for any local gbrain image folder.
+3. On remote or shared machines, set `config/local.json` to use the target machine's `"gbrain_path"` and a `media_roots` entry for any local gbrain image folder. If media is stored on a different host, add that host's `/media/` endpoint to `"remote_media_base_urls"`.
 4. Start the service with `python3 server.py --host 127.0.0.1 --port 8788`.
 5. Open `http://127.0.0.1:8788` and verify the graph loads.
 6. Search for a known entity in your gbrain, select it, hover a direct neighbor, and confirm the mouse-near popup shows the relationship type.
