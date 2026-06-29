@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.28"
+UI_VERSION = "V1.0.29"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -1709,7 +1709,41 @@ class GraphStore:
         self.invalidate()
 
     def ask_gbrain(self, slug, question):
-        return run_gbrain("query", f"{question} Related node: {slug}")
+        sections = [f"Question: {question}", f"Selected node: {slug}"]
+        normalized_question = question.lower()
+
+        if any(token in normalized_question for token in ("media", "image", "images", "photo", "picture", "attachment", "file")):
+            media_items = self.get_entity_media(slug) or []
+            if media_items:
+                media_lines = []
+                for item in media_items[:12]:
+                    url = item.get("served_url") or item.get("url") or ""
+                    label = item.get("label") or item.get("url") or "media"
+                    kind = item.get("kind") or "media"
+                    media_lines.append(f"- {label} ({kind}): {url}")
+                sections.append("Detected media:\n" + "\n".join(media_lines))
+            else:
+                sections.append("Detected media:\nNo media references were found on this node.")
+
+        try:
+            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1")
+            sections.append("Direct relationship context:\n" + str(graph_output or ""))
+        except Exception as exc:  # noqa: BLE001
+            sections.append(f"Direct relationship context unavailable: {exc}")
+
+        query_text = f"{question} {slug}"
+        search_output = run_gbrain(
+            "query",
+            query_text,
+            "--adaptive-return",
+            "true",
+            "--limit",
+            "8",
+            "--relational",
+            "true",
+        )
+        sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
+        return "\n\n".join(sections)
 
     def backlinks(self, slug):
         return run_gbrain("backlinks", slug)

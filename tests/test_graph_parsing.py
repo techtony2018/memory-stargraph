@@ -555,6 +555,7 @@ cover_image: companies/example-inc/logo.jpg
     def test_graph_store_node_operations_call_gbrain_commands(self):
         store = GraphStore()
         with mock.patch("server.run_gbrain") as run, mock.patch.object(store, "invalidate") as invalidate:
+            run.return_value = "ok"
             store.add_relationship("people/tony-guan", "companies/azul-systems", "employed by", "past role")
             store.remove_relationship("people/tony-guan", "companies/azul-systems", "employed by")
             store.update_tags("people/tony-guan", ["founder", "java"], ["old"])
@@ -574,7 +575,8 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("tag", "people/tony-guan", "java"),
                 mock.call("untag", "people/tony-guan", "old"),
                 mock.call("timeline-add", "people/tony-guan", "2026-06-29", "Updated graph operations", "--detail", "Details", "--source", "memory-stargraph"),
-                mock.call("query", "What should I know? Related node: people/tony-guan"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
+                mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),

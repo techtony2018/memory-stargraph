@@ -60,7 +60,7 @@ Right-click a node or use the `...` button beside the node summary. `View` is in
 Supported node operations:
 
 1. `View` - renders the node's gbrain markdown read-only, including wiki-style `[[Entity]]` links.
-2. `Ask GBrain` - opens a chat-style Q&A panel and runs each question as a contextual `gbrain query`.
+2. `Ask GBrain` - opens a chat-style Q&A panel and answers with direct graph context, detected media when relevant, and targeted `gbrain query` retrieval.
 3. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
 4. `Show backlinks` - shows incoming links with `gbrain backlinks`.
 5. `Graph query from here` - runs typed/directional graph traversal.
