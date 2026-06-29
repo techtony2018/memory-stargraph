@@ -186,6 +186,7 @@ Verification commands:
 - node --check public/app.js
 - node --check tests/browser_smoke.mjs
 - node tests/browser_smoke.mjs
+- If Playwright is not locally resolvable, use `npx --yes --package playwright node tests/browser_smoke.mjs`.
 
 Supported node operations to preserve:
 1. Ask GBrain

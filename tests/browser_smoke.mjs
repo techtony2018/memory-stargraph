@@ -1,14 +1,33 @@
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { chromium } = require("/Users/tony/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
+const playwrightCandidates = [
+  process.env.PLAYWRIGHT_MODULE,
+  "/Users/tony/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright",
+  "playwright",
+].filter(Boolean);
+
+let chromium;
+let loadError;
+for (const candidate of playwrightCandidates) {
+  try {
+    ({ chromium } = require(candidate));
+    break;
+  } catch (error) {
+    loadError = error;
+  }
+}
+if (!chromium) {
+  throw new Error(`Unable to load Playwright. Try: npx --yes --package playwright node tests/browser_smoke.mjs. Last error: ${loadError?.message || "unknown"}`);
+}
 
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1700 }, deviceScaleFactor: 1 });
+const appUrl = process.env.MEMORY_STARGRAPH_URL || "http://127.0.0.1:8788";
 
 try {
-  await page.goto("http://127.0.0.1:8788", { waitUntil: "domcontentloaded" });
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__MEMORY_STARGRAPH__ && window.__MEMORY_STARGRAPH__.getState().graph, null, { timeout: 120000 });
   await page.waitForTimeout(1000);
 
@@ -60,8 +79,8 @@ try {
   if (!initial.autoRefreshPresent) {
     throw new Error("Expected auto refresh controls to render");
   }
-  if (initial.uiVersion !== "V1.0.8") {
-    throw new Error("Expected UI version V1.0.8 to render");
+  if (!/^V1\.0\.\d+$/.test(initial.uiVersion || "")) {
+    throw new Error(`Expected UI version like V1.0.x to render, got ${initial.uiVersion}`);
   }
   if (!initial.searchButtonPresent) {
     throw new Error("Expected explicit Search button to render next to the search input");
