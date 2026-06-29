@@ -100,6 +100,7 @@ class FrontendStaticTests(unittest.TestCase):
 
     def test_node_operations_use_guided_controls(self):
         markup = (ROOT / "public" / "index.html").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
         script = (ROOT / "public/app.js").read_text()
 
         self.assertIn('id="modalForm"', markup)
@@ -113,6 +114,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function renderRemoveRelationshipForm", script)
         self.assertIn("operationExistingRelationshipOptions", script)
         self.assertIn("Choose one of the existing relationships from the list.", script)
+        self.assertIn("compact-modal", styles)
+        self.assertIn('["add-link", "remove-link", "tags"].includes(action)', script)
+        self.assertIn("opacity: 0.75", styles)
 
 
 if __name__ == "__main__":

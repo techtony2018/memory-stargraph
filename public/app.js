@@ -31,7 +31,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.32";
+const UI_VERSION = "V1.0.33";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -1433,6 +1433,7 @@ function checkedValues(name) {
 
 function closeModal() {
   operationModal.hidden = true;
+  operationModal.classList.remove("compact-modal");
   state.modalAction = null;
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
@@ -1469,6 +1470,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   const node = state.nodeMap.get(slug);
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
+  operationModal.classList.toggle("compact-modal", ["add-link", "remove-link", "tags"].includes(action));
   modalTitle.textContent = label;
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
