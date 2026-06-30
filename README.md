@@ -4,6 +4,12 @@ Memory Stargraph is a local web service for exploring a `gbrain` knowledge base 
 
 It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it runs without `npm install`.
 
+## Demo
+
+[![Memory Stargraph demo preview](docs/assets/memory-stargraph-preview.png)](docs/assets/memory-stargraph-demo.mp4)
+
+[Watch the demo video](docs/assets/memory-stargraph-demo.mp4)
+
 ## Run
 
 ```bash
