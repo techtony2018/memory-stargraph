@@ -6,9 +6,9 @@ It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it ru
 
 ## Demo
 
-[![Memory Stargraph demo preview](docs/assets/memory-stargraph-preview.png)](docs/assets/memory-stargraph-demo.mp4)
+[![Memory Stargraph demo preview](docs/assets/memory-stargraph-preview.png)](https://youtu.be/GbWZo7g1ZBA)
 
-[Watch the demo video](docs/assets/memory-stargraph-demo.mp4)
+[Watch the demo video on YouTube](https://youtu.be/GbWZo7g1ZBA)
 
 ## Run
 
