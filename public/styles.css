@@ -511,6 +511,22 @@ h2 {
   font-size: 18px;
 }
 
+.new-node-button {
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  color: #07111e;
+  background: var(--accent-2);
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.new-node-button:hover {
+  filter: brightness(1.08);
+}
+
 #zoomLevel {
   min-width: 42px;
   text-align: center;

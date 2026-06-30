@@ -34,6 +34,10 @@ class FakeStore:
         self.calls.append(("get_seed_graph", force))
         return TEST_GRAPH
 
+    def create_entity(self, name, description="", category="entities"):
+        self.calls.append(("create_entity", name, description, category))
+        return "people/new-person"
+
     def add_relationship(self, source_slug, target_slug, link_type, context=""):
         self.calls.append(("add_relationship", source_slug, target_slug, link_type, context))
 
@@ -114,6 +118,7 @@ class ApiEndpointTests(unittest.TestCase):
                 ("/api/entity-unlink/people%2Ftony-guan", {"target": "companies/azul-systems", "link_type": "employed by"}),
                 ("/api/entity-tags/people%2Ftony-guan", {"add": ["founder"], "remove": ["old"]}),
                 ("/api/entity-timeline/people%2Ftony-guan", {"date": "2026-06-29", "summary": "Updated node ops", "detail": "Details", "source": "test"}),
+                ("/api/entity-create", {"name": "New Person", "description": "A new test node", "category": "people"}),
                 ("/api/entity-ask/people%2Ftony-guan", {"question": "What should I know?"}),
                 ("/api/entity-backlinks/people%2Ftony-guan", {}),
                 ("/api/entity-graph-query/people%2Ftony-guan", {"link_type": "employed by", "direction": "both", "depth": "1"}),
@@ -127,13 +132,15 @@ class ApiEndpointTests(unittest.TestCase):
                     status, data = self.dispatch_post(path, payload)
                     self.assertEqual(status, 200)
                     self.assertTrue(data["ok"])
-                    self.assertEqual(data["slug"], "people/tony-guan")
+                    expected_slug = "people/new-person" if path == "/api/entity-create" else "people/tony-guan"
+                    self.assertEqual(data["slug"], expected_slug)
 
         call_names = [call[0] for call in fake_store.calls]
         self.assertIn("add_relationship", call_names)
         self.assertIn("remove_relationship", call_names)
         self.assertIn("update_tags", call_names)
         self.assertIn("add_timeline_event", call_names)
+        self.assertIn("create_entity", call_names)
         self.assertIn("ask_gbrain", call_names)
         self.assertIn("backlinks", call_names)
         self.assertIn("graph_query", call_names)
@@ -160,6 +167,7 @@ class ApiEndpointTests(unittest.TestCase):
             endpoints,
             {
                 "/api/entity-ask/<slug>",
+                "/api/entity-create",
                 "/api/entity-media/<slug>",
                 "/api/entity-backlinks/<slug>",
                 "/api/entity-graph-query/<slug>",

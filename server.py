@@ -95,7 +95,7 @@ REMOTE_MEDIA_BASE_URLS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.34"
+UI_VERSION = "V1.0.35"
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -110,6 +110,7 @@ BLOCKED_LABELS = {
     "tony gu",
 }
 NODE_OPERATION_ENDPOINTS = [
+    {"action": "create", "method": "POST", "endpoint": "/api/entity-create", "mutates_gbrain": True},
     {"action": "ask", "method": "POST", "endpoint": "/api/entity-ask/<slug>", "mutates_gbrain": False},
     {"action": "media", "method": "GET", "endpoint": "/api/entity-media/<slug>", "mutates_gbrain": False},
     {"action": "backlinks", "method": "POST", "endpoint": "/api/entity-backlinks/<slug>", "mutates_gbrain": False},
@@ -271,6 +272,38 @@ def ensure_data_dir():
 def normalize_slug(value):
     cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return cleaned or "entity"
+
+
+def entity_slug_from_name(name, category):
+    category_slug = normalize_slug(category or "entities")
+    name_slug = normalize_slug(name)
+    return f"{category_slug}/{name_slug}"
+
+
+def yaml_scalar(value):
+    text = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def create_entity_markdown(name, description, category):
+    clean_name = str(name or "").strip()
+    clean_category = normalize_slug(category or "entities")
+    clean_description = str(description or "").strip()
+    body = clean_description or f"{clean_name}."
+    return "\n".join(
+        [
+            "---",
+            f"type: {yaml_scalar(clean_category)}",
+            f"title: {yaml_scalar(clean_name)}",
+            "source: \"memory-stargraph\"",
+            "---",
+            "",
+            f"# {clean_name}",
+            "",
+            body,
+            "",
+        ]
+    )
 
 
 def decode_process_output(value):
@@ -466,6 +499,8 @@ def is_supported_media_path(path):
 
 def safe_media_relative_path(value):
     text = str(value or "").strip()
+    if text.startswith("/media/"):
+        text = text.split("/media/", 1)[1]
     if not text or urlparse(text).scheme or text.startswith(("/", "\\")):
         return None
     parts = Path(unquote(text)).parts
@@ -1660,6 +1695,16 @@ class GraphStore:
         run_gbrain("put", slug, input_text=content)
         self.invalidate()
 
+    def create_entity(self, name, description="", category="entities"):
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise ValueError("name is required")
+        slug = entity_slug_from_name(clean_name, category)
+        markdown = create_entity_markdown(clean_name, description, category)
+        run_gbrain("put", slug, input_text=markdown)
+        self.invalidate()
+        return slug
+
     def delete_entity(self, slug):
         graph = self.get_seed_graph()
         node_map = {node["slug"]: node for node in graph["nodes"]}
@@ -1909,6 +1954,19 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
+        if parsed.path == "/api/entity-create":
+            try:
+                payload = self.read_json_body()
+                name = str(payload.get("name") or "").strip()
+                description = str(payload.get("description") or "").strip()
+                category = str(payload.get("category") or "").strip()
+                if not name:
+                    return self.end_json({"error": "name is required"}, status=HTTPStatus.BAD_REQUEST)
+                slug = STORE.create_entity(name, description, category)
+                graph = STORE.get_seed_graph(force=True)
+                return self.end_json({"ok": True, "slug": slug, "graph": graph})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-expand/"):
             slug = unquote(parsed.path.split("/api/entity-expand/", 1)[1]).strip("/")
             try:

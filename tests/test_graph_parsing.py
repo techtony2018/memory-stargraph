@@ -189,6 +189,10 @@ profile_image_uploaded_at: '2026-06-29'
             serve_url_for_media_reference("people/example-person/Profile Photo.jpeg"),
             "/media/people/example-person/Profile%20Photo.jpeg",
         )
+        self.assertEqual(
+            serve_url_for_media_reference("/media/people/example-person/Profile Photo.jpeg"),
+            "/media/people/example-person/Profile%20Photo.jpeg",
+        )
         self.assertIsNone(serve_url_for_media_reference("https://example.com/image.jpg"))
         self.assertIsNone(serve_url_for_media_reference("../secret.jpg"))
         self.assertIsNone(serve_url_for_media_reference("notes/private.txt"))

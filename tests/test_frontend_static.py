@@ -118,6 +118,20 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('["add-link", "remove-link", "tags"].includes(action)', script)
         self.assertIn("opacity: 0.75", styles)
 
+    def test_new_node_button_uses_guided_create_form(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn('id="newNodeButton"', markup)
+        self.assertIn("new-node-button", styles)
+        self.assertIn('openNodeModal("new-node", "")', script)
+        self.assertIn("function renderNewNodeForm", script)
+        self.assertIn("operationNodeName", script)
+        self.assertIn("operationNodeDescription", script)
+        self.assertIn("operationNodeCategoryOptions", script)
+        self.assertIn('/api/entity-create', script)
+
 
 if __name__ == "__main__":
     unittest.main()

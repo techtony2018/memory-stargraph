@@ -31,7 +31,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.34";
+const UI_VERSION = "V1.0.35";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -47,6 +47,7 @@ const categoryFilter = document.getElementById("categoryFilter");
 const typeFilter = document.getElementById("typeFilter");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const clearFiltersButton = document.getElementById("clearFiltersButton");
+const newNodeButton = document.getElementById("newNodeButton");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
 const zoomLevel = document.getElementById("zoomLevel");
@@ -1393,6 +1394,32 @@ function renderAddRelationshipForm(slug) {
   appendField(modalForm, "Context", contextInput);
 }
 
+function renderNewNodeForm() {
+  modalForm.innerHTML = "";
+  const nameInput = document.createElement("input");
+  nameInput.id = "operationNodeName";
+  nameInput.placeholder = "Node name";
+  nameInput.autocomplete = "off";
+  appendField(modalForm, "Name", nameInput);
+
+  const descriptionInput = document.createElement("textarea");
+  descriptionInput.id = "operationNodeDescription";
+  descriptionInput.placeholder = "Short description";
+  appendField(modalForm, "Description", descriptionInput);
+
+  const categoryInput = document.createElement("input");
+  categoryInput.id = "operationNodeCategory";
+  categoryInput.setAttribute("list", "operationNodeCategoryOptions");
+  categoryInput.placeholder = "Select or type a category";
+  appendField(modalForm, "Category", categoryInput);
+  modalForm.appendChild(makeDatalist(
+    "operationNodeCategoryOptions",
+    [...new Set((state.graph?.nodes || []).map((node) => node.category || node.type).filter(Boolean))].sort(),
+    (category) => category,
+    (category) => category,
+  ));
+}
+
 function existingRelationshipOptions(slug) {
   const node = state.nodeMap.get(slug);
   if (!node) return [];
@@ -1466,7 +1493,7 @@ function closeModal() {
 
 async function openNodeModal(action, slug = state.focusSlug) {
   hideContextMenu();
-  if (!slug) return;
+  if (action !== "new-node" && !slug) return;
   const node = state.nodeMap.get(slug);
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
@@ -1495,6 +1522,20 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalChatLog.innerHTML = "";
   modalChatInput.value = "";
   modalChatInput.disabled = false;
+
+  if (action === "new-node") {
+    state.modalAction = { action, slug: "", label: "New Node" };
+    modalTitle.textContent = "New Node";
+    modalKicker.textContent = "Create gbrain node";
+    modalPrimaryButton.textContent = "Create node";
+    modalMessage.textContent = "Create a new gbrain page from a name, description, and category.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderNewNodeForm();
+    operationModal.hidden = false;
+    modalForm.querySelector("#operationNodeName")?.focus();
+    return;
+  }
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -1786,6 +1827,20 @@ async function runModalPrimaryAction() {
       if (!response.ok) throw new Error(response.data?.error || `Save failed with ${response.status}`);
       closeModal();
       await fetchGraph("/api/graph", { preserveFocus: true, preferredFocus: slug });
+      return;
+    }
+    if (action === "new-node") {
+      const name = modalForm.querySelector("#operationNodeName")?.value.trim() || "";
+      const description = modalForm.querySelector("#operationNodeDescription")?.value.trim() || "";
+      const category = modalForm.querySelector("#operationNodeCategory")?.value.trim() || "";
+      if (!name || !category) {
+        throw new Error("Name and category are required.");
+      }
+      const response = await apiPost("/api/entity-create", { name, description, category });
+      if (!response.ok) throw new Error(response.data?.error || `Create node failed with ${response.status}`);
+      closeModal();
+      applyGraphPayload(response.data.graph, response.data.slug);
+      await loadEntity(response.data.slug, { source: "system" });
       return;
     }
     if (action === "delete") {
@@ -2230,6 +2285,10 @@ function bindEvents() {
 
   zoomInButton.addEventListener("click", () => {
     zoomBy(1);
+  });
+
+  newNodeButton.addEventListener("click", () => {
+    void openNodeModal("new-node", "");
   });
 
   nodeMenuButton.addEventListener("click", (event) => {
