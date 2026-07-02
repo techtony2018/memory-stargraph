@@ -1,12 +1,22 @@
 # Memory Stargraph
 
+<p align="center">
+  <img src="public/assets/brand/logo-circle-transparent.png" alt="Memory Stargraph logo" width="96">
+</p>
+
+<p align="center">
+  <img src="public/assets/brand/wordmark-line.png" alt="Memory Stargraph" width="420">
+</p>
+
 Memory Stargraph is a local web service for exploring a `gbrain` knowledge base as an interactive star-cloud entity graph.
 
 It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it runs without `npm install`.
 
-## Demo
+## Showcase
 
-[![Memory Stargraph demo preview](docs/assets/memory-stargraph-preview.png)](https://youtu.be/GbWZo7g1ZBA)
+![Memory Stargraph interactive star-cloud UI](docs/assets/memory-stargraph-ui.png)
+
+![Shared AI memory architecture](docs/assets/shared-ai-memory-architecture.png)
 
 [Watch the demo video on YouTube](https://youtu.be/GbWZo7g1ZBA)
 
@@ -65,27 +75,28 @@ Right-click a node or use the `...` button beside the node summary. `View` is in
 
 Supported node operations:
 
-1. `View` - renders the node's gbrain markdown read-only, including wiki-style `[[Entity]]` links.
-2. `Ask GBrain` - opens a chat-style Q&A panel and answers with direct graph context, detected media when relevant, and targeted `gbrain query` retrieval.
-3. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
-4. `Show backlinks` - shows incoming links with `gbrain backlinks`.
-5. `Graph query from here` - runs typed/directional graph traversal.
+1. `View` - renders the node's gbrain markdown read-only, shows `slug: <slug>` above the content, and includes a `Modify markdown` button that edits the page with `gbrain put`.
+2. `Timeline` - renders the node timeline read-only, with an `Add timeline event` button in the same window.
+3. `Ask GBrain` - opens a chat-style Q&A panel and answers with direct graph context, detected media when relevant, and targeted `gbrain query` retrieval.
+4. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
+5. `Graph query from here` - runs typed/directional graph traversal with guided controls for relationship type, direction, and depth.
 6. `View history` - shows page version history.
 7. `Add relationship` - searches/selects a target node and relationship type, while still allowing a new relationship type.
 8. `Remove relationship` - searches/selects from existing relationships only, then removes that edge with `gbrain unlink`.
-9. `Edit tags` - selects existing tags to add, accepts a new tag, and removes only tags already applied to the entity.
-10. `Add timeline event` - writes a dated entry with `gbrain timeline-add`.
+9. `Show backlinks` - shows incoming links with `gbrain backlinks`.
+10. `Edit tags` - selects existing tags to add, accepts a new tag, and removes only tags already applied to the entity.
 11. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
 12. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
-13. `Modify markdown` - edits the page with `gbrain put`.
-14. `Hide` - hides a node in the web UI only.
-15. `Copy slug` - copies the exact gbrain slug.
-16. `Delete from gbrain` - deletes after exact node-name confirmation.
+13. `Hide` - hides a node in the web UI only.
+14. `Delete from gbrain` - deletes after exact node-name confirmation.
+
+`Add timeline event` uses four guided fields: selectable date, summary, detail, and source.
 
 Node operation API contract:
 
 - `GET /api/node-operations` - lists the supported operation endpoints.
 - `GET /api/entity-media/<slug>` - lists detected media references from node markdown/frontmatter.
+- `GET /api/entity-timeline-view/<slug>` - renders timeline entries read-only.
 - `GET /media/<relative-path>` - serves configured local media files read-only.
 - `POST /api/entity-ask/<slug>` - ask gbrain about a node.
 - `POST /api/entity-backlinks/<slug>` - show backlinks.
@@ -163,6 +174,21 @@ Default backend path:
 ```text
 /opt/homebrew/bin/gbrain
 ```
+
+### GBrain Setup Requirements
+
+Memory Stargraph works best when `gbrain` is already initialized and healthy on the machine running the web service. Before launching the service, verify:
+
+- `gbrain` is installed and runnable from the service process. If it is installed through a user-local runtime, add that runtime's `bin` directory to `PATH` or set `"gbrain_path"` in `config/local.json`.
+- The host has a valid gbrain configuration. A storage host should have a normal local database configuration; a client-only machine should have a working `remote_mcp` configuration and pass `gbrain remote doctor`.
+- Basic read commands work: `gbrain list`, `gbrain get <slug>`, `gbrain graph <slug> --depth 1`, `gbrain backlinks <slug>`, and `gbrain search <query>`.
+- Mutation commands you plan to expose from the UI work in your topology: `put`, `link`, `unlink`, `tag`, `untag`, `timeline-add`, `files upload`, and `delete`.
+- Media files referenced by gbrain pages are reachable from the web service. Use local `media_roots` when the files are on the same host, or configure `remote_media_base_urls` when the web service is on a different host.
+- The root `index` page exists and is useful, because Memory Stargraph expands it eagerly to give the graph a meaningful starting structure.
+
+For multi-machine setups, run the service on each web host with its own `config/local.json`. Keep runtime state local, keep secrets out of the repo, and verify `/api/health` plus one known entity search after every deployment.
+
+Upstream GBrain note: for remote-MCP installations with multiple clients, see the submitted GBrain PR [garrytan/gbrain#2501](https://github.com/garrytan/gbrain/pull/2501), which makes the OAuth token rate limit configurable. That helps avoid noisy refresh failures when several agents or web services share the same GBrain host.
 
 Load strategy:
 
@@ -246,6 +272,24 @@ Setup steps:
 6. Search for a known entity in your gbrain, select it, hover a direct neighbor, and confirm the mouse-near popup shows the relationship type.
 7. Confirm `View` is the first node menu item and all node operations render.
 
+HTTPS options:
+- For Tailscale access, prefer keeping Memory Stargraph on local HTTP and putting Tailscale Serve in front of it:
+
+```bash
+python3 server.py --host 127.0.0.1 --port 8788
+tailscale serve --https=443 http://127.0.0.1:8788
+```
+
+Then open `https://<machine>.<tailnet>.ts.net/`.
+
+- If you already have a certificate and key, Memory Stargraph can serve HTTPS directly:
+
+```bash
+python3 server.py --host 0.0.0.0 --port 8788 --certfile /path/fullchain.pem --keyfile /path/privkey.pem
+```
+
+Direct TLS on port `8788` will use `https://<host>:8788/`; Tailscale Serve is usually cleaner because it manages the trusted tailnet certificate.
+
 Verification commands:
 - export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 - python3 -m py_compile server.py
@@ -257,21 +301,19 @@ Verification commands:
 
 Supported node operations to preserve:
 1. View
-2. Ask GBrain
-3. View media
-4. Show backlinks
+2. Timeline
+3. Ask GBrain
+4. View media
 5. Graph query from here
 6. View history
 7. Add relationship
 8. Remove relationship
-9. Edit tags
-10. Add timeline event
+9. Show backlinks
+10. Edit tags
 11. Attach file
 12. Refresh embedding
-13. Modify markdown
-14. Hide
-15. Copy slug
-16. Delete from gbrain
+13. Hide
+14. Delete from gbrain
 
 Behavior requirements:
 - Root `index` should always load eagerly.
