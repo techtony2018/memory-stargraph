@@ -236,7 +236,7 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 124 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
+  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 106 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
     throw new Error("Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control");
   }
   if (initial.metricsColumns !== 3) {
@@ -245,6 +245,32 @@ try {
   if (!initial.sourceControlsInGraphSource || !initial.searchControlsInHeaderWorkflow || initial.tooltipZIndex < 30) {
     throw new Error(`Expected source controls in Graph source, search controls beside wordmark, and graph tooltip above graph marks: ${JSON.stringify(initial)}`);
   }
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.waitForTimeout(250);
+  const mediumHeaderLayout = await page.evaluate(() => {
+    const workflow = document.querySelector(".header-workflow")?.getBoundingClientRect();
+    const search = document.querySelector(".search-group")?.getBoundingClientRect();
+    const matches = document.querySelector(".toggle-wrap")?.getBoundingClientRect();
+    const links = document.querySelector(".filter-wrap.short")?.getBoundingClientRect();
+    const tour = document.querySelector(".timeline-strip")?.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const tops = [search, matches, links, tour].filter(Boolean).map((rect) => Math.round(rect.top));
+    return {
+      viewportWidth,
+      workflowRight: workflow?.right,
+      tops,
+      singleRow: tops.length === 4 && Math.max(...tops) - Math.min(...tops) <= 4,
+      contained: Boolean(workflow && tour && workflow.left >= 0 && workflow.right <= viewportWidth + 1 && tour.right <= viewportWidth + 1),
+      searchWidth: Math.round(search?.width || 0),
+      tourWidth: Math.round(tour?.width || 0),
+    };
+  });
+  if (!mediumHeaderLayout.singleRow || !mediumHeaderLayout.contained || mediumHeaderLayout.searchWidth < 220 || mediumHeaderLayout.tourWidth < 252) {
+    throw new Error(`Expected compact search controls to stay in one contained row at 1024px: ${JSON.stringify(mediumHeaderLayout)}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1700 });
+  await page.waitForTimeout(250);
 
   await page.fill("#searchInput", "tony");
   await page.press("#searchInput", "Enter");

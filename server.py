@@ -2000,6 +2000,20 @@ class GraphStore:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def direct_relationship_types(self, slug):
+        edge_types = defaultdict(set)
+        try:
+            graph_output = run_gbrain("graph", slug, "--depth", str(GRAPH_DEPTH))
+            merge_edge_types(edge_types, parse_link_types(graph_output, slug))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            backlinks_output = run_gbrain("backlinks", slug)
+            merge_edge_types(edge_types, parse_backlink_types(backlinks_output, slug))
+        except Exception:  # noqa: BLE001
+            pass
+        return edge_types
+
     def get_entity(self, slug):
         graph = self.get_seed_graph()
         node_map = {node["slug"]: node for node in graph["nodes"]}
@@ -2008,6 +2022,10 @@ class GraphStore:
         node = node_map[slug]
         self.hydrate_node_details(node, node_map=node_map, allow_fetch=True)
         edge_types = {edge_key(edge["source"], edge["target"]): edge.get("types") or [] for edge in graph.get("edges", [])}
+        for key, types in self.direct_relationship_types(slug).items():
+            merged = set(edge_types.get(key) or [])
+            merged.update(types)
+            edge_types[key] = sorted(merged)
         neighbors = []
         for item in node["links"]:
             if item not in node_map:
