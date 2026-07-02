@@ -50,6 +50,10 @@ class FakeStore:
     def add_timeline_event(self, slug, date, summary, detail="", source=""):
         self.calls.append(("add_timeline_event", slug, date, summary, detail, source))
 
+    def timeline(self, slug):
+        self.calls.append(("timeline", slug))
+        return "# Timeline\n\n- 2026-06-29: Updated node ops"
+
     def ask_gbrain(self, slug, question):
         self.calls.append(("ask_gbrain", slug, question))
         return "answer"
@@ -158,6 +162,37 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["media"][0]["kind"], "image")
         self.assertIn(("get_entity_media", "people/tony-guan"), fake_store.calls)
 
+    def test_entity_timeline_view_endpoint_is_read_only(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/entity-timeline-view/people%2Ftony-guan")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["slug"], "people/tony-guan")
+        self.assertIn("Timeline", data["output"])
+        self.assertIn(("timeline", "people/tony-guan"), fake_store.calls)
+        self.assertNotIn("add_timeline_event", [call[0] for call in fake_store.calls])
+
+    def test_graph_query_rejects_invalid_direction_and_depth(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-graph-query/people%2Ftony-guan",
+                {"direction": "sideways", "depth": "1"},
+            )
+            self.assertEqual(status, 400)
+            self.assertIn("direction", data["error"])
+
+            status, data = self.dispatch_post(
+                "/api/entity-graph-query/people%2Ftony-guan",
+                {"direction": "both", "depth": "9"},
+            )
+            self.assertEqual(status, 400)
+            self.assertIn("depth", data["error"])
+
+        self.assertNotIn("graph_query", [call[0] for call in fake_store.calls])
+
     def test_node_operation_manifest_lists_all_operation_endpoints(self):
         status, data = self.dispatch_get("/api/node-operations")
 
@@ -169,6 +204,7 @@ class ApiEndpointTests(unittest.TestCase):
                 "/api/entity-ask/<slug>",
                 "/api/entity-create",
                 "/api/entity-media/<slug>",
+                "/api/entity-timeline-view/<slug>",
                 "/api/entity-backlinks/<slug>",
                 "/api/entity-graph-query/<slug>",
                 "/api/entity-history/<slug>",

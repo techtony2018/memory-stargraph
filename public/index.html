@@ -4,104 +4,110 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Memory Stargraph</title>
+    <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
+    <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyeline">Constellation View</p>
-          <h1>Memory Stargraph</h1>
-          <span id="uiVersion" class="ui-version">V1.0.35</span>
+        <div class="brand-lockup">
+          <img class="brand-logo" src="/assets/brand/logo-circle-transparent.png" alt="" aria-hidden="true">
+          <img class="brand-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
+          <h1 class="sr-only">Memory Stargraph</h1>
         </div>
         <div class="status-block">
-          <button id="refreshButton" class="ghost-button" type="button">Refresh Graph</button>
-          <label class="top-toggle">
+          <div class="top-metrics" aria-label="Graph statistics">
+            <div class="metric-card">
+              <span class="metric-label">Nodes</span>
+              <strong id="metricNodes">0</strong>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Edges</span>
+              <strong id="metricEdges">0</strong>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Hub</span>
+              <strong id="metricDegree">0</strong>
+            </div>
+          </div>
+          <button id="refreshButton" class="ghost-button has-tooltip" type="button" data-tooltip="Reload graph data from gbrain." title="Reload graph data from gbrain.">Refresh Graph</button>
+          <label class="top-toggle has-tooltip" data-tooltip="Automatically refresh graph data on a timer." title="Automatically refresh graph data on a timer.">
             <input id="autoRefreshToggle" type="checkbox">
             <span>Auto</span>
           </label>
-          <label class="top-interval">
+          <label class="top-interval has-tooltip" data-tooltip="Auto-refresh interval in minutes." title="Auto-refresh interval in minutes.">
             <input id="autoRefreshInterval" type="number" min="1" max="120" step="1" value="10">
             <span>min</span>
           </label>
           <div id="sourceBadge" class="source-badge">Loading…</div>
-          <div id="lastRefresh" class="source-badge subtle">Last refresh: —</div>
+          <div class="refresh-meta">
+            <div id="lastRefresh" class="source-badge subtle">Last refresh: —</div>
+            <a id="uiVersion" class="ui-version" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.72</a>
+          </div>
         </div>
       </header>
 
-      <section class="hero-band">
-        <div class="hero-copy">
-          <p class="hero-kicker">Entity Graph Observatory</p>
-          <h2>Explore gbrain as a living star cloud</h2>
-        </div>
-        <div class="metrics" id="metrics">
-          <div class="metric-card">
-            <span class="metric-label">Nodes</span>
-            <strong id="metricNodes">0</strong>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Edges</span>
-            <strong id="metricEdges">0</strong>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Strongest Hub</span>
-            <strong id="metricDegree">0</strong>
-          </div>
-          <div class="metric-card compact">
-            <span class="metric-label">Collapsed Parts</span>
-            <strong id="metricCollapsed">0</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="control-band">
-        <div class="search-group">
-          <label class="search-wrap">
-            <span>Search entities</span>
-            <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
-          </label>
-          <button id="searchButton" class="ghost-button search-button" type="button">Search</button>
-        </div>
-        <label class="toggle-wrap">
-          <input id="matchesOnlyToggle" type="checkbox">
-          <span>Only show matches</span>
-        </label>
-        <label class="filter-wrap">
-          <span>Category</span>
-          <select id="categoryFilter">
-            <option value="">All</option>
-          </select>
-        </label>
-        <label class="filter-wrap">
-          <span>Type</span>
-          <select id="typeFilter">
-            <option value="">All</option>
-          </select>
-        </label>
-        <label class="filter-wrap short">
-          <span>Min links</span>
-          <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
-        </label>
-        <button id="clearFiltersButton" class="ghost-button compact-button" type="button">Clear Filters</button>
-        <div class="legend">
-          <span><i class="legend-dot hot"></i> focused</span>
-          <span><i class="legend-dot near"></i> neighborhood</span>
-          <span><i class="legend-dot match"></i> search match</span>
-        </div>
-      </section>
-
       <main class="workspace">
         <section class="graph-panel">
-          <canvas id="graphCanvas" width="1200" height="760"></canvas>
-          <div class="canvas-overlay">
-            <p id="hoverLabel">Loading star map…</p>
+          <div class="metrics graph-stats-overlay" id="metrics">
+            <div class="search-group">
+              <label class="search-wrap has-tooltip" data-tooltip="Search loaded nodes and ask gbrain for matching entities." title="Search loaded nodes and ask gbrain for matching entities.">
+                <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
+              </label>
+              <button id="searchButton" class="ghost-button search-button has-tooltip" type="button" data-tooltip="Run search and load the best matching entity." title="Run search and load the best matching entity.">Search</button>
+            </div>
+            <label class="toggle-wrap has-tooltip" data-tooltip="Only show nodes matching the active search." title="Only show nodes matching the active search.">
+              <input id="matchesOnlyToggle" type="checkbox">
+              <span>Matches</span>
+            </label>
+            <label class="filter-wrap short has-tooltip" data-tooltip="Minimum number of direct links required for visible nodes." title="Minimum number of direct links required for visible nodes.">
+              <span>Links</span>
+              <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
+            </label>
+            <div class="timeline-strip" aria-label="Graph time and tour controls">
+              <button id="tourButton" class="ghost-button primary compact-button has-tooltip" type="button" aria-pressed="false" data-tooltip="Start or stop a guided tour through important nodes." title="Start or stop a guided tour through important nodes.">Memory Tour</button>
+              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous tour stop" data-tooltip="Go to previous tour stop." title="Go to previous tour stop.">‹</button>
+              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next tour stop" data-tooltip="Go to next tour stop." title="Go to next tour stop.">›</button>
+              <label class="timeline-days-wrap has-tooltip" data-tooltip="Filter graph to nodes updated within the last N days. 0 means all time." title="Filter graph to nodes updated within the last N days. 0 means all time.">
+                <input id="timelineDaysInput" type="number" min="0" max="7" step="1" value="0" aria-label="Timeline days, zero means all time">
+                <span id="timelineValue">days</span>
+              </label>
+            </div>
           </div>
-          <div id="graphTooltip" class="graph-tooltip" hidden></div>
-          <div class="zoom-controls" aria-label="Galaxy zoom controls">
-            <button id="newNodeButton" class="new-node-button" type="button">New Node</button>
-            <button id="zoomOutButton" class="icon-button" type="button" aria-label="Zoom out">-</button>
-            <span id="zoomLevel">100%</span>
-            <button id="zoomInButton" class="icon-button" type="button" aria-label="Zoom in">+</button>
+          <div class="graph-canvas-wrap">
+            <canvas id="graphCanvas" width="1200" height="760"></canvas>
+            <div class="graph-floating-controls" aria-label="Graph view controls">
+              <button id="cloudModeButton" class="cluster-icon-button has-tooltip is-on" type="button" aria-pressed="true" aria-label="Clustering on" data-tooltip="Turn category clustering on or off." title="Turn category clustering on or off.">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="7" cy="8" r="2.6"></circle>
+                  <circle cx="16.5" cy="6.5" r="2.2"></circle>
+                  <circle cx="14" cy="17" r="3"></circle>
+                  <path d="M9.4 7.6 14.2 6.8"></path>
+                  <path d="M8.4 10.1 12.5 14.8"></path>
+                  <path d="M15.2 8.7 14.4 14"></path>
+                </svg>
+              </button>
+              <input id="cloudModeToggle" type="checkbox" checked hidden>
+              <div class="zoom-floating" aria-label="Graph zoom controls">
+                <button id="zoomOutButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom out" data-tooltip="Zoom out." title="Zoom out.">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M14.5 14.5 20 20"></path><path d="M7 10h6"></path></svg>
+                </button>
+                <span id="zoomLevel" class="zoom-level" aria-live="polite">100%</span>
+                <button id="zoomInButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom in" data-tooltip="Zoom in." title="Zoom in.">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M14.5 14.5 20 20"></path><path d="M10 7v6"></path><path d="M7 10h6"></path></svg>
+                </button>
+              </div>
+            </div>
+            <div class="new-node-floating" aria-label="Graph creation controls">
+              <button id="newNodeButton" class="new-node-icon-button has-tooltip" type="button" aria-label="New node" data-tooltip="Create a new gbrain entity." title="Create a new gbrain entity.">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              </button>
+            </div>
+            <div class="canvas-overlay">
+              <p id="hoverLabel">Loading star map…</p>
+            </div>
+            <div id="graphTooltip" class="graph-tooltip" hidden></div>
           </div>
         </section>
 
@@ -109,7 +115,10 @@
           <div class="panel-section">
             <p class="panel-label">Selection</p>
             <div class="detail-heading">
-              <h3 id="detailTitle">Loading…</h3>
+              <div class="detail-title-wrap">
+                <h3 id="detailTitle">Loading…</h3>
+                <button id="timelineBadge" class="timeline-badge" type="button" hidden>Timeline</button>
+              </div>
               <button id="nodeMenuButton" class="icon-button" type="button" aria-label="Node actions">...</button>
             </div>
             <p id="detailType" class="detail-type"></p>
@@ -117,18 +126,25 @@
           </div>
 
           <div class="panel-section">
-            <p class="panel-label">Direct links</p>
-            <div id="detailLinks" class="chip-grid"></div>
-          </div>
-
-          <div class="panel-section">
-            <p class="panel-label">Nearby constellation</p>
-            <div id="detailSecondRing" class="chip-grid muted"></div>
-          </div>
-
-          <div class="panel-section">
-            <p class="panel-label">Category legend</p>
+            <div class="panel-label-row">
+              <p class="panel-label">Category</p>
+              <label class="limit-control">
+                <span>Top</span>
+                <input id="categoryLimitInput" type="number" min="1" max="50" value="5">
+              </label>
+            </div>
             <div id="categoryLegend" class="category-legend"></div>
+          </div>
+
+          <div class="panel-section">
+            <div class="panel-label-row">
+              <p class="panel-label">Clusters</p>
+              <label class="limit-control">
+                <span>Top hubs</span>
+                <input id="clusterLimitInput" type="number" min="1" max="50" value="5">
+              </label>
+            </div>
+            <div id="hubClusterLegend" class="category-legend hub-cluster-legend"></div>
           </div>
 
           <div class="panel-section">
@@ -147,20 +163,18 @@
 
     <div id="contextMenu" class="context-menu" hidden>
       <button type="button" data-action="view">View</button>
+      <button type="button" data-action="timeline-view">Timeline</button>
       <button type="button" data-action="ask">Ask GBrain</button>
       <button type="button" data-action="media">View media</button>
-      <button type="button" data-action="backlinks">Show backlinks</button>
       <button type="button" data-action="graph-query">Graph query from here</button>
       <button type="button" data-action="history">View history</button>
-      <button type="button" data-action="edit">Modify markdown</button>
       <button type="button" data-action="add-link">Add relationship</button>
       <button type="button" data-action="remove-link">Remove relationship</button>
+      <button type="button" data-action="backlinks">Show backlinks</button>
       <button type="button" data-action="tags">Edit tags</button>
-      <button type="button" data-action="timeline">Add timeline event</button>
       <button type="button" data-action="attach-file">Attach file</button>
       <button type="button" data-action="embed">Refresh embedding</button>
       <button type="button" data-action="hide">Hide</button>
-      <button type="button" data-action="copy">Copy slug</button>
       <button type="button" data-action="delete" class="danger">Delete from gbrain</button>
     </div>
 

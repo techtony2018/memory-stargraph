@@ -8,7 +8,7 @@ const state = {
   hoverSlug: null,
   query: "",
   matchesOnly: false,
-  filters: { category: "", type: "", minDegree: 0 },
+  filters: { minDegree: 0 },
   nodes: [],
   edges: [],
   edgeTypeMap: new Map(),
@@ -18,6 +18,13 @@ const state = {
   isRefreshing: false,
   lastRefreshAt: null,
   autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
+  cloudMode: true,
+  hiddenClusters: new Set(),
+  hiddenHubConnections: new Set(),
+  categoryLimit: 5,
+  clusterLimit: 5,
+  timelineDays: 0,
+  tour: { active: false, slugs: [], index: 0, timer: null },
   lazySearch: { timer: null, query: "", loading: false },
   menuSlug: null,
   modalAction: null,
@@ -31,7 +38,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.35";
+const UI_VERSION = "V1.0.72";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -43,24 +50,32 @@ const refreshButton = document.getElementById("refreshButton");
 const autoRefreshToggle = document.getElementById("autoRefreshToggle");
 const autoRefreshInterval = document.getElementById("autoRefreshInterval");
 const lastRefresh = document.getElementById("lastRefresh");
-const categoryFilter = document.getElementById("categoryFilter");
-const typeFilter = document.getElementById("typeFilter");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
-const clearFiltersButton = document.getElementById("clearFiltersButton");
 const newNodeButton = document.getElementById("newNodeButton");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
 const zoomLevel = document.getElementById("zoomLevel");
+const cloudModeButton = document.getElementById("cloudModeButton");
+const cloudModeToggle = document.getElementById("cloudModeToggle");
+const timelineDaysInput = document.getElementById("timelineDaysInput");
+const timelineValue = document.getElementById("timelineValue");
+const tourButton = document.getElementById("tourButton");
+const tourPrevButton = document.getElementById("tourPrevButton");
+const tourNextButton = document.getElementById("tourNextButton");
 
 const detailTitle = document.getElementById("detailTitle");
+const timelineBadge = document.getElementById("timelineBadge");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
-const detailLinks = document.getElementById("detailLinks");
-const detailSecondRing = document.getElementById("detailSecondRing");
+const detailLinks = document.getElementById("detailLinks") || document.createElement("div");
+const detailSecondRing = document.getElementById("detailSecondRing") || document.createElement("div");
 const sourceBadge = document.getElementById("sourceBadge");
 const sourceMessage = document.getElementById("sourceMessage");
 const sourceWarnings = document.getElementById("sourceWarnings");
 const categoryLegend = document.getElementById("categoryLegend");
+const hubClusterLegend = document.getElementById("hubClusterLegend");
+const categoryLimitInput = document.getElementById("categoryLimitInput");
+const clusterLimitInput = document.getElementById("clusterLimitInput");
 const hiddenList = document.getElementById("hiddenList");
 const uiVersion = document.getElementById("uiVersion");
 const nodeMenuButton = document.getElementById("nodeMenuButton");
@@ -88,7 +103,6 @@ const modalPrimaryButton = document.getElementById("modalPrimaryButton");
 const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
 const metricDegree = document.getElementById("metricDegree");
-const metricCollapsed = document.getElementById("metricCollapsed");
 
 const CATEGORY_PALETTE = [
   "#88f6ff",
@@ -102,6 +116,15 @@ const CATEGORY_PALETTE = [
   "#b8f7d4",
   "#d8b7ff",
 ];
+
+function stableHash(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
 
 function hexToRgba(hex, alpha) {
   const cleaned = hex.replace("#", "");
@@ -221,13 +244,100 @@ function clampZoom(value) {
 
 function setZoom(value) {
   state.zoom = clampZoom(value);
-  zoomLevel.textContent = `${Math.round(state.zoom * 100)}%`;
+  if (zoomLevel) zoomLevel.textContent = `${Math.round(state.zoom * 100)}%`;
   projectAll();
+}
+
+function updateCloudModeControl() {
+  if (!cloudModeButton) return;
+  cloudModeButton.classList.toggle("is-on", state.cloudMode);
+  cloudModeButton.classList.toggle("is-off", !state.cloudMode);
+  cloudModeButton.setAttribute("aria-pressed", state.cloudMode ? "true" : "false");
+  cloudModeButton.setAttribute("aria-label", state.cloudMode ? "Clustering on" : "Clustering off");
+  const tooltip = state.cloudMode ? "Clustering is on. Click to turn it off." : "Clustering is off. Click to turn it on.";
+  cloudModeButton.dataset.tooltip = tooltip;
+  cloudModeButton.title = tooltip;
+  if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
 }
 
 function zoomBy(direction) {
   const factor = direction > 0 ? 1.14 : 1 / 1.14;
   setZoom(state.zoom * factor);
+}
+
+function buildTourSlugs() {
+  const seenCategories = new Set();
+  const candidates = visibleGraphNodes()
+    .filter((node) => state.filteredSlugs.has(node.slug))
+    .sort((left, right) => (right.degree || 0) - (left.degree || 0));
+  const diverse = [];
+  candidates.forEach((node) => {
+    const category = node.category || node.type || "entity";
+    if (seenCategories.has(category) || diverse.length >= 10) return;
+    seenCategories.add(category);
+    diverse.push(node.slug);
+  });
+  candidates.forEach((node) => {
+    if (diverse.length >= 14) return;
+    if (!diverse.includes(node.slug)) diverse.push(node.slug);
+  });
+  return diverse;
+}
+
+async function showTourStop(index) {
+  if (!state.tour.slugs.length) return;
+  state.tour.index = (index + state.tour.slugs.length) % state.tour.slugs.length;
+  const slug = state.tour.slugs[state.tour.index];
+  const node = state.nodeMap.get(slug);
+  if (!node) return;
+  hoverLabel.textContent = `Memory Tour ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
+  updateTourControls();
+  await loadEntity(slug, { source: "system" });
+}
+
+function stopTour() {
+  state.tour.active = false;
+  if (state.tour.timer) {
+    window.clearInterval(state.tour.timer);
+    state.tour.timer = null;
+  }
+  updateTourControls();
+}
+
+async function startTour() {
+  state.tour.slugs = buildTourSlugs();
+  if (!state.tour.slugs.length) return;
+  state.tour.active = true;
+  updateTourControls();
+  await showTourStop(state.tour.index || 0);
+  if (state.tour.timer) window.clearInterval(state.tour.timer);
+  state.tour.timer = window.setInterval(() => {
+    void showTourStop(state.tour.index + 1);
+  }, 5200);
+}
+
+function toggleTour() {
+  if (state.tour.active) {
+    stopTour();
+    return;
+  }
+  void startTour();
+}
+
+function moveTour(delta) {
+  if (!state.tour.slugs.length) {
+    state.tour.slugs = buildTourSlugs();
+  }
+  stopTour();
+  void showTourStop(state.tour.index + delta);
+}
+
+function updateTourControls() {
+  if (!tourButton) return;
+  tourButton.textContent = state.tour.active ? `Tour ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}` : "Memory Tour";
+  tourButton.classList.toggle("is-active", state.tour.active);
+  tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
+  tourButton.closest(".timeline-strip")?.classList.toggle("tour-active", state.tour.active);
 }
 
 function setSearchLoading(active) {
@@ -240,7 +350,7 @@ function setSearchLoading(active) {
 async function runLazySearch(query) {
   if (state.lazySearch.loading) return;
   const submittedQuery = String(query || "").trim();
-  if (submittedQuery.length < 3) return;
+  if (submittedQuery.length < 2) return;
   setSearchLoading(true);
   const selectionVersion = state.selectionVersion;
   try {
@@ -260,13 +370,13 @@ async function runLazySearch(query) {
 
 async function submitSearch() {
   const query = state.query.trim();
-  if (!query || query.length < 3 || state.lazySearch.loading) return;
+  if (!query || query.length < 2 || state.lazySearch.loading) return;
   await runLazySearch(query);
 }
 
 async function searchEntityLink(query) {
   const value = String(query || "").trim();
-  if (value.length < 3 || state.lazySearch.loading) return;
+  if (value.length < 2 || state.lazySearch.loading) return;
   closeModal();
   state.query = value;
   searchInput.value = value;
@@ -280,19 +390,23 @@ function isHidden(slug) {
 }
 
 function visibleGraphNodes() {
-  return state.nodes.filter((node) => !isHidden(node.slug));
+  return state.nodes.filter((node) => !isHidden(node.slug) && !isClusterHidden(node));
 }
 
 function normalizeSearchText(value) {
-  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value || "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 function pickSearchFocus(graph, query) {
   const normalizedQuery = normalizeSearchText(query);
   if (!normalizedQuery) return null;
   const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
+  const coverage = graph?.source?.coverage || {};
+  const searchSlugs = new Set(normalizeSearchText(coverage.last_search_query || "") === normalizedQuery
+    ? coverage.search_slugs || []
+    : []);
   const candidates = (graph.nodes || [])
-    .filter((node) => !isHidden(node.slug) && matchesQuery(node, normalizedQuery))
+    .filter((node) => !isHidden(node.slug) && (searchSlugs.has(node.slug) || matchesQuery(node, normalizedQuery)))
     .map((node) => {
       const label = normalizeSearchText(node.label);
       const slug = normalizeSearchText(node.slug);
@@ -300,7 +414,8 @@ function pickSearchFocus(graph, query) {
       const exactBoost = label === normalizedQuery || slug === normalizedQuery ? 100 : 0;
       const phraseBoost = label.includes(normalizedQuery) || slug.includes(normalizedQuery) ? 50 : 0;
       const termBoost = queryTerms.every((term) => label.includes(term) || slug.includes(term)) ? 20 : 0;
-      return { node, score: exactBoost + phraseBoost + termBoost + categoryBoost + (node.degree || 0) };
+      const backendBoost = searchSlugs.has(node.slug) ? 35 : 0;
+      return { node, score: exactBoost + phraseBoost + termBoost + backendBoost + categoryBoost + (node.degree || 0) };
     })
     .sort((left, right) => right.score - left.score || (right.node.degree || 0) - (left.node.degree || 0));
   return candidates[0]?.node.slug || null;
@@ -315,32 +430,40 @@ function buildRuntimeGraph(graph) {
   const height = state.viewport.height || 760;
   const categories = [...new Set(graph.nodes.map((node) => node.category || node.type || "entity"))];
   const categoryIndex = new Map(categories.map((category, index) => [category, index]));
+  const categorySlots = new Map();
   const visibleSpan = Math.min(width, height);
-  const cloudRadius = Math.max(170, visibleSpan * 0.28);
+  const cloudRadius = Math.max(170, visibleSpan * 0.3);
   const maxDegree = Math.max(1, graph.stats?.max_degree || 1);
   const nodes = graph.nodes.map((node, index) => {
     const category = node.category || node.type || "entity";
     const bandIndex = categoryIndex.get(category) || 0;
     const bandAngle = (Math.PI * 2 * bandIndex) / Math.max(categories.length, 1);
-    const localAngle = index * 2.399963229728653;
+    const slot = categorySlots.get(category) || 0;
+    categorySlots.set(category, slot + 1);
+    const localAngle = slot * 2.399963229728653 + bandIndex * 0.37;
     const degreeRatio = (node.degree || 0) / maxDegree;
     const hierarchyDepth = Math.min(3, Math.max(0, (node.slug.match(/\//g) || []).length));
-    const radius = cloudRadius * (0.46 + hierarchyDepth * 0.18 + (1 - degreeRatio) * 0.22);
-    const categoryPull = cloudRadius * 0.44;
-    const x3 = Math.cos(bandAngle) * categoryPull + Math.cos(localAngle) * radius;
-    const y3 = Math.sin(localAngle * 0.73) * radius * 0.72;
-    const z3 = Math.sin(bandAngle) * categoryPull + Math.sin(localAngle) * radius;
+    const clusterCore = state.cloudMode ? cloudRadius * 1.02 : 0;
+    const radius = state.cloudMode
+      ? cloudRadius * (0.14 + hierarchyDepth * 0.05 + (1 - degreeRatio) * 0.17)
+      : cloudRadius * (0.46 + hierarchyDepth * 0.18 + (1 - degreeRatio) * 0.22);
+    const verticalLift = state.cloudMode ? Math.sin(bandAngle * 1.7) * cloudRadius * 0.1 : 0;
+    const x3 = Math.cos(bandAngle) * clusterCore + Math.cos(localAngle) * radius;
+    const y3 = Math.sin(localAngle * 0.73) * radius * 0.58 + verticalLift;
+    const z3 = Math.sin(bandAngle) * clusterCore + Math.sin(localAngle) * radius;
+    const timeValue = Date.parse(node.updated_at || node.date || node.modified_at || "");
     return {
       ...node,
       category,
       x3,
       y3,
       z3,
+      timeMs: Number.isNaN(timeValue) ? null : timeValue,
       screenX: width / 2,
       screenY: height / 2,
       depth: 0,
       depthScale: 1,
-      pulseOffset: Math.random() * Math.PI * 2,
+      pulseOffset: (stableHash(node.slug) % 6283) / 1000,
     };
   });
   const nodeMap = new Map(nodes.map((node) => [node.slug, node]));
@@ -396,13 +519,14 @@ function projectAll() {
 }
 
 function updateMetrics(graph) {
-  const visibleSlugs = new Set(graph.nodes.filter((node) => !isHidden(node.slug)).map((node) => node.slug));
+  const visibleSlugs = state.filteredSlugs.size
+    ? new Set([...state.filteredSlugs].filter((slug) => !isHidden(slug)))
+    : new Set(graph.nodes.filter((node) => !isHidden(node.slug)).map((node) => node.slug));
   const visibleNodes = graph.nodes.filter((node) => visibleSlugs.has(node.slug));
   const visibleEdges = graph.edges.filter((edge) => visibleSlugs.has(edge.source) && visibleSlugs.has(edge.target));
   metricNodes.textContent = visibleNodes.length;
   metricEdges.textContent = visibleEdges.length;
   metricDegree.textContent = Math.max(0, ...visibleNodes.map((node) => node.degree || 0));
-  metricCollapsed.textContent = visibleNodes.reduce((sum, node) => sum + (node.parts_count || 0), 0);
 }
 
 function updateSource(source) {
@@ -424,14 +548,11 @@ function updateSource(source) {
 
 function getCategoryColor(category) {
   const value = category || "entity";
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length];
+  return CATEGORY_PALETTE[stableHash(value) % CATEGORY_PALETTE.length];
 }
 
 function updateCategoryLegend(graph) {
+  if (!graph) return;
   categoryLegend.innerHTML = "";
   const counts = new Map();
   graph.nodes.forEach((node) => {
@@ -441,38 +562,82 @@ function updateCategoryLegend(graph) {
   });
   [...counts.entries()]
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, state.categoryLimit)
     .forEach(([category, count]) => {
-      const item = document.createElement("span");
+      const item = document.createElement("button");
+      item.type = "button";
+      item.dataset.cluster = category;
+      item.className = state.hiddenClusters.has(category) ? "is-dimmed" : "is-active";
+      item.title = state.hiddenClusters.has(category) ? "Click to show this cluster" : "Click to hide this cluster";
+      const label = document.createElement("span");
+      label.className = "cluster-label";
       const swatch = document.createElement("i");
       swatch.style.backgroundColor = getCategoryColor(category);
-      item.appendChild(swatch);
-      item.append(`${category} (${count})`);
+      label.appendChild(swatch);
+      label.append(category);
+      const total = document.createElement("span");
+      total.className = "cluster-count";
+      total.textContent = count;
+      item.append(label, total);
+      item.addEventListener("click", () => {
+        if (state.hiddenClusters.has(category)) {
+          state.hiddenClusters.delete(category);
+        } else {
+          state.hiddenClusters.add(category);
+        }
+        updateCategoryLegend(state.graph);
+        applyFilter();
+      });
       categoryLegend.appendChild(item);
     });
 }
 
-function setSelectOptions(select, values, currentValue) {
-  const nextValues = ["", ...values];
-  select.innerHTML = "";
-  nextValues.forEach((value) => {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value || "All";
-    select.appendChild(option);
+function updateHubClusterLegend() {
+  if (!hubClusterLegend) return;
+  hubClusterLegend.innerHTML = "";
+  const hubs = state.nodes
+    .filter((node) => !isHidden(node.slug) && !isClusterHidden(node) && (node.degree || 0) > 0)
+    .sort((left, right) => (right.degree || 0) - (left.degree || 0) || (left.label || left.slug).localeCompare(right.label || right.slug))
+    .slice(0, state.clusterLimit);
+  hubs.forEach((node) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.dataset.hub = node.slug;
+    item.className = state.hiddenHubConnections.has(node.slug) ? "is-dimmed" : "is-active";
+    item.title = state.hiddenHubConnections.has(node.slug)
+      ? "Click to show this hub's direct connections"
+      : "Click to hide this hub's direct connections";
+    const label = document.createElement("span");
+    label.className = "cluster-label";
+    const swatch = document.createElement("i");
+    swatch.style.backgroundColor = getNodeColor(node);
+    label.appendChild(swatch);
+    label.append(shortLabel(node.label || node.slug, 24));
+    const total = document.createElement("span");
+    total.className = "cluster-count";
+    total.textContent = node.degree || 0;
+    item.append(label, total);
+    item.addEventListener("click", () => {
+      if (state.hiddenHubConnections.has(node.slug)) {
+        state.hiddenHubConnections.delete(node.slug);
+      } else {
+        state.hiddenHubConnections.add(node.slug);
+      }
+      updateHubClusterLegend();
+      applyFilter();
+    });
+    hubClusterLegend.appendChild(item);
   });
-  select.value = nextValues.includes(currentValue) ? currentValue : "";
+  if (!hubs.length) {
+    const empty = document.createElement("p");
+    empty.className = "hidden-empty";
+    empty.textContent = "No hubs available";
+    hubClusterLegend.appendChild(empty);
+  }
 }
 
 function updateFilterOptions(graph) {
-  const categories = new Set();
-  const types = new Set();
-  graph.nodes.forEach((node) => {
-    if (isHidden(node.slug)) return;
-    categories.add(node.category || node.type || "entity");
-    types.add(node.type || "entity");
-  });
-  setSelectOptions(categoryFilter, [...categories].sort(), state.filters.category);
-  setSelectOptions(typeFilter, [...types].sort(), state.filters.type);
+  return graph;
 }
 
 function updateHiddenList() {
@@ -511,32 +676,68 @@ function matchesQuery(node, query) {
   if (!query) {
     return true;
   }
+  const coverage = state.graph?.source?.coverage || {};
+  const lastSearchQuery = normalizeSearchText(coverage.last_search_query || "");
+  const normalizedQuery = normalizeSearchText(query);
+  if (lastSearchQuery && normalizedQuery && lastSearchQuery === normalizedQuery && (coverage.search_slugs || []).includes(node.slug)) {
+    return true;
+  }
   const haystack = [node.slug, node.label, node.type, node.category, node.summary, ...(node.tags || []), ...(node.collapsed_children || []), ...(node.collapsed_aliases || [])]
     .join(" ")
-    .toLowerCase();
-  const looseHaystack = haystack.replace(/[^a-z0-9]+/g, " ");
-  const looseQuery = query.replace(/[^a-z0-9]+/g, " ");
+    .toLocaleLowerCase();
+  const looseHaystack = normalizeSearchText(haystack);
+  const looseQuery = normalizedQuery;
   const queryTerms = looseQuery.split(/\s+/).filter(Boolean);
   const contentTerms = queryTerms.filter((term) => term !== "part" && !/^\d{1,3}$/.test(term));
   return haystack.includes(query)
-    || looseHaystack.includes(looseQuery)
-    || queryTerms.every((term) => looseHaystack.includes(term))
+    || (looseQuery && looseHaystack.includes(looseQuery))
+    || (queryTerms.length > 0 && queryTerms.every((term) => looseHaystack.includes(term)))
     || (contentTerms.length > 0 && contentTerms.every((term) => looseHaystack.includes(term)));
+}
+
+function timelineCutoffMs() {
+  if (!state.timelineDays) return null;
+  return Date.now() - state.timelineDays * 24 * 60 * 60 * 1000;
+}
+
+function passesTimeline(node) {
+  const cutoff = timelineCutoffMs();
+  if (!cutoff || !node.timeMs) return true;
+  return node.timeMs >= cutoff;
+}
+
+function isClusterHidden(node) {
+  return state.hiddenClusters.has(node.category || node.type || "entity");
+}
+
+function isHiddenByHubConnection(node) {
+  if (!node || state.hiddenHubConnections.has(node.slug)) return false;
+  for (const hubSlug of state.hiddenHubConnections) {
+    const hub = state.nodeMap.get(hubSlug);
+    if (hub?.links?.includes(node.slug) || node.links?.includes(hubSlug)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function updateTimelineLabel() {
+  if (!timelineValue) return;
+  timelineValue.textContent = "days";
+  if (timelineDaysInput) timelineDaysInput.value = String(state.timelineDays);
 }
 
 function applyFilter() {
   const query = state.query.trim().toLowerCase();
-  const { category, type, minDegree } = state.filters;
+  const { minDegree } = state.filters;
   const matchSlugs = new Set();
   const filteredSlugs = new Set();
 
   state.nodes.forEach((node) => {
-    if (isHidden(node.slug)) return;
+    if (isHidden(node.slug) || isClusterHidden(node) || isHiddenByHubConnection(node)) return;
     const isMatch = matchesQuery(node, query);
-    const passesCategory = !category || (node.category || node.type || "entity") === category;
-    const passesType = !type || (node.type || "entity") === type;
     const passesDegree = (node.degree || 0) >= minDegree;
-    const passesFilters = passesCategory && passesType && passesDegree;
+    const passesFilters = passesDegree && passesTimeline(node);
     if (isMatch) {
       matchSlugs.add(node.slug);
     }
@@ -545,22 +746,14 @@ function applyFilter() {
     }
   });
 
-  if (!query) {
-    state.nodes.forEach((node) => {
-      if (isHidden(node.slug)) return;
-      const passesCategory = !category || (node.category || node.type || "entity") === category;
-      const passesType = !type || (node.type || "entity") === type;
-      const passesDegree = (node.degree || 0) >= minDegree;
-      if (passesCategory && passesType && passesDegree) filteredSlugs.add(node.slug);
-    });
-  }
-
   state.matchSlugs = matchSlugs;
   state.filteredSlugs = filteredSlugs;
 
   if (state.focusSlug && !filteredSlugs.has(state.focusSlug)) {
     state.focusSlug = null;
   }
+  if (state.graph) updateMetrics(state.graph);
+  updateHubClusterLegend();
 }
 
 function getNodeColor(node) {
@@ -601,6 +794,8 @@ function nodeAlpha(node) {
   if (isHidden(node.slug)) {
     return 0;
   }
+  if (isLinkedToFocus(node)) return 0.95;
+  if (isClusterHidden(node) || isHiddenByHubConnection(node)) return 0;
   if (!state.filteredSlugs.has(node.slug)) {
     return 0.06;
   }
@@ -616,7 +811,14 @@ function nodeAlpha(node) {
 }
 
 function edgeAlpha(edge) {
-  if (isHidden(edge.source.slug) || isHidden(edge.target.slug)) return 0;
+  if (
+    isHidden(edge.source.slug)
+    || isHidden(edge.target.slug)
+    || isClusterHidden(edge.source)
+    || isClusterHidden(edge.target)
+    || isHiddenByHubConnection(edge.source)
+    || isHiddenByHubConnection(edge.target)
+  ) return 0;
   const visible = state.filteredSlugs.has(edge.source.slug) && state.filteredSlugs.has(edge.target.slug);
   if (!visible) return 0;
   if (!state.focusSlug) {
@@ -630,6 +832,14 @@ function edgeAlpha(edge) {
   }
   const isNear = edge.source.links.includes(state.focusSlug) || edge.target.links.includes(state.focusSlug);
   return isNear ? 0.2 : 0.06;
+}
+
+function edgeLayer(edge) {
+  if (!state.focusSlug && !state.hoverSlug) return 0;
+  if (edge.source.slug === state.hoverSlug || edge.target.slug === state.hoverSlug) return 2;
+  if (edge.source.slug === state.focusSlug || edge.target.slug === state.focusSlug) return 2;
+  if (edge.source.links.includes(state.focusSlug) || edge.target.links.includes(state.focusSlug)) return 1;
+  return 0;
 }
 
 function tick() {
@@ -665,20 +875,69 @@ function drawBackground() {
   }
 }
 
+function degreeIntensity(node) {
+  const maxDegree = Math.max(1, state.graph?.stats?.max_degree || 1);
+  return Math.max(0, Math.min(1, (node.degree || 0) / maxDegree));
+}
+
+function drawClusterClouds() {
+  if (!state.cloudMode || !state.filteredSlugs.size) return;
+  const groups = new Map();
+  state.nodes.forEach((node) => {
+    if (!state.filteredSlugs.has(node.slug) || isHidden(node.slug) || isClusterHidden(node) || isHiddenByHubConnection(node)) return;
+    const alpha = nodeAlpha(node);
+    if (alpha <= 0) return;
+    const key = node.category || node.type || "entity";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(node);
+  });
+
+  ctx.save();
+  groups.forEach((nodes, category) => {
+    if (nodes.length < 4) return;
+    const color = getCategoryColor(category);
+    const centerX = nodes.reduce((sum, node) => sum + node.screenX, 0) / nodes.length;
+    const centerY = nodes.reduce((sum, node) => sum + node.screenY, 0) / nodes.length;
+    const averageDistance = nodes.reduce((sum, node) => sum + Math.hypot(node.screenX - centerX, node.screenY - centerY), 0) / nodes.length;
+    const hubBoost = Math.max(...nodes.map((node) => degreeIntensity(node)));
+    const radius = Math.max(74, Math.min(260, averageDistance * 1.85 + hubBoost * 48));
+    const cloud = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+    cloud.addColorStop(0, hexToRgba(color, 0.16 + hubBoost * 0.08));
+    cloud.addColorStop(0.55, hexToRgba(color, 0.07));
+    cloud.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = cloud;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
 function drawEdges() {
-  state.edges.forEach((edge) => {
+  [...state.edges].sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
     const alpha = edgeAlpha(edge);
     if (alpha <= 0) return;
+    const layer = edgeLayer(edge);
     const isHoveredFocusEdge = state.focusSlug
       && state.hoverSlug
       && edge.source.slug !== edge.target.slug
       && ((edge.source.slug === state.focusSlug && edge.target.slug === state.hoverSlug)
         || (edge.target.slug === state.focusSlug && edge.source.slug === state.hoverSlug));
-    const depthAlpha = Math.max(0.35, Math.min(1.15, (edge.source.depthScale + edge.target.depthScale) / 2));
-    ctx.strokeStyle = `rgba(143, 168, 255, ${alpha * depthAlpha})`;
+    const depthAlpha = Math.max(0.28, Math.min(1, (edge.source.depthScale + edge.target.depthScale) / 2));
+    const screenDistance = Math.hypot(edge.source.screenX - edge.target.screenX, edge.source.screenY - edge.target.screenY);
+    const nearFactor = Math.max(0.25, 1 - screenDistance / Math.max(420, state.viewport.width * 0.55));
+    const sameCluster = (edge.source.category || edge.source.type) === (edge.target.category || edge.target.type);
+    const clusterColor = sameCluster ? getNodeColor(edge.source) : null;
+    const baseAlpha = alpha * depthAlpha * (0.42 + nearFactor * 0.58);
+    const strokeColor = layer === 2
+      ? `rgba(255, 198, 111, ${Math.min(0.72, baseAlpha + 0.1)})`
+      : layer === 1
+        ? (clusterColor ? hexToRgba(clusterColor, Math.min(0.34, baseAlpha + 0.04)) : `rgba(136, 246, 255, ${Math.min(0.32, baseAlpha + 0.04)})`)
+        : (clusterColor ? hexToRgba(clusterColor, Math.min(0.16, baseAlpha)) : `rgba(94, 112, 172, ${Math.min(0.14, baseAlpha)})`);
+    ctx.strokeStyle = strokeColor;
     ctx.lineWidth = isHoveredFocusEdge
-      ? 3
-      : edge.source.slug === state.focusSlug || edge.target.slug === state.focusSlug || edge.source.slug === state.hoverSlug || edge.target.slug === state.hoverSlug ? 1.8 : 1;
+      ? 1.8
+      : layer === 2 ? 1.25 + nearFactor * 0.35 : layer === 1 ? 0.72 + nearFactor * 0.32 : 0.32 + nearFactor * 0.24;
     ctx.beginPath();
     ctx.moveTo(edge.source.screenX, edge.source.screenY);
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
@@ -724,10 +983,18 @@ function shortLabel(text, limit = 26) {
 
 function briefSummary(node) {
   const text = String(node?.summary || "").replace(/\s+/g, " ").trim();
-  if (!text || text === "No summary available.") {
+  if (!text || text === "No summary available." || ["summary", "metadata"].includes(text.toLowerCase())) {
     return "No summary available.";
   }
   return shortLabel(text, 150);
+}
+
+function displaySummary(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || value === "No summary available." || ["summary", "metadata"].includes(value.toLowerCase())) {
+    return "No meaningful summary is available for this node yet.";
+  }
+  return value;
 }
 
 function visibleSearchMatches() {
@@ -738,11 +1005,23 @@ function visibleSearchMatches() {
     .map((node) => node.slug);
 }
 
-function shouldShowLabel(node, topMatches) {
+function visibleTopHubs(limit = 8) {
+  return state.nodes
+    .filter((node) => !isHidden(node.slug) && !isClusterHidden(node) && state.filteredSlugs.has(node.slug))
+    .sort((left, right) => (right.degree || 0) - (left.degree || 0))
+    .slice(0, limit)
+    .map((node) => node.slug);
+}
+
+function shouldShowLabel(node, topMatches, topHubs) {
   if (node.slug === state.focusSlug || node.slug === state.hoverSlug) return true;
   if (isLinkedToFocus(node)) return true;
   if (state.query && topMatches.has(node.slug)) return true;
-  const threshold = Math.max(8, (state.graph?.stats?.max_degree || 1) * 0.35);
+  if (topHubs.has(node.slug)) return true;
+  if (state.zoom < 1.35) return false;
+  const threshold = state.zoom >= 1.85
+    ? Math.max(2, (state.graph?.stats?.max_degree || 1) * 0.12)
+    : Math.max(5, (state.graph?.stats?.max_degree || 1) * 0.24);
   return (node.degree || 0) >= threshold;
 }
 
@@ -756,14 +1035,25 @@ function labelForNode(node) {
   if (state.query && state.matchSlugs.has(node.slug)) {
     return shortLabel(node.label, 24);
   }
-  return `${node.category || node.type} · ${node.degree || 0}`;
+  return shortLabel(node.label, state.zoom >= 1.85 ? 26 : 20);
+}
+
+function intersectsAny(rect, rects) {
+  return rects.some((item) => !(
+    rect.right < item.left
+    || rect.left > item.right
+    || rect.bottom < item.top
+    || rect.top > item.bottom
+  ));
 }
 
 function drawNodes() {
   const now = performance.now();
   const topMatches = new Set(visibleSearchMatches());
+  const topHubs = new Set(visibleTopHubs());
   const ordered = [...state.nodes].sort((left, right) => left.depth - right.depth);
   const visibleLabelSlugs = [];
+  const labelRects = [];
   ordered.forEach((node) => {
     if (isHidden(node.slug)) return;
     const alpha = nodeAlpha(node);
@@ -771,22 +1061,35 @@ function drawNodes() {
     const pulse = 1 + Math.sin(now / 700 + node.pulseOffset) * 0.06;
     const radius = Math.max(3.5, node.size * pulse * node.depthScale);
     const color = getNodeColor(node);
+    const hubIntensity = degreeIntensity(node);
+    const hubGlow = state.cloudMode ? hubIntensity : hubIntensity * 0.65;
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    const glow = ctx.createRadialGradient(node.screenX, node.screenY, 0, node.screenX, node.screenY, radius * 3.2);
-    glow.addColorStop(0, hexToRgba(color, 0.36));
+    const glow = ctx.createRadialGradient(node.screenX, node.screenY, 0, node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8));
+    glow.addColorStop(0, hexToRgba(color, 0.28 + hubGlow * 0.32));
+    glow.addColorStop(0.42, hexToRgba(color, 0.12 + hubGlow * 0.16));
     glow.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(node.screenX, node.screenY, radius * 3.2, 0, Math.PI * 2);
+    ctx.arc(node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8), 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = color;
+    ctx.shadowColor = hexToRgba(color, 0.5 + hubGlow * 0.35);
+    ctx.shadowBlur = 4 + hubGlow * 18;
     ctx.beginPath();
-    ctx.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+    ctx.arc(node.screenX, node.screenY, radius * (1 + hubGlow * 0.1), 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (hubIntensity > 0.22) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.52, 0.12 + hubIntensity * 0.42)})`;
+      ctx.beginPath();
+      ctx.arc(node.screenX - radius * 0.22, node.screenY - radius * 0.24, Math.max(1.4, radius * 0.28), 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     const focusStroke = node.slug === state.focusSlug;
     const neighborStroke = isLinkedToFocus(node);
@@ -826,13 +1129,22 @@ function drawNodes() {
       }
     }
 
-    if (shouldShowLabel(node, topMatches)) {
-      visibleLabelSlugs.push(node.slug);
+    if (shouldShowLabel(node, topMatches, topHubs)) {
       const labelX = node.screenX + radius + 8;
       const labelY = node.screenY - radius - 6;
-      ctx.fillStyle = "rgba(238, 244, 255, 0.92)";
+      const label = labelForNode(node);
       ctx.font = "600 12px Inter, sans-serif";
-      ctx.fillText(labelForNode(node), labelX, labelY);
+      const labelWidth = ctx.measureText(label).width;
+      const rect = { left: labelX - 2, top: labelY - 13, right: labelX + labelWidth + 2, bottom: labelY + 4 };
+      const required = node.slug === state.focusSlug || node.slug === state.hoverSlug || isLinkedToFocus(node);
+      if (!required && intersectsAny(rect, labelRects)) {
+        ctx.restore();
+        return;
+      }
+      labelRects.push(rect);
+      visibleLabelSlugs.push(node.slug);
+      ctx.fillStyle = "rgba(238, 244, 255, 0.92)";
+      ctx.fillText(label, labelX, labelY);
     }
 
     ctx.restore();
@@ -843,6 +1155,7 @@ function drawNodes() {
 function render() {
   drawBackground();
   tick();
+  drawClusterClouds();
   drawEdges();
   drawNodes();
   state.animationHandle = requestAnimationFrame(render);
@@ -851,6 +1164,13 @@ function render() {
 function setHover(slug) {
   state.hoverSlug = slug;
   const node = slug ? state.nodeMap.get(slug) : null;
+  const hasDesktopPointer = window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches;
+  const idleHint = hasDesktopPointer
+    ? "Drag to rotate. Hover for full names. Click to select."
+    : "Drag to rotate. Tap for full names. Long-press a node to select.";
+  const emptyHint = hasDesktopPointer
+    ? "Search the sky, drag to rotate, hover for details, or click a node to select."
+    : "Search the sky, drag to rotate, tap for details, or long-press a node to select.";
   const partText = node?.parts_count ? ` · ${node.parts_count} collapsed parts` : "";
   const reportText = node?.report_count ? ` · ${node.report_count} collapsed reports` : "";
   const linkTypes = node && state.focusSlug && node.slug !== state.focusSlug && isLinkedToFocus(node)
@@ -860,8 +1180,8 @@ function setHover(slug) {
   hoverLabel.textContent = node
     ? `${node.label} · ${node.category || node.type} · ${node.degree} direct link${node.degree === 1 ? "" : "s"}${partText}${reportText}${relationshipText}`
     : state.focusSlug
-      ? "Drag to rotate. Hover or tap for full names. Long-press a node to select."
-      : "Search the sky, drag to rotate, tap for details, or long-press a node to select.";
+      ? idleHint
+      : emptyHint;
 }
 
 function hideGraphTooltip() {
@@ -943,8 +1263,11 @@ function splitList(value) {
 }
 
 function mediaDisplayUrl(url) {
-  const value = String(url || "").trim();
+  let value = String(url || "").trim();
   if (!value) return "";
+  if (value.startsWith("gbrain:files/")) {
+    value = value.slice("gbrain:files/".length);
+  }
   if (/^https?:\/\//i.test(value)) return value;
   if (value.startsWith("/")) return encodeURI(value);
   return `/media/${value.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`;
@@ -963,10 +1286,19 @@ function appendTextWithBreaks(parent, text) {
   });
 }
 
+function createEntityMarkdownLink(query, label = query) {
+  const link = document.createElement("a");
+  const entityQuery = String(query || "").trim();
+  link.href = `#entity:${encodeURIComponent(entityQuery)}`;
+  link.dataset.entityQuery = entityQuery;
+  link.textContent = String(label || query || "").trim();
+  return link;
+}
+
 function appendInlineMarkdown(parent, text) {
-  const pattern = /(!?)\[([^\]]+)\]\(([^)]+)\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
+  const pattern = /(!?)\[([^\]]+)\]\(([^)]+)\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\[([^\]\s/]+(?:\/[^\]\s/]+)+)\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
   let cursor = 0;
-  String(text || "").replace(pattern, (match, bang, label, url, wikiTarget, wikiLabel, code, boldItalic, bold, italicStar, boldUnderscore, italicUnderscore, strike, offset) => {
+  String(text || "").replace(pattern, (match, bang, label, url, wikiTarget, wikiLabel, bracketSlug, code, boldItalic, bold, italicStar, boldUnderscore, italicUnderscore, strike, offset) => {
     if (offset > cursor) appendTextWithBreaks(parent, text.slice(cursor, offset));
     if (code !== undefined) {
       const codeNode = document.createElement("code");
@@ -991,16 +1323,14 @@ function appendInlineMarkdown(parent, text) {
       appendInlineMarkdown(del, strike);
       parent.appendChild(del);
     } else if (wikiTarget !== undefined) {
-      const link = document.createElement("a");
-      link.href = `#entity:${encodeURIComponent(wikiTarget.trim())}`;
-      link.dataset.entityQuery = wikiTarget.trim();
-      link.textContent = (wikiLabel || wikiTarget).trim();
-      parent.appendChild(link);
+      parent.appendChild(createEntityMarkdownLink(wikiTarget, wikiLabel || wikiTarget));
+    } else if (bracketSlug !== undefined) {
+      parent.appendChild(createEntityMarkdownLink(bracketSlug));
     } else if (bang) {
       const image = document.createElement("img");
       image.src = mediaDisplayUrl(cleanMarkdownDestination(url));
       image.alt = label || "Markdown image";
-      image.loading = "lazy";
+      image.loading = "eager";
       parent.appendChild(image);
     } else {
       const link = document.createElement("a");
@@ -1161,16 +1491,30 @@ function renderMarkdownView(markdown) {
 
 function renderViewModalMessage(slug) {
   modalMessage.textContent = "";
-  modalMessage.appendChild(document.createTextNode("Rendered from gbrain markdown. Use "));
+  const slugText = document.createElement("span");
+  slugText.className = "modal-slug-inline";
+  slugText.textContent = `slug: ${slug}`;
+  modalMessage.appendChild(slugText);
   const editButton = document.createElement("button");
   editButton.type = "button";
-  editButton.className = "inline-link-button";
+  editButton.className = "ghost-button compact-button inline-action-button";
   editButton.textContent = "Modify markdown";
   editButton.addEventListener("click", () => {
     void openNodeModal("edit", slug);
   });
   modalMessage.appendChild(editButton);
-  modalMessage.appendChild(document.createTextNode(" if you want to edit this page."));
+}
+
+function timelineOutputHasEntries(output) {
+  const text = String(output || "").trim();
+  if (!text || text === "(No timeline entries)") return false;
+  return !/no timeline/i.test(text);
+}
+
+function setTimelineBadge(slug, visible) {
+  if (!timelineBadge) return;
+  timelineBadge.hidden = !visible;
+  timelineBadge.dataset.slug = visible ? slug : "";
 }
 
 function renderMediaItems(items) {
@@ -1315,6 +1659,86 @@ function appendField(container, labelText, input) {
   label.append(span, input);
   container.appendChild(label);
   return input;
+}
+
+function renderTimelineEventForm() {
+  modalForm.innerHTML = "";
+  const today = new Date().toISOString().slice(0, 10);
+
+  const dateInput = document.createElement("input");
+  dateInput.id = "operationTimelineDate";
+  dateInput.type = "date";
+  dateInput.value = today;
+  appendField(modalForm, "Date", dateInput);
+
+  const summaryInput = document.createElement("input");
+  summaryInput.id = "operationTimelineSummary";
+  summaryInput.placeholder = "Short timeline summary";
+  summaryInput.autocomplete = "off";
+  appendField(modalForm, "Summary", summaryInput);
+
+  const detailInput = document.createElement("textarea");
+  detailInput.id = "operationTimelineDetail";
+  detailInput.placeholder = "Optional detail";
+  appendField(modalForm, "Detail", detailInput);
+
+  const sourceInput = document.createElement("input");
+  sourceInput.id = "operationTimelineSource";
+  sourceInput.placeholder = "Optional source";
+  sourceInput.autocomplete = "off";
+  appendField(modalForm, "Source", sourceInput);
+}
+
+function renderGraphQueryForm(slug) {
+  modalForm.innerHTML = "";
+  const node = state.nodeMap.get(slug);
+
+  const typeInput = document.createElement("input");
+  typeInput.id = "operationGraphLinkType";
+  typeInput.setAttribute("list", "operationGraphLinkTypeOptions");
+  typeInput.placeholder = "All relationship types";
+  appendField(modalForm, "Relationship type", typeInput);
+  modalForm.appendChild(makeDatalist(
+    "operationGraphLinkTypeOptions",
+    allKnownRelationshipTypes(),
+    (type) => type,
+    (type) => type,
+  ));
+
+  const directionSelect = document.createElement("select");
+  directionSelect.id = "operationGraphDirection";
+  [
+    ["both", "Both directions"],
+    ["outgoing", "Outgoing"],
+    ["incoming", "Incoming"],
+  ].forEach(([value, label]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    directionSelect.appendChild(option);
+  });
+  appendField(modalForm, "Direction", directionSelect);
+
+  const depthSelect = document.createElement("select");
+  depthSelect.id = "operationGraphDepth";
+  ["1", "2", "3"].forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    depthSelect.appendChild(option);
+  });
+  depthSelect.value = "1";
+  appendField(modalForm, "Depth", depthSelect);
+
+  const summary = document.createElement("p");
+  summary.className = "operation-summary";
+  const updateSummary = () => {
+    const relationship = typeInput.value.trim() || "all relationship types";
+    summary.textContent = `${node?.label || slug} · ${directionSelect.selectedOptions[0]?.textContent || "Both directions"} · ${relationship} · depth ${depthSelect.value}`;
+  };
+  [typeInput, directionSelect, depthSelect].forEach((input) => input.addEventListener("input", updateSummary));
+  updateSummary();
+  modalForm.appendChild(summary);
 }
 
 function renderCheckboxGroup(container, title, values, name) {
@@ -1489,6 +1913,7 @@ function closeModal() {
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
   modalCancelButton.disabled = false;
+  modalCancelButton.textContent = "Cancel";
 }
 
 async function openNodeModal(action, slug = state.focusSlug) {
@@ -1539,6 +1964,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
+  modalCancelButton.textContent = "Cancel";
   modalPrimaryButton.classList.remove("danger");
 
   if (action === "view" || action === "edit") {
@@ -1623,22 +2049,35 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "backlinks") {
-    modalKicker.textContent = "Show backlinks";
-    modalPrimaryButton.textContent = "Load backlinks";
-    modalMessage.textContent = "Loads incoming gbrain links for this node.";
-    modalEditor.value = `slug: ${slug}`;
+    modalKicker.textContent = "Backlinks";
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalEditor.readOnly = true;
+    modalMessage.textContent = "Loading backlinks...";
+    modalEditor.value = "Loading backlinks...";
     modalEditor.readOnly = true;
     operationModal.hidden = false;
+    state.modalAction = { action: "result", slug, label };
+    const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {});
+    if (!response.ok) {
+      modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
+      modalEditor.value = modalMessage.textContent;
+      return;
+    }
+    modalMessage.textContent = "Incoming gbrain links for this node.";
+    modalEditor.value = response.data.output || "(No backlinks)";
     return;
   }
 
   if (action === "graph-query") {
     modalKicker.textContent = "Graph query from here";
     modalPrimaryButton.textContent = "Run graph query";
-    modalMessage.textContent = "Filters typed graph traversal by relationship type, direction, and depth.";
-    modalEditor.value = "link_type: \ndirection: both\ndepth: 1";
+    modalMessage.textContent = "Choose traversal settings. Leave relationship type blank to include all types.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderGraphQueryForm(slug);
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalForm.querySelector("#operationGraphLinkType")?.focus();
     return;
   }
 
@@ -1649,6 +2088,25 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.value = `slug: ${slug}`;
     modalEditor.readOnly = true;
     operationModal.hidden = false;
+    return;
+  }
+
+  if (action === "timeline-view") {
+    modalKicker.textContent = "Timeline";
+    modalPrimaryButton.textContent = "Add timeline event";
+    modalCancelButton.textContent = "Close";
+    modalMessage.textContent = "Read-only gbrain timeline. Add a dated event here when something new should be recorded.";
+    modalEditor.hidden = true;
+    modalMarkdown.hidden = false;
+    operationModal.hidden = false;
+    renderMarkdownView("Loading timeline...");
+    const response = await apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`);
+    if (!response.ok) {
+      modalMessage.textContent = `Unable to load timeline: ${response.data?.error || response.status}`;
+      renderMarkdownView("");
+      return;
+    }
+    renderMarkdownView(response.data.output || "(No timeline entries)");
     return;
   }
 
@@ -1680,9 +2138,11 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Add timeline event";
     modalPrimaryButton.textContent = "Add event";
     modalMessage.textContent = "Adds a dated timeline entry to this gbrain page.";
-    modalEditor.value = "date: YYYY-MM-DD\nsummary: \ndetail: \nsource: ";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    renderTimelineEventForm();
     operationModal.hidden = false;
-    modalEditor.focus();
+    modalForm.querySelector("#operationTimelineDate")?.focus();
     return;
   }
 
@@ -1806,6 +2266,10 @@ async function runModalPrimaryAction() {
     closeModal();
     return;
   }
+  if (action === "timeline-view") {
+    await openNodeModal("timeline", slug);
+    return;
+  }
   if (action === "delete" && modalConfirmInput.value !== label) {
     modalMessage.textContent = `Type the full node name exactly before deleting: ${label}`;
     modalConfirmInput.focus();
@@ -1904,17 +2368,23 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "timeline") {
-      const fields = parseOperationFields(modalEditor.value);
+      const date = modalForm.querySelector("#operationTimelineDate")?.value.trim() || "";
+      const summary = modalForm.querySelector("#operationTimelineSummary")?.value.trim() || "";
+      const detail = modalForm.querySelector("#operationTimelineDetail")?.value.trim() || "";
+      const source = modalForm.querySelector("#operationTimelineSource")?.value.trim() || "";
+      if (!date || !summary) {
+        throw new Error("Date and summary are required.");
+      }
       const response = await apiPost(`/api/entity-timeline/${encodeURIComponent(slug)}`, {
-        date: fields.date,
-        summary: fields.summary,
-        detail: fields.detail,
-        source: fields.source,
+        date,
+        summary,
+        detail,
+        source,
       });
       if (!response.ok) throw new Error(response.data?.error || `Timeline update failed with ${response.status}`);
-      closeModal();
       applyGraphPayload(response.data.graph, slug);
       await loadEntity(slug, { source: "system" });
+      await openNodeModal("timeline-view", slug);
       return;
     }
     if (action === "ask") {
@@ -1956,19 +2426,30 @@ async function runModalPrimaryAction() {
       return;
     }
     if (action === "graph-query") {
-      const fields = parseOperationFields(modalEditor.value);
+      const linkType = modalForm.querySelector("#operationGraphLinkType")?.value.trim() || "";
+      const direction = modalForm.querySelector("#operationGraphDirection")?.value || "both";
+      const depth = modalForm.querySelector("#operationGraphDepth")?.value || "1";
+      if (!["both", "outgoing", "incoming"].includes(direction)) {
+        throw new Error("Choose a valid direction.");
+      }
+      if (!["1", "2", "3"].includes(depth)) {
+        throw new Error("Choose a depth from 1 to 3.");
+      }
       const response = await apiPost(`/api/entity-graph-query/${encodeURIComponent(slug)}`, {
-        link_type: fields.link_type,
-        direction: fields.direction,
-        depth: fields.depth,
+        link_type: linkType,
+        direction,
+        depth,
       });
       if (!response.ok) throw new Error(response.data?.error || `Graph query failed with ${response.status}`);
       state.modalAction = { action: "result", slug, label };
       modalKicker.textContent = "Graph query results";
       modalPrimaryButton.textContent = "Close";
       modalCancelButton.hidden = true;
-      modalEditor.readOnly = true;
-      modalEditor.value = response.data.output || "(No output)";
+      modalForm.hidden = true;
+      modalEditor.hidden = true;
+      modalMarkdown.hidden = false;
+      modalMessage.textContent = `${label} · ${direction} · ${linkType || "all relationship types"} · depth ${depth}`;
+      renderMarkdownView(response.data.output || "(No output)");
       return;
     }
     if (action === "attach-file") {
@@ -2043,6 +2524,7 @@ async function loadEntity(slug, options = {}) {
   state.focusSlug = slug;
   if (requestedNode) {
     detailTitle.textContent = requestedNode.label || slug;
+    setTimelineBadge(slug, false);
     detailType.textContent = `${requestedNode.category || requestedNode.type || "entity"} · ${shouldExpand ? "loading direct links" : "loading details"}`;
     detailSummary.textContent = shouldExpand
       ? `Loading direct neighbors for ${requestedNode.label || slug}...`
@@ -2063,6 +2545,7 @@ async function loadEntity(slug, options = {}) {
   const { entity, neighbors, second_ring: secondRing, source } = payload;
   state.focusSlug = entity.slug;
   detailTitle.textContent = entity.label;
+  setTimelineBadge(entity.slug, false);
   const partText = entity.parts_count ? ` · ${entity.parts_count} collapsed parts` : "";
   const reportText = entity.report_count ? ` · ${entity.report_count} collapsed reports` : "";
   detailType.textContent = `${entity.category || entity.type} · ${entity.type} · ${entity.degree} direct link${entity.degree === 1 ? "" : "s"}${partText}${reportText}`;
@@ -2070,10 +2553,19 @@ async function loadEntity(slug, options = {}) {
     entity.parts_count ? `Collapsed ${entity.parts_count} document parts into this entity.` : "",
     entity.report_count ? `Collapsed ${entity.report_count} dated usage reports into this entity.` : "",
   ].filter(Boolean).join(" ");
+  const summaryText = displaySummary(entity.summary);
   detailSummary.textContent = collapseNote
-    ? `${entity.summary || "No summary available."} ${collapseNote}`
-    : entity.summary || "No summary available.";
+    ? `${summaryText} ${collapseNote}`
+    : summaryText;
   updateSource(source);
+  void refreshTimelineBadge(entity.slug, loadId);
+  state.visibleLabelSlugs = [
+    ...new Set([
+      ...state.visibleLabelSlugs,
+      entity.slug,
+      ...neighbors.filter((neighbor) => !isHidden(neighbor.slug)).map((neighbor) => neighbor.slug),
+    ]),
+  ];
 
   detailLinks.innerHTML = "";
   neighbors.forEach((neighbor) => {
@@ -2125,6 +2617,18 @@ async function loadEntity(slug, options = {}) {
   setHover(slug);
 }
 
+async function refreshTimelineBadge(slug, loadId = state.entityLoadId) {
+  try {
+    const response = await apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`);
+    if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
+    setTimelineBadge(slug, response.ok && timelineOutputHasEntries(response.data?.output));
+  } catch (_error) {
+    if (loadId === state.entityLoadId && state.focusSlug === slug) {
+      setTimelineBadge(slug, false);
+    }
+  }
+}
+
 async function focusFallbackNode() {
   const fallback = visibleGraphNodes().sort((left, right) => (right.degree || 0) - (left.degree || 0))[0];
   if (fallback) {
@@ -2133,6 +2637,7 @@ async function focusFallbackNode() {
   }
   state.focusSlug = null;
   detailTitle.textContent = "No visible node";
+  setTimelineBadge("", false);
   detailType.textContent = "";
   detailSummary.textContent = "Use the Hidden List to show nodes again.";
   detailLinks.innerHTML = "";
@@ -2243,28 +2748,47 @@ function bindEvents() {
     applyFilter();
   });
 
-  categoryFilter.addEventListener("change", (event) => {
-    state.filters.category = event.target.value;
-    applyFilter();
-  });
-
-  typeFilter.addEventListener("change", (event) => {
-    state.filters.type = event.target.value;
-    applyFilter();
-  });
-
   minDegreeFilter.addEventListener("input", (event) => {
     state.filters.minDegree = Math.max(0, Number.parseInt(event.target.value, 10) || 0);
     applyFilter();
   });
 
-  clearFiltersButton.addEventListener("click", () => {
-    state.filters = { category: "", type: "", minDegree: 0 };
-    categoryFilter.value = "";
-    typeFilter.value = "";
-    minDegreeFilter.value = "0";
+  const setCloudMode = (enabled) => {
+    state.cloudMode = enabled;
+    updateCloudModeControl();
+    if (state.graph) {
+      buildRuntimeGraph(state.graph);
+      applyFilter();
+    }
+  };
+
+  cloudModeToggle?.addEventListener("change", (event) => {
+    setCloudMode(event.target.checked);
+  });
+
+  cloudModeButton?.addEventListener("click", () => {
+    setCloudMode(!state.cloudMode);
+  });
+
+  categoryLimitInput?.addEventListener("input", (event) => {
+    state.categoryLimit = Math.max(1, Math.min(50, Number.parseInt(event.target.value, 10) || 5));
+    updateCategoryLegend(state.graph);
+  });
+
+  clusterLimitInput?.addEventListener("input", (event) => {
+    state.clusterLimit = Math.max(1, Math.min(50, Number.parseInt(event.target.value, 10) || 5));
+    updateHubClusterLegend();
+  });
+
+  timelineDaysInput?.addEventListener("input", (event) => {
+    state.timelineDays = Math.max(0, Math.min(7, Number.parseInt(event.target.value, 10) || 0));
+    updateTimelineLabel();
     applyFilter();
   });
+
+  tourButton?.addEventListener("click", toggleTour);
+  tourPrevButton?.addEventListener("click", () => moveTour(-1));
+  tourNextButton?.addEventListener("click", () => moveTour(1));
 
   refreshButton.addEventListener("click", async () => {
     await fetchGraph("/api/refresh", { preserveFocus: true });
@@ -2296,15 +2820,16 @@ function bindEvents() {
     showContextMenu(state.focusSlug, rect.left, rect.bottom + 6);
   });
 
+  timelineBadge?.addEventListener("click", () => {
+    const slug = timelineBadge.dataset.slug || state.focusSlug;
+    void openNodeModal("timeline-view", slug);
+  });
+
   contextMenu.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
     const action = button.dataset.action;
     const slug = state.menuSlug || state.focusSlug;
-    if (action === "copy") {
-      void copySlug(slug);
-      return;
-    }
     if (action === "hide") {
       void hideNode(slug);
       return;
@@ -2632,6 +3157,9 @@ async function fetchHidden() {
 async function init() {
   bindEvents();
   uiVersion.textContent = UI_VERSION;
+  if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
+  updateCloudModeControl();
+  updateTimelineLabel();
   setZoom(state.zoom);
   await fetchHidden();
   await fetchGraph();

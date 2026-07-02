@@ -12,6 +12,8 @@
   "media_roots": ["media", "data/media"],
   "media_discovery_roots": ["media", "data/media", "data/uploads"],
   "remote_media_base_urls": [],
+  "gbrain_file_base_urls": [],
+  "gbrain_file_store_roots": [],
   "media_fetch_timeout_seconds": 8,
   "max_upload_bytes": 26214400
 }

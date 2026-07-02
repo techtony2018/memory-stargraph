@@ -8,6 +8,7 @@ from server import (
     GraphStore,
     append_attachment_reference,
     collapse_part_identity,
+    collect_seed_graph,
     ensure_media_references_available,
     expand_raw_graph,
     finalize_graph,
@@ -16,6 +17,7 @@ from server import (
     parse_backlink_types,
     parse_backlinks,
     parse_frontmatter,
+    extract_summary_from_markdown_body,
     parse_link_types,
     materialize_local_media_for_slug,
     parse_multipart_form,
@@ -26,6 +28,9 @@ from server import (
     resolve_media_file_path,
     run_gbrain,
     serve_url_for_media_reference,
+    gbrain_file_url_for_relative_path,
+    materialize_gbrain_file_reference,
+    copy_file_to_gbrain_store,
 )
 
 
@@ -44,6 +49,20 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["type"], "person")
         self.assertEqual(rows[1]["title"], "JTuner")
 
+    def test_collect_seed_graph_keeps_index_when_root_expansion_times_out(self):
+        def fake_run_gbrain(*args, **_kwargs):
+            if args[:2] == ("list", "-n"):
+                return "people/tony-guan\tperson\t2026-06-27\tTony Guan\n"
+            raise TimeoutError("root graph timed out")
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = collect_seed_graph()
+
+        slugs = {node["slug"] for node in graph["nodes"]}
+        self.assertIn("index", slugs)
+        self.assertIn("people/tony-guan", slugs)
+        self.assertFalse(graph["source"]["coverage"]["root_index_loaded"])
+
     def test_parse_search_results_reads_scores_slugs_and_previews(self):
         output = "[0.7772] organizations/erfapac -- # Equal Rights For All PAC (ERFA PAC)\n[0.7384] products/jtuner/rfc/part-03 -- Binary preview\n"
         rows = parse_search_results(output)
@@ -59,6 +78,20 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(friendly_label("organizations/stopprop16", "Organizations/stopprop16"), "Stopprop16")
         self.assertEqual(friendly_label("categories/people", "Categories/people"), "People")
         self.assertEqual(friendly_label("people/tony-guan", "Tony Guan"), "Tony Guan")
+        self.assertEqual(make_label("people/melonplanter-uhx51x2s12"), "Melonplanter")
+        self.assertEqual(friendly_label("people/melonplanter-uhx51x2s12", "Melonplanter Uhx51x2s12"), "Melonplanter")
+        self.assertEqual(make_label("wechat-groups/voter-id-26239915567"), "Voter Id")
+        self.assertEqual(friendly_label("wechat-groups/voter-id-26239915567", "Voter Id 26239915567"), "Voter Id")
+        self.assertEqual(make_label("wechat-group-members/melonplanter-uhx51x2s12"), "Melonplanter")
+        self.assertEqual(friendly_label("wechat-group-members/melonplanter-uhx51x2s12", "Melonplanter Uhx51x2s12"), "Melonplanter")
+        self.assertEqual(make_label("people/wechat-group-members/wechat-member-42lwbvt012"), "Wechat Member")
+        self.assertEqual(
+            friendly_label("people/wechat-group-members/wechat-member-42lwbvt012", "李伟平"),
+            "李伟平",
+        )
+        self.assertEqual(friendly_label("groups/wechat/svca-vip-27108422220", "SVCA VIP 聊天室 27108422220"), "SVCA VIP 聊天室")
+        self.assertEqual(friendly_label("groups/wechat/very-long-title", "X" * 120), "XXXXXXXXXXXXXXXXX...")
+        self.assertLessEqual(len(friendly_label("notes/very-long-title", "X" * 120)), 20)
 
     def test_parse_backlinks_reads_inbound_edges(self):
         output = """[
@@ -131,6 +164,43 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(meta["tags"], ["gc-tuning", "jtuner"])
         self.assertIn("Body text", body)
 
+    def test_summary_extraction_prefers_article_content_over_metadata(self):
+        body = """# Blog Post
+
+## Metadata
+
+- Author: Example
+- Published: 2026-07-01
+
+## Content
+
+This is the actual article body that should appear in the selection summary.
+
+## Comments
+
+- Nice post.
+"""
+        summary = extract_summary_from_markdown_body(body, "Blog Post", "blog_post")
+
+        self.assertIn("actual article body", summary)
+        self.assertNotIn("Metadata", summary)
+        self.assertNotIn("Author:", summary)
+
+    def test_summary_extraction_prefers_profile_sections_for_people(self):
+        body = """# Example Person
+
+## Metadata
+
+- Source: import
+
+## Profile
+
+An engineering leader focused on developer tools and knowledge systems.
+"""
+        summary = extract_summary_from_markdown_body(body, "Example Person", "person")
+
+        self.assertEqual(summary, "An engineering leader focused on developer tools and knowledge systems.")
+
     def test_parse_media_references_reads_markdown_and_html_media(self):
         markdown = """# Media
 
@@ -154,6 +224,16 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(media[0]["kind"], "image")
         self.assertEqual(media[0]["url"], "people/example-person/Profile Photo.jpeg")
         self.assertEqual(media[0]["served_url"], "/media/people/example-person/Profile%20Photo.jpeg")
+
+    def test_parse_media_references_supports_gbrain_files_scheme(self):
+        markdown = "![MSN](gbrain:files/blogs/tony-guan/msn/post/photo.jpg)"
+
+        media = parse_media_references(markdown)
+
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]["kind"], "image")
+        self.assertEqual(media[0]["url"], "gbrain:files/blogs/tony-guan/msn/post/photo.jpg")
+        self.assertEqual(media[0]["served_url"], "/media/blogs/tony-guan/msn/post/photo.jpg")
 
     def test_parse_media_references_reads_frontmatter_profile_image(self):
         with TemporaryDirectory() as tmpdir:
@@ -283,6 +363,14 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
         self.assertIsNone(remote_media_url_for_relative_path("file:///tmp/media", "companies/example/logo.jpg"))
         self.assertIsNone(remote_media_url_for_relative_path("https://example.test/media", "../secret.jpg"))
 
+    def test_gbrain_file_url_for_relative_path_encodes_path_segments(self):
+        self.assertEqual(
+            gbrain_file_url_for_relative_path("https://gbrain-host.example/gbrain-files", "blogs/example post/photo 1.jpg"),
+            "https://gbrain-host.example/gbrain-files/blogs/example%20post/photo%201.jpg",
+        )
+        self.assertIsNone(gbrain_file_url_for_relative_path("file:///tmp/gbrain-files", "blogs/example/photo.jpg"))
+        self.assertIsNone(gbrain_file_url_for_relative_path("https://gbrain-host.example/gbrain-files", "../secret.jpg"))
+
     def test_ensure_media_references_fetches_from_remote_media_base(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "served"
@@ -313,6 +401,65 @@ cover_image: companies/example-inc/logo.jpg
             self.assertEqual(enriched[0]["materialized_from"], "https://gbrain-host.example/media/companies/example-inc/logo.jpg")
             self.assertEqual((media_root / "companies/example-inc/logo.jpg").read_bytes(), b"remote jpg")
             urlopen_mock.assert_called_once()
+
+    def test_ensure_media_references_fetches_gbrain_files_from_file_base(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+            media = parse_media_references("![MSN](gbrain:files/blogs/example-post/photo 1.jpg)")
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    return False
+
+                def read(self):
+                    return b"gbrain jpg"
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.MEDIA_DISCOVERY_ROOTS", []),
+                mock.patch("server.GBRAIN_FILE_BASE_URLS", ["https://gbrain-host.example/gbrain-files/"]),
+                mock.patch("server.REMOTE_MEDIA_BASE_URLS", []),
+                mock.patch("server.urlopen", return_value=FakeResponse()) as urlopen_mock,
+            ):
+                enriched = ensure_media_references_available(media)
+
+            self.assertTrue(enriched[0]["served_available"])
+            self.assertEqual(enriched[0]["materialized_from"], "https://gbrain-host.example/gbrain-files/blogs/example-post/photo%201.jpg")
+            self.assertEqual((media_root / "blogs/example-post/photo 1.jpg").read_bytes(), b"gbrain jpg")
+            urlopen_mock.assert_called_once()
+
+    def test_materialize_gbrain_file_reference_reads_gbrain_store_root(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+            store_root = Path(tmpdir) / "brain"
+            source = store_root / "blogs/example-post/photo.jpg"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"stored jpg")
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.GBRAIN_FILE_STORE_ROOTS", [store_root]),
+            ):
+                result = materialize_gbrain_file_reference("blogs/example-post/photo.jpg")
+
+            self.assertTrue(result["served_available"])
+            self.assertEqual(result["source"], str(source.resolve()))
+            self.assertEqual((media_root / "blogs/example-post/photo.jpg").read_bytes(), b"stored jpg")
+
+    def test_copy_file_to_gbrain_store_writes_storage_path(self):
+        with TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "upload.jpg"
+            source.write_bytes(b"uploaded jpg")
+            store_root = Path(tmpdir) / "brain"
+
+            with mock.patch("server.GBRAIN_FILE_STORE_ROOTS", [store_root]):
+                destination = copy_file_to_gbrain_store(source, "people/example/upload.jpg")
+
+            self.assertEqual(destination, store_root / "people/example/upload.jpg")
+            self.assertEqual(destination.read_bytes(), b"uploaded jpg")
 
     def test_parse_multipart_form_reads_browser_file_upload(self):
         boundary = "----memory-stargraph-test"
@@ -420,6 +567,12 @@ cover_image: companies/example-inc/logo.jpg
                 {"slug": "companies/uber", "label": "Companies/uber", "type": "company", "links": []},
                 {"slug": "organizations/stopprop16", "label": "Organizations/stopprop16", "type": "organization", "links": []},
                 {"slug": "categories/people", "label": "Categories/people", "type": "category", "links": []},
+                {"slug": "people/melonplanter-uhx51x2s12", "label": "Melonplanter Uhx51x2s12", "type": "person", "links": []},
+                {"slug": "wechat-groups/voter-id-26239915567", "label": "Voter Id 26239915567", "type": "wechat-group", "links": []},
+                {"slug": "wechat-group-members/melonplanter-uhx51x2s12", "label": "Melonplanter Uhx51x2s12", "type": "person", "links": []},
+                {"slug": "people/wechat-group-members/wechat-member-42lwbvt012", "label": "李伟平", "type": "person", "links": []},
+                {"slug": "groups/wechat/svca-vip-27108422220", "label": "SVCA VIP 聊天室 27108422220", "type": "group", "links": []},
+                {"slug": "notes/very-long-title", "label": "X" * 120, "type": "note", "links": []},
             ],
         }
         graph = finalize_graph(raw_graph)
@@ -428,6 +581,13 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(labels["companies/uber"], "Uber")
         self.assertEqual(labels["organizations/stopprop16"], "Stopprop16")
         self.assertEqual(labels["categories/people"], "People")
+        self.assertEqual(labels["people/melonplanter-uhx51x2s12"], "Melonplanter")
+        self.assertEqual(labels["wechat-groups/voter-id-26239915567"], "Voter Id")
+        self.assertEqual(labels["wechat-group-members/melonplanter-uhx51x2s12"], "Melonplanter")
+        self.assertEqual(labels["people/wechat-group-members/wechat-member-42lwbvt012"], "李伟平")
+        self.assertEqual(labels["groups/wechat/svca-vip-27108422220"], "SVCA VIP 聊天室")
+        self.assertEqual(labels["notes/very-long-title"], "XXXXXXXXXXXXXXXXX...")
+        self.assertTrue(all(len(label) <= 20 for label in labels.values()))
 
     def test_finalize_graph_blocks_unwanted_tony_gu_entity(self):
         raw_graph = {
@@ -552,7 +712,8 @@ cover_image: companies/example-inc/logo.jpg
         slugs = {node["slug"] for node in graph["nodes"]}
 
         self.assertNotIn("agent/reports/gbrain-usage-2026-04-16", slugs)
-        self.assertEqual(collapsed["label"], "Agent/reports/gbrain Usage")
+        self.assertEqual(collapsed["label"], "Gbrain Usage")
+        self.assertLessEqual(len(collapsed["label"]), 20)
         self.assertEqual(collapsed["report_count"], 2)
         self.assertEqual(collapsed["degree"], 2)
         self.assertEqual(graph["stats"]["collapsed_reports"], 2)
@@ -591,6 +752,74 @@ cover_image: companies/example-inc/logo.jpg
             ]
         )
         self.assertEqual(invalidate.call_count, 6)
+
+    def test_graph_store_uses_cache_for_fast_startup(self):
+        store = GraphStore()
+        cached = {
+            "title": "Memory Stargraph",
+            "source": {"mode": "cache", "status": "cached-startup"},
+            "nodes": [{"slug": "index", "label": "Index", "links": [], "degree": 0}],
+            "edges": [],
+        }
+        with mock.patch("server.cached_startup_graph", return_value=cached), mock.patch("server.collect_seed_graph") as collect:
+            graph = store.get_seed_graph()
+
+        self.assertIs(graph, cached)
+        collect.assert_not_called()
+
+    def test_graph_query_falls_back_to_loaded_graph_when_database_url_is_missing(self):
+        store = GraphStore()
+        graph = {
+            "title": "Memory Stargraph",
+            "source": {"mode": "test", "status": "ok"},
+            "nodes": [
+                {
+                    "slug": "people/tony-guan",
+                    "label": "Tony Guan",
+                    "type": "person",
+                    "category": "people",
+                    "summary": "Person",
+                    "links": ["companies/azul-systems"],
+                    "degree": 1,
+                },
+                {
+                    "slug": "companies/azul-systems",
+                    "label": "Azul Systems",
+                    "type": "company",
+                    "category": "companies",
+                    "summary": "Company",
+                    "links": ["people/tony-guan"],
+                    "degree": 1,
+                },
+            ],
+            "edges": [
+                {
+                    "source": "people/tony-guan",
+                    "target": "companies/azul-systems",
+                    "types": ["employed by"],
+                }
+            ],
+        }
+        with mock.patch("server.run_gbrain", side_effect=RuntimeError("No database URL: database_url is missing from config")), mock.patch.object(
+            store,
+            "expand_entity",
+            return_value=graph,
+        ):
+            output = store.graph_query("people/tony-guan", "employed by", "both", "1")
+
+        self.assertIn("Remote-safe fallback", output)
+        self.assertIn("people/tony-guan --employed by-> companies/azul-systems", output)
+        self.assertIn("Azul Systems", output)
+
+    def test_entity_media_reads_slug_even_when_not_loaded_in_seed_graph(self):
+        store = GraphStore()
+        markdown = "![MSN](gbrain:files/blogs/tony-guan/msn/post/photo.jpg)"
+
+        with mock.patch("server.run_gbrain", return_value=markdown):
+            media = store.get_entity_media("blogs/tony-guan/msn/post")
+
+        self.assertEqual(media[0]["url"], "gbrain:files/blogs/tony-guan/msn/post/photo.jpg")
+        self.assertEqual(media[0]["served_url"], "/media/blogs/tony-guan/msn/post/photo.jpg")
 
 
 if __name__ == "__main__":

@@ -8,10 +8,12 @@ import mimetypes
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import threading
 import time
-from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict, deque
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +38,8 @@ DEFAULT_CONFIG = {
     "media_roots": ["media", "data/media"],
     "media_discovery_roots": ["media", "data/media", "data/uploads"],
     "remote_media_base_urls": [],
+    "gbrain_file_base_urls": [],
+    "gbrain_file_store_roots": [],
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
 }
@@ -92,10 +96,24 @@ REMOTE_MEDIA_BASE_URLS = [
     )
     if str(url).strip()
 ]
+GBRAIN_FILE_BASE_URLS = [
+    url.rstrip("/") + "/"
+    for url in (
+        [value.strip() for value in str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILE_BASE_URLS", "")).split(",") if value.strip()]
+        or CONFIG.get("gbrain_file_base_urls", [])
+    )
+    if str(url).strip()
+]
+GBRAIN_FILE_STORE_ROOTS = [
+    resolve_project_path(root)
+    for root in str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILE_STORE_ROOTS", "")).split(",")
+    if root.strip()
+] or [resolve_project_path(root) for root in CONFIG.get("gbrain_file_store_roots", [])]
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.35"
+UI_VERSION = "V1.0.72"
+MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
@@ -119,6 +137,7 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "add-link", "method": "POST", "endpoint": "/api/entity-link/<slug>", "mutates_gbrain": True},
     {"action": "remove-link", "method": "POST", "endpoint": "/api/entity-unlink/<slug>", "mutates_gbrain": True},
     {"action": "tags", "method": "POST", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": True},
+    {"action": "timeline-view", "method": "GET", "endpoint": "/api/entity-timeline-view/<slug>", "mutates_gbrain": False},
     {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
@@ -128,7 +147,7 @@ MEDIA_EXTENSIONS = {
     "image": {".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"},
     "video": {".m4v", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm"},
     "audio": {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav", ".webm"},
-    "document": {".pdf"},
+    "document": {".doc", ".docx", ".odt", ".pdf", ".rtf", ".rtfd"},
 }
 
 
@@ -312,7 +331,7 @@ def decode_process_output(value):
     return value or ""
 
 
-def run_gbrain(*args, input_text=None):
+def run_gbrain(*args, input_text=None, timeout=20):
     if not GBRAIN.exists():
         raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
     command = [str(GBRAIN), *args]
@@ -323,7 +342,7 @@ def run_gbrain(*args, input_text=None):
         command,
         cwd=ROOT,
         capture_output=True,
-        timeout=20,
+        timeout=timeout,
         check=False,
         env=env,
         input=input_text.encode("utf-8") if isinstance(input_text, str) else input_text,
@@ -497,8 +516,18 @@ def is_supported_media_path(path):
     return media_kind_for_url(path) != "link"
 
 
-def safe_media_relative_path(value):
+GBRAIN_FILE_SCHEME = "gbrain:files/"
+
+
+def normalize_media_reference(value):
     text = str(value or "").strip()
+    if text.startswith(GBRAIN_FILE_SCHEME):
+        return text[len(GBRAIN_FILE_SCHEME) :]
+    return text
+
+
+def safe_media_relative_path(value):
+    text = normalize_media_reference(value)
     if text.startswith("/media/"):
         text = text.split("/media/", 1)[1]
     if not text or urlparse(text).scheme or text.startswith(("/", "\\")):
@@ -586,6 +615,22 @@ def find_media_source_file(relative_path):
     return None
 
 
+def find_gbrain_stored_file(relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    for root in GBRAIN_FILE_STORE_ROOTS:
+        expanded_root = root.expanduser()
+        candidate = (expanded_root / safe_path).resolve()
+        try:
+            candidate.relative_to(expanded_root.resolve())
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def copy_media_source_to_root(source_path, relative_path):
     destination = media_destination_for_relative_path(relative_path)
     if not destination:
@@ -602,6 +647,25 @@ def copy_media_source_to_root(source_path, relative_path):
         "served_available": bool(resolve_media_file_path(served_url)),
         "source": str(source),
     }
+
+
+def copy_file_to_gbrain_store(source_path, relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path or not GBRAIN_FILE_STORE_ROOTS:
+        return None
+    source = Path(source_path).expanduser()
+    if not source.is_file() or not is_supported_media_path(source.name):
+        return None
+    for root in GBRAIN_FILE_STORE_ROOTS:
+        destination = root.expanduser() / safe_path
+        try:
+            destination.resolve().relative_to(root.expanduser().resolve())
+        except ValueError:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return destination
+    return None
 
 
 def extract_first_http_url(text):
@@ -638,6 +702,16 @@ def remote_media_url_for_relative_path(base_url, relative_path):
     return str(base_url).rstrip("/") + "/" + "/".join(quote(part) for part in safe_path.parts)
 
 
+def gbrain_file_url_for_relative_path(base_url, relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    parsed = urlparse(str(base_url or ""))
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    return str(base_url).rstrip("/") + "/" + "/".join(quote(part) for part in safe_path.parts)
+
+
 def try_gbrain_signed_media_url(relative_path):
     try:
         output = run_gbrain("files", "signed-url", str(relative_path))
@@ -657,6 +731,17 @@ def ensure_media_reference_available(item):
     source_file = find_media_source_file(relative_path)
     if source_file:
         result = copy_media_source_to_root(source_file, relative_path)
+    if not result and str(item.get("url") or "").strip().startswith(GBRAIN_FILE_SCHEME):
+        for base_url in GBRAIN_FILE_BASE_URLS:
+            gbrain_file_url = gbrain_file_url_for_relative_path(base_url, relative_path)
+            if not gbrain_file_url:
+                continue
+            try:
+                result = download_media_url_to_root(gbrain_file_url, relative_path)
+            except Exception:  # noqa: BLE001
+                result = None
+            if result:
+                break
     if not result:
         for base_url in REMOTE_MEDIA_BASE_URLS:
             remote_url = remote_media_url_for_relative_path(base_url, relative_path)
@@ -684,6 +769,42 @@ def ensure_media_reference_available(item):
 
 def ensure_media_references_available(items):
     return [ensure_media_reference_available(dict(item)) for item in items]
+
+
+def materialize_gbrain_file_reference(relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return None
+    served_url = media_served_url_for_relative_path(safe_path)
+    if served_url and resolve_media_file_path(served_url):
+        return {
+            "served_available": True,
+            "source": "media-cache",
+            "served_url": served_url,
+        }
+    stored_file = find_gbrain_stored_file(safe_path)
+    if stored_file:
+        return copy_media_source_to_root(stored_file, safe_path)
+    source_file = find_media_source_file(safe_path)
+    if source_file:
+        return copy_media_source_to_root(source_file, safe_path)
+    for base_url in REMOTE_MEDIA_BASE_URLS:
+        remote_url = remote_media_url_for_relative_path(base_url, safe_path)
+        if not remote_url:
+            continue
+        try:
+            result = download_media_url_to_root(remote_url, safe_path)
+        except Exception:  # noqa: BLE001
+            result = None
+        if result:
+            return result
+    signed_url = try_gbrain_signed_media_url(safe_path)
+    if signed_url:
+        try:
+            return download_media_url_to_root(signed_url, safe_path)
+        except Exception:  # noqa: BLE001
+            return None
+    return None
 
 
 def local_media_destination_for_slug(slug, file_path, raw_markdown=""):
@@ -983,12 +1104,57 @@ def edge_types_payload(edge_types):
     ]
 
 
+def is_wechat_category(slug):
+    slug_text = str(slug or "").strip().lower()
+    segments = [segment for segment in slug_text.split("/") if segment]
+    return any(segment.startswith("wechat") for segment in segments)
+
+
+def strip_wechat_identity_suffix(value):
+    text = str(value or "").strip()
+    cleaned = re.sub(
+        r"[-_\s]+(?:\d{6,}|(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8,})$",
+        "",
+        text,
+    ).strip()
+    return cleaned or text
+
+
+def is_people_category(slug):
+    slug_text = str(slug or "").strip().lower()
+    category = slug_text.split("/", 1)[0] if "/" in slug_text else slug_text
+    return category == "people"
+
+
+def strip_people_identity_suffix(value):
+    text = str(value or "").strip()
+    cleaned = re.sub(
+        r"[-_\s]+(?:\d{5,}|(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8,})$",
+        "",
+        text,
+    ).strip()
+    return cleaned or text
+
+
+def limit_display_label(value, fallback=""):
+    text = str(value or "").strip() or str(fallback or "").strip()
+    if len(text) <= MAX_DISPLAY_LABEL_CHARS:
+        return text
+    if MAX_DISPLAY_LABEL_CHARS <= 3:
+        return text[:MAX_DISPLAY_LABEL_CHARS]
+    return f"{text[:MAX_DISPLAY_LABEL_CHARS - 3].rstrip()}..."
+
+
 def make_label(slug):
     slug_text = str(slug or "").strip().rstrip("/")
     leaf = slug_text.split("/")[-1] if "/" in slug_text else slug_text
+    if is_wechat_category(slug_text):
+        leaf = strip_wechat_identity_suffix(leaf)
+    elif is_people_category(slug_text):
+        leaf = strip_people_identity_suffix(leaf)
     cleaned = leaf.replace("-", " ").replace("_", " ").strip()
     words = [word.capitalize() for word in cleaned.split()]
-    return " ".join(words) if words else slug_text
+    return limit_display_label(" ".join(words) if words else slug_text)
 
 
 def friendly_label(slug, label=None):
@@ -999,7 +1165,110 @@ def friendly_label(slug, label=None):
     category = slug_text.split("/", 1)[0].lower() if "/" in slug_text else ""
     if category and label_text.lower().startswith(f"{category}/"):
         return make_label(slug_text)
-    return label_text
+    if is_wechat_category(slug_text):
+        cleaned = strip_wechat_identity_suffix(label_text)
+        return limit_display_label(cleaned, make_label(slug_text))
+    if is_people_category(slug_text):
+        cleaned = strip_people_identity_suffix(label_text)
+        return limit_display_label(cleaned, make_label(slug_text))
+    return limit_display_label(label_text, make_label(slug_text))
+
+
+def is_placeholder_entity_summary(summary):
+    text = str(summary or "").strip().lower()
+    return (
+        not text
+        or text in {"summary", "metadata", "no summary available."}
+        or text.startswith("metadata\n")
+        or text.startswith("discovered by lazy")
+    )
+
+
+def markdown_sections(body):
+    text = str(body or "")
+    sections = []
+    current_heading = ""
+    current_lines = []
+    for line in text.splitlines():
+        heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            if current_heading or current_lines:
+                sections.append((current_heading, "\n".join(current_lines).strip()))
+            current_heading = heading.group(1).strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_heading or current_lines:
+        sections.append((current_heading, "\n".join(current_lines).strip()))
+    return sections
+
+
+def clean_summary_candidate(block, label=""):
+    cleaned = re.sub(r"(?m)^#+\s*", "", str(block or "").strip()).strip()
+    cleaned = re.sub(r"(?m)^[-*]\s*(Source file|Source|Author|Published|Collection|Date|Tags?):.*$", "", cleaned).strip()
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", cleaned).strip()
+    cleaned = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", cleaned)
+    cleaned = re.sub(r"\[\[([^\]]+)\]\]", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    label_text = str(label or "").strip()
+    if not cleaned or cleaned == label_text:
+        return ""
+    if cleaned.lower() in {"summary", "metadata", "attachments", "media", "comments"}:
+        return ""
+    if cleaned.startswith("[["):
+        return ""
+    return cleaned
+
+
+def extract_summary_from_markdown_body(body, label="", entity_type=""):
+    sections = markdown_sections(body)
+    entity_type_text = str(entity_type or "").lower()
+    skip_headings = {"metadata", "attachments", "attached photo", "media", "comments", "links", "timeline"}
+    profile_headings = ["summary", "about", "profile", "bio", "biography", "description", "overview"]
+    article_headings = ["content", "body", "article", "post"]
+    preferred_headings = article_headings if any(token in entity_type_text for token in ("post", "blog", "article")) else profile_headings + article_headings
+    candidates = []
+    for wanted in preferred_headings:
+        for heading, content in sections:
+            if heading.strip().lower() == wanted:
+                candidates.extend(re.split(r"\n\s*\n", content))
+    for heading, content in sections:
+        heading_key = heading.strip().lower()
+        if heading_key in skip_headings:
+            continue
+        candidates.extend(re.split(r"\n\s*\n", content))
+    for block in candidates:
+        cleaned = clean_summary_candidate(block, label)
+        if cleaned:
+            return cleaned[:1000]
+    return ""
+
+
+def is_placeholder_wechat_member_label(slug, label=None):
+    slug_text = str(slug or "").strip().lower()
+    label_text = str(label or "").strip().lower()
+    leaf = slug_text.rsplit("/", 1)[-1]
+    return leaf.startswith("wechat-member") or label_text in {"wechat member", "wechat-member"}
+
+
+def wechat_identity_token(slug):
+    leaf = str(slug or "").strip().lower().rsplit("/", 1)[-1]
+    match = re.search(r"wechat-(?:member|friend)-(.+)$", leaf)
+    return match.group(1) if match else ""
+
+
+def alias_label_for_wechat_member(slug, node_map):
+    token = wechat_identity_token(slug)
+    if not token or not node_map:
+        return ""
+    for candidate_slug, candidate in node_map.items():
+        if candidate_slug == slug or wechat_identity_token(candidate_slug) != token:
+            continue
+        label = str(candidate.get("label") or "").strip()
+        if label and not is_placeholder_wechat_member_label(candidate_slug, label):
+            return friendly_label(slug, label)
+    return ""
 
 
 def collapse_part_identity(slug, label=None):
@@ -1049,6 +1318,8 @@ def collect_seed_graph():
     slugs = [row["slug"] for row in page_rows] or parse_slugs(raw_list)
     if not slugs:
         raise RuntimeError("gbrain list returned no detectable slugs")
+    if ROOT_INDEX_SLUG not in slugs:
+        slugs.insert(0, ROOT_INDEX_SLUG)
 
     row_by_slug = {row["slug"]: row for row in page_rows}
     nodes = []
@@ -1297,6 +1568,7 @@ def search_raw_graph(raw_graph, query):
     coverage = dict(source.get("coverage") or {})
     coverage["search_results"] = len(results)
     coverage["last_search_query"] = query
+    coverage["search_slugs"] = [result["slug"] for result in results]
     source.update(
         {
             "mode": "gbrain",
@@ -1325,6 +1597,21 @@ def read_cache():
     if int(payload.get("view_schema_version") or 0) < VIEW_SCHEMA_VERSION:
         return None
     return finalize_graph(payload)
+
+
+def cached_startup_graph():
+    cached = read_cache()
+    if not cached:
+        return None
+    cached = dict(cached)
+    cached["ui_version"] = UI_VERSION
+    cached["view_schema_version"] = VIEW_SCHEMA_VERSION
+    cached_source = dict(cached.get("source") or {})
+    cached_source["mode"] = "cache"
+    cached_source["status"] = "cached-startup"
+    cached_source["message"] = "Using cached graph for fast startup. Refresh Graph reloads live gbrain data."
+    cached["source"] = cached_source
+    return cached
 
 
 def write_cache(payload):
@@ -1383,11 +1670,12 @@ def finalize_graph(raw_graph):
         if not slug:
             continue
         normalized_slug = normalize_slug(slug) if " " in slug else slug
-        item_label = friendly_label(normalized_slug, item.get("label"))
+        raw_item_label = str(item.get("label") or "").strip()
+        item_label = friendly_label(normalized_slug, raw_item_label)
         if normalized_slug in deleted_slugs or is_blocked_entity(normalized_slug, item_label):
             continue
-        item_label = friendly_label(normalized_slug, item.get("label"))
-        group_slug, group_label, collapsed, collapse_kind = graph_identity(normalized_slug, item_label)
+        group_slug, raw_group_label, collapsed, collapse_kind = graph_identity(normalized_slug, raw_item_label or item_label)
+        group_label = friendly_label(group_slug, raw_group_label)
         raw_to_group[normalized_slug] = group_slug
         incoming_tags = set(item.get("tags") or [])
         node = node_map.setdefault(
@@ -1529,6 +1817,13 @@ class GraphStore:
         now = time.time()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
+        if not self.graph and not force:
+            cached = cached_startup_graph()
+            if cached:
+                with self.condition:
+                    self.graph = cached
+                    self.loaded_at = time.time()
+                    return self.graph
 
         with self.condition:
             if self.refreshing:
@@ -1572,6 +1867,13 @@ class GraphStore:
         now = time.time()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
+        if not self.graph and not force:
+            cached = cached_startup_graph()
+            if cached:
+                with self.condition:
+                    self.graph = cached
+                    self.loaded_at = time.time()
+                    return self.graph
 
         with self.condition:
             if self.refreshing:
@@ -1638,33 +1940,83 @@ class GraphStore:
             self.graph = None
             self.loaded_at = 0.0
 
+    def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
+        slug = node.get("slug")
+        if not slug:
+            return node
+        if is_placeholder_wechat_member_label(slug, node.get("label")):
+            alias_label = alias_label_for_wechat_member(slug, node_map)
+            if alias_label:
+                node["label"] = alias_label
+                if is_placeholder_entity_summary(node.get("summary")):
+                    node["summary"] = node.get("summary") or "Cached WeChat Profile"
+                return node
+        if not allow_fetch:
+            return node
+        should_fetch = is_placeholder_entity_summary(node.get("summary")) or is_placeholder_wechat_member_label(slug, node.get("label"))
+        if not should_fetch:
+            return node
+        try:
+            page_output = run_gbrain("get", slug, timeout=fetch_timeout)
+            meta, body = parse_frontmatter(page_output)
+            if meta.get("title"):
+                node["label"] = friendly_label(slug, str(meta["title"]))
+            if meta.get("type"):
+                node["type"] = str(meta["type"])
+            summary = extract_summary_from_markdown_body(body, node.get("label"), node.get("type") or node.get("category"))
+            if summary:
+                node["summary"] = summary[:720]
+            elif is_placeholder_entity_summary(node.get("summary")):
+                node["summary"] = node.get("summary") or "No summary available."
+        except Exception as exc:  # noqa: BLE001
+            if is_placeholder_entity_summary(node.get("summary")):
+                node["summary"] = f"{node.get('summary') or 'No summary available.'} Detail refresh failed: {exc}"
+        return node
+
+    def hydrate_wechat_neighbor_labels(self, neighbors, node_map):
+        pending = []
+        for neighbor in neighbors:
+            slug = neighbor.get("slug")
+            if not is_placeholder_wechat_member_label(slug, neighbor.get("label")):
+                continue
+            alias_label = alias_label_for_wechat_member(slug, node_map)
+            if alias_label:
+                neighbor["label"] = alias_label
+                continue
+            pending.append(neighbor)
+
+        if not pending:
+            return
+
+        workers = min(8, len(pending))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(self.hydrate_node_details, neighbor, node_map, True, 8)
+                for neighbor in pending[:40]
+            ]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:  # noqa: BLE001
+                    pass
+
     def get_entity(self, slug):
         graph = self.get_seed_graph()
         node_map = {node["slug"]: node for node in graph["nodes"]}
         if slug not in node_map:
             return None
         node = node_map[slug]
-        if not node.get("summary") or node.get("summary") == "No summary available.":
-            try:
-                page_output = run_gbrain("get", slug)
-                meta, body = parse_frontmatter(page_output)
-                if meta.get("title"):
-                    node["label"] = str(meta["title"])
-                if meta.get("type"):
-                    node["type"] = str(meta["type"])
-                blocks = [re.sub(r"^#+\s*", "", block.strip()) for block in re.split(r"\n\s*\n", body)]
-                summary = next((block for block in blocks if block and block != node["label"]), "")
-                node["summary"] = summary[:720] if summary else node.get("summary", "No summary available.")
-            except Exception as exc:  # noqa: BLE001
-                node["summary"] = f"{node.get('summary') or 'No summary available.'} Detail refresh failed: {exc}"
+        self.hydrate_node_details(node, node_map=node_map, allow_fetch=True)
         edge_types = {edge_key(edge["source"], edge["target"]): edge.get("types") or [] for edge in graph.get("edges", [])}
         neighbors = []
         for item in node["links"]:
             if item not in node_map:
                 continue
             neighbor = dict(node_map[item])
+            self.hydrate_node_details(neighbor, node_map=node_map, allow_fetch=False)
             neighbor["link_types"] = sorted(edge_types.get(edge_key(slug, item), []))
             neighbors.append(neighbor)
+        self.hydrate_wechat_neighbor_labels(neighbors, node_map)
         second_ring = []
         seen = {slug, *node["links"]}
         for neighbor in neighbors:
@@ -1680,10 +2032,10 @@ class GraphStore:
         }
 
     def get_entity_raw(self, slug):
-        graph = self.get_seed_graph()
-        if slug not in {node["slug"] for node in graph["nodes"]}:
+        try:
+            return run_gbrain("get", slug)
+        except Exception:  # noqa: BLE001
             return None
-        return run_gbrain("get", slug)
 
     def get_entity_media(self, slug):
         raw = self.get_entity_raw(slug)
@@ -1799,7 +2151,78 @@ class GraphStore:
             command.extend(["--direction", direction])
         if depth:
             command.extend(["--depth", str(depth)])
-        return run_gbrain(*command)
+        try:
+            return run_gbrain(*command)
+        except RuntimeError as exc:
+            message = str(exc)
+            if "database_url is missing" not in message and "No database URL" not in message:
+                raise
+            return self.graph_query_from_loaded_graph(slug, link_type, direction, depth, message)
+
+    def graph_query_from_loaded_graph(self, slug, link_type="", direction="both", depth="1", reason=""):
+        try:
+            max_depth = max(1, min(3, int(depth)))
+        except (TypeError, ValueError):
+            max_depth = 1
+
+        graph = self.expand_entity(slug)
+        node_map = {node["slug"]: node for node in graph.get("nodes", [])}
+        if slug not in node_map:
+            return f"Remote-safe fallback used because native gbrain graph-query is unavailable here.\n\nNo loaded node found for {slug}."
+
+        wanted_type = str(link_type or "").strip().lower()
+        adjacency = defaultdict(list)
+        for edge in graph.get("edges", []):
+            source = str(edge.get("source") or "").strip()
+            target = str(edge.get("target") or "").strip()
+            if not source or not target or source == target:
+                continue
+            types = [str(item).strip() for item in edge.get("types") or [] if str(item).strip()]
+            if wanted_type and wanted_type not in {item.lower() for item in types}:
+                continue
+            relation = ", ".join(types) if types else "related to"
+            if direction in {"both", "outgoing"}:
+                adjacency[source].append((target, relation))
+            if direction in {"both", "incoming"}:
+                adjacency[target].append((source, relation))
+
+        lines = [
+            "Remote-safe fallback used because native gbrain graph-query requires local database configuration on this host.",
+        ]
+        if reason:
+            lines.append(f"Native error: {reason.splitlines()[0]}")
+        lines.append("")
+        lines.append(f"# Graph query: {node_map[slug].get('label') or slug}")
+        if link_type:
+            lines.append(f"Relationship filter: {link_type}")
+        lines.append(f"Direction: {direction or 'both'}")
+        lines.append(f"Depth: {max_depth}")
+        lines.append("")
+
+        queue = deque([(slug, 0)])
+        visited = {slug}
+        found = []
+        while queue:
+            current, current_depth = queue.popleft()
+            if current_depth >= max_depth:
+                continue
+            for neighbor, relation in sorted(adjacency.get(current, []), key=lambda item: item[0]):
+                if neighbor not in node_map:
+                    continue
+                next_depth = current_depth + 1
+                neighbor_label = node_map[neighbor].get("label") or make_label(neighbor)
+                found.append((current, relation, neighbor, neighbor_label, next_depth))
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, next_depth))
+
+        if not found:
+            lines.append("No matching relationships were found in the currently loaded graph. Try selecting the node first or refreshing the graph.")
+            return "\n".join(lines)
+
+        for source, relation, target, target_label, item_depth in found:
+            lines.append(f"- depth {item_depth}: {source} --{relation}-> {target} ({target_label})")
+        return "\n".join(lines)
 
     def attach_file(self, slug, file_path, description=""):
         raw = ""
@@ -1816,6 +2239,8 @@ class GraphStore:
                 raise
         markdown_updated = False
         relative_path = relative_path_for_local_media(local_media)
+        if relative_path:
+            copy_file_to_gbrain_store(file_path, relative_path)
         if raw and relative_path:
             updated_raw = append_attachment_reference(raw, relative_path, description)
             if updated_raw != raw:
@@ -1828,6 +2253,9 @@ class GraphStore:
 
     def history(self, slug):
         return run_gbrain("history", slug)
+
+    def timeline(self, slug):
+        return run_gbrain("timeline", slug)
 
     def refresh_embedding(self, slug):
         run_gbrain("embed", slug)
@@ -1881,16 +2309,33 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if not head_only:
             self.wfile.write(file_path.read_bytes())
 
+    def serve_gbrain_file(self, request_path, head_only=False):
+        relative_text = unquote(str(request_path or "").split("/gbrain-files/", 1)[1] if "/gbrain-files/" in str(request_path or "") else "")
+        relative_path = safe_media_relative_path(relative_text)
+        if not relative_path:
+            self.send_error(HTTPStatus.NOT_FOUND, "GBrain file not found")
+            return
+        result = materialize_gbrain_file_reference(relative_path)
+        served_url = result.get("served_url") if result else media_served_url_for_relative_path(relative_path)
+        if not served_url:
+            self.send_error(HTTPStatus.NOT_FOUND, "GBrain file not found")
+            return
+        return self.serve_media_file(served_url, head_only=head_only)
+
     def do_HEAD(self):
         parsed = urlparse(self.path)
         if parsed.path.startswith("/media/"):
             return self.serve_media_file(parsed.path, head_only=True)
+        if parsed.path.startswith("/gbrain-files/"):
+            return self.serve_gbrain_file(parsed.path, head_only=True)
         return super().do_HEAD()
 
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path.startswith("/media/"):
             return self.serve_media_file(parsed.path)
+        if parsed.path.startswith("/gbrain-files/"):
+            return self.serve_gbrain_file(parsed.path)
         if parsed.path == "/api/health":
             return self.end_json(
                 {
@@ -1939,6 +2384,13 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             if media is None:
                 return self.end_json({"error": f"Unknown entity: {slug}"}, status=HTTPStatus.NOT_FOUND)
             return self.end_json({"slug": slug, "media": media})
+        if parsed.path.startswith("/api/entity-timeline-view/"):
+            slug = unquote(parsed.path.split("/api/entity-timeline-view/", 1)[1]).strip("/")
+            try:
+                output = STORE.timeline(slug)
+                return self.end_json({"ok": True, "slug": slug, "output": output})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity/"):
             slug = unquote(parsed.path.split("/api/entity/", 1)[1]).strip("/")
             entity = STORE.get_entity(slug)
@@ -2083,11 +2535,17 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             slug = unquote(parsed.path.split("/api/entity-graph-query/", 1)[1]).strip("/")
             try:
                 payload = self.read_json_body()
+                direction = str(payload.get("direction") or "both").strip()
+                depth = str(payload.get("depth") or "1").strip()
+                if direction not in {"both", "outgoing", "incoming"}:
+                    return self.end_json({"error": "direction must be one of: both, outgoing, incoming"}, status=HTTPStatus.BAD_REQUEST)
+                if depth not in {"1", "2", "3"}:
+                    return self.end_json({"error": "depth must be one of: 1, 2, 3"}, status=HTTPStatus.BAD_REQUEST)
                 output = STORE.graph_query(
                     slug,
                     str(payload.get("link_type") or "").strip(),
-                    str(payload.get("direction") or "both").strip(),
-                    str(payload.get("depth") or "1").strip(),
+                    direction,
+                    depth,
                 )
                 return self.end_json({"ok": True, "slug": slug, "output": output})
             except Exception as exc:  # noqa: BLE001
@@ -2162,11 +2620,21 @@ def main():
     parser = argparse.ArgumentParser(description=f"Serve the {APP_NAME} graph locally.")
     parser.add_argument("--host", default=str(CONFIG["host"]), help=f"Bind host (default: {CONFIG['host']})")
     parser.add_argument("--port", type=int, default=int(CONFIG["port"]), help=f"Bind port (default: {CONFIG['port']})")
+    parser.add_argument("--certfile", help="TLS certificate chain file. When set with --keyfile, serve HTTPS.")
+    parser.add_argument("--keyfile", help="TLS private key file. When set with --certfile, serve HTTPS.")
     args = parser.parse_args()
 
     ensure_data_dir()
     server = ThreadingHTTPServer((args.host, args.port), MemoryStargraphHandler)
-    print(f"{APP_NAME} serving on http://{args.host}:{args.port}")
+    scheme = "http"
+    if args.certfile or args.keyfile:
+        if not args.certfile or not args.keyfile:
+            parser.error("--certfile and --keyfile must be provided together")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=args.certfile, keyfile=args.keyfile)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

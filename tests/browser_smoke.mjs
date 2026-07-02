@@ -8,7 +8,6 @@ const pathPlaywrightCandidates = (process.env.PATH || "")
   .map((entry) => path.join(path.dirname(entry), "playwright"));
 const playwrightCandidates = [
   process.env.PLAYWRIGHT_MODULE,
-  "/Users/tony/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright",
   "playwright",
   ...pathPlaywrightCandidates,
 ].filter(Boolean);
@@ -31,6 +30,13 @@ const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1700 }, deviceScaleFactor: 1 });
 const appUrl = process.env.MEMORY_STARGRAPH_URL || "http://127.0.0.1:8788";
+const runtimeErrors = [];
+page.on("pageerror", (error) => {
+  runtimeErrors.push(error.message || String(error));
+});
+page.on("console", (message) => {
+  if (message.type() === "error") runtimeErrors.push(message.text());
+});
 
 try {
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
@@ -38,6 +44,7 @@ try {
   await page.waitForTimeout(1000);
 
   const initial = await page.evaluate(() => {
+    window.__MEMORY_STARGRAPH__.setHover(null);
     const state = window.__MEMORY_STARGRAPH__.getState();
     const slugs = state.graph.nodes.map((node) => node.slug);
     const usageNode = state.graph.nodes.find((node) => node.slug === "agent/reports/gbrain-usage");
@@ -55,20 +62,118 @@ try {
         reportCount: usageNode.report_count,
       } : null,
       datedUsageNodeCount: datedUsageNodes.length,
-      categoryLegendItems: document.querySelectorAll("#categoryLegend span").length,
+      categoryLegendItems: document.querySelectorAll("#categoryLegend button").length,
+      hubClusterItems: document.querySelectorAll("#hubClusterLegend button").length,
+      categoryLimit: document.querySelector("#categoryLimitInput")?.value,
+      clusterLimit: document.querySelector("#clusterLimitInput")?.value,
+      viewOptionsPanelPresent: [...document.querySelectorAll(".panel-label")].some((item) => item.textContent === "View Options"),
       lastRefreshText: document.querySelector("#lastRefresh")?.textContent,
       autoRefreshPresent: Boolean(document.querySelector("#autoRefreshToggle") && document.querySelector("#autoRefreshInterval")),
       autoRefreshInTopRight: Boolean(document.querySelector(".status-block #autoRefreshToggle") && document.querySelector(".status-block #autoRefreshInterval")),
-      filtersPresent: Boolean(document.querySelector("#categoryFilter") && document.querySelector("#typeFilter") && document.querySelector("#minDegreeFilter") && document.querySelector("#clearFiltersButton")),
+      filtersPresent: Boolean(!document.querySelector("#categoryFilter") && !document.querySelector("#tagFilter") && document.querySelector("#minDegreeFilter") && !document.querySelector("#clearFiltersButton")),
+      compactTopControls: {
+        noSearchLabel: !document.body.textContent.includes("Search entities"),
+        matchesOnlyText: document.querySelector(".toggle-wrap span")?.textContent,
+        noStatusLegend: !document.body.textContent.includes("focused")
+          && !document.body.textContent.includes("neighborhood")
+          && !document.body.textContent.includes("search match"),
+        minLinksInline: document.querySelector(".filter-wrap.short")?.getBoundingClientRect().height <= 40,
+        noConstellationView: !document.body.textContent.includes("Constellation View"),
+        favicon: document.querySelector('link[rel="icon"]')?.getAttribute("href"),
+        brandLogo: Boolean(document.querySelector(".brand-logo")),
+        brandWordmark: Boolean(document.querySelector(".brand-wordmark")),
+        brandWordmarkSrc: document.querySelector(".brand-wordmark")?.getAttribute("src"),
+        versionLink: document.querySelector("#uiVersion")?.getAttribute("href"),
+        hasTooltip: Boolean(document.querySelector(".has-tooltip")),
+        noCategoryFilter: !document.querySelector("#categoryFilter"),
+        noTagFilter: !document.querySelector("#tagFilter"),
+      },
       zoomControlsPresent: Boolean(document.querySelector("#zoomInButton") && document.querySelector("#zoomOutButton") && document.querySelector("#zoomLevel")),
-      zoomText: document.querySelector("#zoomLevel")?.textContent,
+      zoomControlsInline: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls .zoom-floating #zoomInButton") && !document.querySelector(".timeline-strip #newNodeButton")),
+      clusteringFloating: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls #cloudModeButton.cluster-icon-button")),
+      clusteringIconOnly: document.querySelector("#cloudModeButton")?.textContent.trim() === "",
+      newButtonFloating: Boolean(document.querySelector(".graph-canvas-wrap .new-node-floating #newNodeButton.new-node-icon-button")),
+      newButtonIconOnly: document.querySelector("#newNodeButton")?.textContent.trim() === "",
+      newButtonOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".new-node-floating")).opacity),
+      newButtonText: document.querySelector("#newNodeButton")?.textContent,
+      tourWidth: Math.round(document.querySelector("#tourButton")?.getBoundingClientRect().width || 0),
+      timelineWrapsDays: (() => {
+        const strip = document.querySelector(".timeline-strip")?.getBoundingClientRect();
+        const days = document.querySelector(".timeline-days-wrap")?.getBoundingClientRect();
+        return Boolean(strip && days && days.right <= strip.right - 2 && days.left >= strip.left);
+      })(),
+      toolbarAboveMap: (() => {
+        const toolbar = document.querySelector("#metrics")?.getBoundingClientRect();
+        const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
+        return Boolean(toolbar && map && toolbar.bottom <= map.top + 1);
+      })(),
+      daysAfterNumber: document.querySelector(".timeline-days-wrap input + #timelineValue")?.textContent === "days",
+      graphFloatingOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".graph-floating-controls")).opacity),
+      mapControlsInsideMap: (() => {
+        const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
+        const floating = document.querySelector(".graph-floating-controls")?.getBoundingClientRect();
+        const create = document.querySelector(".new-node-floating")?.getBoundingClientRect();
+        return Boolean(map && floating && create
+          && floating.top >= map.top && floating.left >= map.left && floating.right <= map.right && floating.bottom <= map.bottom
+          && create.top >= map.top && create.left >= map.left && create.right <= map.right && create.bottom <= map.bottom);
+      })(),
+      mapControlsPositioned: (() => {
+        const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
+        const floating = document.querySelector(".graph-floating-controls")?.getBoundingClientRect();
+        const create = document.querySelector(".new-node-floating")?.getBoundingClientRect();
+        const cluster = document.querySelector("#cloudModeButton")?.getBoundingClientRect();
+        const zoom = document.querySelector(".zoom-floating")?.getBoundingClientRect();
+        return Boolean(map && floating && create && cluster && zoom
+          && Math.abs(floating.left - map.left - 18) <= 2
+          && Math.abs(floating.top - map.top - 18) <= 2
+          && Math.abs(create.right - map.right + 18) <= 2
+          && Math.abs(create.top - map.top - 18) <= 2
+          && Math.abs(cluster.top - zoom.top) <= 4);
+      })(),
+      modalAboveMapControls: Number.parseInt(getComputedStyle(document.querySelector("#operationModal")).zIndex, 10) > Number.parseInt(getComputedStyle(document.querySelector(".graph-floating-controls")).zIndex, 10),
+      cloudModePresent: Boolean(document.querySelector("#cloudModeToggle")?.checked),
+      timelinePresent: Boolean(document.querySelector("#timelineDaysInput") && document.querySelector("#timelineValue")),
+      tourPresent: Boolean(document.querySelector("#tourButton") && document.querySelector("#tourPrevButton") && document.querySelector("#tourNextButton")),
+      directLinksPanelPresent: Boolean(document.querySelector("#detailLinks")),
+      pointerHint: document.querySelector("#hoverLabel")?.textContent,
       hasDarshaGhost: slugs.includes("people/darsha-krana"),
       uiVersion: document.querySelector("#uiVersion")?.textContent,
       searchButtonPresent: Boolean(document.querySelector("#searchButton")),
       hiddenListText: document.querySelector("#hiddenList")?.textContent,
       metricsColumns: getComputedStyle(document.querySelector("#metrics")).gridTemplateColumns.split(" ").length,
+      topMetricsBeforeRefresh: Boolean(document.querySelector(".status-block .top-metrics + #refreshButton")),
+      searchControlsInMapToolbar: Boolean(document.querySelector("#metrics .search-group") && document.querySelector("#metrics #matchesOnlyToggle") && document.querySelector("#metrics #minDegreeFilter")),
+      tooltipZIndex: Number.parseInt(getComputedStyle(document.querySelector("#graphTooltip")).zIndex, 10),
+      animationRunning: Boolean(state.animationHandle),
+      canvasNonBlank: (() => {
+        const canvas = document.querySelector("#graphCanvas");
+        const context = canvas?.getContext("2d");
+        if (!canvas || !context) return false;
+        const points = [
+          [0.25, 0.35],
+          [0.38, 0.45],
+          [0.5, 0.5],
+          [0.62, 0.45],
+          [0.75, 0.35],
+        ];
+        for (const [xRatio, yRatio] of points) {
+          const x = Math.max(0, Math.floor(canvas.width * xRatio) - 28);
+          const y = Math.max(0, Math.floor(canvas.height * yRatio) - 28);
+          const sample = context.getImageData(x, y, 56, 56).data;
+          for (let index = 0; index < sample.length; index += 4) {
+            if (sample[index] || sample[index + 1] || sample[index + 2] || sample[index + 3]) return true;
+          }
+        }
+        return false;
+      })(),
     };
   });
+  if (runtimeErrors.length) {
+    throw new Error(`Expected no frontend runtime errors, got: ${runtimeErrors.join(" | ")}`);
+  }
+  if (initial.filtered < 1 || !initial.canvasNonBlank) {
+    throw new Error(`Expected graph to render visible nodes on canvas: ${JSON.stringify(initial)}`);
+  }
   if (initial.hasBlockedTonyGu) {
     throw new Error("Blocked people/tony-gu entity is visible in the graph");
   }
@@ -78,8 +183,14 @@ try {
   if (initial.datedUsageNodeCount > 0) {
     throw new Error("Expected dated gbrain usage reports to collapse into one usage node");
   }
-  if (initial.categoryLegendItems < 2) {
-    throw new Error("Expected category legend to render in the right panel");
+  if (initial.categoryLegendItems !== 5 || initial.hubClusterItems > 5 || initial.categoryLimit !== "5" || initial.clusterLimit !== "5") {
+    throw new Error(`Expected Category to default to top 5 and Clusters to show up to top 5 hubs: ${JSON.stringify(initial)}`);
+  }
+  if (!initial.cloudModePresent || !initial.timelinePresent || !initial.tourPresent || initial.directLinksPanelPresent || initial.viewOptionsPanelPresent) {
+    throw new Error(`Expected top-row cloud mode, timeline, Memory Tour, no View Options panel, and no Direct Links panel: ${JSON.stringify(initial)}`);
+  }
+  if (!initial.pointerHint?.includes("Hover for full names. Click to select") || initial.pointerHint.includes("Long-press")) {
+    throw new Error(`Expected desktop pointer hint to use hover/click wording: ${initial.pointerHint}`);
   }
   if (!initial.lastRefreshText?.includes("Last refresh:")) {
     throw new Error("Expected latest refresh time to render");
@@ -100,13 +211,33 @@ try {
     throw new Error("Expected auto refresh controls to render in the top-right status block");
   }
   if (!initial.filtersPresent) {
-    throw new Error("Expected category, type, min-link, and clear filters to render");
+    throw new Error("Expected only the min-link filter to render");
   }
-  if (!initial.zoomControlsPresent || initial.zoomText !== "100%") {
-    throw new Error("Expected zoom controls to render at 100%");
+  if (
+    !initial.compactTopControls.noSearchLabel
+    || initial.compactTopControls.matchesOnlyText !== "Matches"
+    || !initial.compactTopControls.noStatusLegend
+    || !initial.compactTopControls.minLinksInline
+    || !initial.compactTopControls.noConstellationView
+    || initial.compactTopControls.favicon !== "/assets/brand/logo-circle-transparent.png"
+    || !initial.compactTopControls.brandLogo
+    || !initial.compactTopControls.brandWordmark
+    || initial.compactTopControls.brandWordmarkSrc !== "/assets/brand/wordmark-line-small.png"
+    || initial.compactTopControls.versionLink !== "https://github.com/techtony2018/memory-stargraph"
+    || !initial.compactTopControls.hasTooltip
+    || !initial.compactTopControls.noCategoryFilter
+    || !initial.compactTopControls.noTagFilter
+  ) {
+    throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  if (initial.metricsColumns !== 4) {
-    throw new Error("Expected statistics to render in one row on desktop");
+  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 124 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
+    throw new Error("Expected toolbar above map, Memory Tour group to wrap days, transparent controls, and right-top New control");
+  }
+  if (initial.metricsColumns !== 5) {
+    throw new Error("Expected search, Matches, Links, and Memory Tour to render in one row on desktop");
+  }
+  if (!initial.topMetricsBeforeRefresh || !initial.searchControlsInMapToolbar || initial.tooltipZIndex < 30) {
+    throw new Error(`Expected statistics before Refresh, search controls in map toolbar, and graph tooltip above graph marks: ${JSON.stringify(initial)}`);
   }
 
   await page.fill("#searchInput", "tony");
@@ -124,34 +255,42 @@ try {
 
   const filters = await page.evaluate(() => {
     const state = window.__MEMORY_STARGRAPH__.getState();
-    const category = [...document.querySelector("#categoryFilter").options].map((option) => option.value).find((value) => value && state.nodes.some((node) => node.category === value));
-    const type = [...document.querySelector("#typeFilter").options].map((option) => option.value).find((value) => value && state.nodes.some((node) => node.type === value && (!category || node.category === category)));
-    document.querySelector("#categoryFilter").value = category || "";
-    document.querySelector("#categoryFilter").dispatchEvent(new Event("change", { bubbles: true }));
-    document.querySelector("#typeFilter").value = type || "";
-    document.querySelector("#typeFilter").dispatchEvent(new Event("change", { bubbles: true }));
     document.querySelector("#minDegreeFilter").value = "1";
     document.querySelector("#minDegreeFilter").dispatchEvent(new Event("input", { bubbles: true }));
     const filtered = [...state.filteredSlugs].map((slug) => state.nodeMap.get(slug)).filter(Boolean);
-    const andPasses = filtered.every((node) => (
-      (!category || node.category === category)
-      && (!type || node.type === type)
-      && (node.degree || 0) >= 1
-    ));
-    document.querySelector("#clearFiltersButton").click();
+    const minPasses = filtered.every((node) => (node.degree || 0) >= 1);
+    document.querySelector("#minDegreeFilter").value = "0";
+    document.querySelector("#minDegreeFilter").dispatchEvent(new Event("input", { bubbles: true }));
     return {
-      category,
-      type,
       filteredCount: filtered.length,
-      andPasses,
-      clearedCategory: document.querySelector("#categoryFilter").value,
-      clearedType: document.querySelector("#typeFilter").value,
+      minPasses,
+      noCategoryFilter: !document.querySelector("#categoryFilter"),
+      noClearButton: !document.querySelector("#clearFiltersButton"),
+      noTagFilter: !document.querySelector("#tagFilter"),
       clearedMin: document.querySelector("#minDegreeFilter").value,
       queryAfterClear: state.query,
     };
   });
-  if (!filters.category || !filters.type || !filters.andPasses || filters.clearedCategory || filters.clearedType || filters.clearedMin !== "0" || filters.queryAfterClear !== "tony") {
-    throw new Error("Expected filters to AND together and Clear Filters to reset only filter controls");
+  if (!filters.minPasses || !filters.noCategoryFilter || !filters.noClearButton || !filters.noTagFilter || filters.clearedMin !== "0" || filters.queryAfterClear !== "tony") {
+    throw new Error("Expected Min Links to filter independently with category/tag filters removed");
+  }
+
+  await page.fill("#searchInput", "聊天室");
+  await page.press("#searchInput", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  const unicodeSearch = await page.evaluate(() => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    const focused = state.nodeMap.get(state.focusSlug);
+    return {
+      query: state.query,
+      matches: state.matchSlugs.size,
+      focus: state.focusSlug,
+      title: focused?.label,
+    };
+  });
+  if (unicodeSearch.query !== "聊天室" || unicodeSearch.matches < 1 || unicodeSearch.focus === "people/tony-guan") {
+    throw new Error(`Expected Chinese search to surface backend search matches and move focus: ${JSON.stringify(unicodeSearch)}`);
   }
 
   const zoom = await page.evaluate(() => {
@@ -164,11 +303,12 @@ try {
       before,
       afterButton,
       afterWheel,
+      iconButtons: document.querySelectorAll(".zoom-floating .zoom-icon-button svg").length,
       label: document.querySelector("#zoomLevel")?.textContent,
     };
   });
-  if (!(zoom.afterButton > zoom.before) || !(zoom.afterWheel < zoom.afterButton) || !zoom.label?.endsWith("%")) {
-    throw new Error("Expected zoom buttons and Cmd+wheel gesture to update graph zoom");
+  if (!(zoom.afterButton > zoom.before) || !(zoom.afterWheel < zoom.afterButton) || zoom.iconButtons !== 2 || !zoom.label?.endsWith("%")) {
+    throw new Error("Expected two floating magnifier zoom buttons, ratio label, and Cmd+wheel gesture to update graph zoom");
   }
 
   const expansionProbe = await page.evaluate(() => {
@@ -221,6 +361,17 @@ try {
     null,
     { timeout: 20000 },
   );
+  await page.waitForFunction(
+    () => {
+      const state = window.__MEMORY_STARGRAPH__.getState();
+      const focus = state.nodeMap.get(state.focusSlug);
+      const directSlugs = new Set(focus?.links || []);
+      const visibleLabels = new Set(state.visibleLabelSlugs || []);
+      return [...directSlugs].every((slug) => visibleLabels.has(slug));
+    },
+    null,
+    { timeout: 5000 },
+  );
 
   const afterClick = await page.evaluate(() => {
     const state = window.__MEMORY_STARGRAPH__.getState();
@@ -231,7 +382,6 @@ try {
       focus: state.focusSlug,
       title: document.querySelector("#detailTitle")?.textContent,
       type: document.querySelector("#detailType")?.textContent,
-      directLinks: [...document.querySelectorAll("#detailLinks button")].map((button) => button.textContent).slice(0, 8),
       everyDirectLinkHasLabel: [...directSlugs].every((slug) => visibleLabels.has(slug)),
     };
   });
@@ -276,8 +426,11 @@ try {
     markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
     editorHidden: document.querySelector("#modalEditor")?.hidden,
     cancelHidden: document.querySelector("#modalCancelButton")?.hidden,
+    slugLine: document.querySelector("#modalMessage .modal-slug-inline")?.textContent || "",
+    modifyButton: document.querySelector("#modalMessage .inline-action-button")?.textContent || "",
+    messageText: document.querySelector("#modalMessage")?.textContent || "",
   }));
-  if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close") {
+  if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close" || !operationModal.slugLine.startsWith("slug: ") || operationModal.modifyButton !== "Modify markdown" || operationModal.messageText.includes("Rendered from gbrain markdown")) {
     throw new Error("Expected View to render markdown with no Cancel button and a Close action");
   }
   const markdownFormatting = await page.evaluate(() => {
@@ -285,6 +438,8 @@ try {
       "# Format Probe",
       "",
       "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, `code`, and ~~old~~ text.",
+      "Timeline link: 2023-11-01T00:00:00.000Z HHS recap [posts/tony-guan-2023-year-in-review-good-fight-good-life-2023-12-31]",
+      "Unicode slug link: [人物/张三]",
       "",
       "> Quoted note",
       "",
@@ -297,6 +452,8 @@ try {
     const root = document.querySelector("#modalMarkdown");
     return {
       wiki: root.querySelector("a[data-entity-query]")?.dataset.entityQuery,
+      bracketSlug: [...root.querySelectorAll("a[data-entity-query]")].find((link) => link.dataset.entityQuery?.startsWith("posts/"))?.dataset.entityQuery,
+      unicodeSlug: [...root.querySelectorAll("a[data-entity-query]")].find((link) => link.dataset.entityQuery === "人物/张三")?.textContent,
       strong: root.querySelector("strong")?.textContent,
       em: root.querySelector("em")?.textContent,
       code: root.querySelector("code")?.textContent,
@@ -308,6 +465,8 @@ try {
   });
   if (
     markdownFormatting.wiki !== "Signal Foundry" ||
+    markdownFormatting.bracketSlug !== "posts/tony-guan-2023-year-in-review-good-fight-good-life-2023-12-31" ||
+    markdownFormatting.unicodeSlug !== "人物/张三" ||
     markdownFormatting.strong !== "bold" ||
     markdownFormatting.em !== "italic" ||
     markdownFormatting.code !== "code" ||
@@ -318,7 +477,7 @@ try {
   ) {
     throw new Error(`Expected rendered markdown formatting support: ${JSON.stringify(markdownFormatting)}`);
   }
-  await page.click("#modalMessage .inline-link-button");
+  await page.click("#modalMessage .inline-action-button");
   await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Modify gbrain page", null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector("#modalEditor")?.value.length > 0, null, { timeout: 20000 });
   const editJump = await page.evaluate(() => ({
@@ -334,11 +493,19 @@ try {
   await page.click("#modalCloseButton");
 
   const gbrainOperationTemplates = [];
-  const firstMenuAction = await page.evaluate(() => document.querySelector("#contextMenu button")?.dataset.action);
-  if (firstMenuAction !== "view") {
-    throw new Error("Expected View to be the first node menu action");
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 11).map((button) => button.dataset.action));
+  const expectedMenuPrefix = ["view", "timeline-view", "ask", "media", "graph-query", "history", "add-link", "remove-link", "backlinks", "tags", "attach-file"];
+  if (JSON.stringify(firstMenuActions) !== JSON.stringify(expectedMenuPrefix)) {
+    throw new Error(`Expected node menu order ${expectedMenuPrefix.join(", ")}, got ${firstMenuActions.join(", ")}`);
   }
-  for (const action of ["ask", "media", "backlinks", "graph-query", "history", "add-link", "remove-link", "tags", "timeline", "attach-file", "embed"]) {
+  const hasCopySlug = await page.evaluate(() => Boolean(document.querySelector('#contextMenu button[data-action="copy"]')));
+  if (hasCopySlug) {
+    throw new Error("Expected Copy slug to be removed from the node menu");
+  }
+  await page.click("body", { position: { x: 6, y: 6 } });
+  for (const action of ["ask", "media", "backlinks", "graph-query", "history", "timeline-view", "add-link", "remove-link", "tags", "attach-file", "embed"]) {
     await page.click("#nodeMenuButton");
     await page.waitForSelector("#contextMenu:not([hidden])");
     const menuText = await page.evaluate((value) => document.querySelector(`#contextMenu button[data-action="${value}"]`)?.textContent, action);
@@ -352,6 +519,12 @@ try {
       primary: document.querySelector("#modalPrimaryButton")?.textContent,
       editor: document.querySelector("#modalEditor")?.value,
       editorHidden: document.querySelector("#modalEditor")?.hidden,
+      graphControls: {
+        linkType: Boolean(document.querySelector("#operationGraphLinkType")),
+        direction: [...document.querySelectorAll("#operationGraphDirection option")].map((option) => option.value),
+        depth: [...document.querySelectorAll("#operationGraphDepth option")].map((option) => option.value),
+        summary: document.querySelector(".operation-summary")?.textContent || "",
+      },
     }));
     gbrainOperationTemplates.push({ action, menuText, modal });
     await page.click("#modalCloseButton");
@@ -359,6 +532,59 @@ try {
   if (!gbrainOperationTemplates.every((item) => item.modal.primary && (item.modal.editor.includes(":") || item.modal.editorHidden))) {
     throw new Error(`Expected gbrain operation modals to render templates: ${JSON.stringify(gbrainOperationTemplates)}`);
   }
+  const timelineTemplate = gbrainOperationTemplates.find((item) => item.action === "timeline-view");
+  if (!timelineTemplate || timelineTemplate.menuText !== "Timeline" || timelineTemplate.modal.primary !== "Add timeline event" || !timelineTemplate.modal.editorHidden) {
+    throw new Error(`Expected Timeline to open a read-only rendered view with an add-event button: ${JSON.stringify(timelineTemplate)}`);
+  }
+  const graphQueryTemplate = gbrainOperationTemplates.find((item) => item.action === "graph-query");
+  if (
+    !graphQueryTemplate?.modal.graphControls.linkType ||
+    graphQueryTemplate.modal.graphControls.direction.join(",") !== "both,outgoing,incoming" ||
+    graphQueryTemplate.modal.graphControls.depth.join(",") !== "1,2,3" ||
+    !graphQueryTemplate.modal.graphControls.summary.includes("depth 1") ||
+    !graphQueryTemplate.modal.editorHidden
+  ) {
+    throw new Error(`Expected Graph query to use guided controls: ${JSON.stringify(graphQueryTemplate)}`);
+  }
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="graph-query"]');
+  await page.waitForSelector("#operationModal:not([hidden])");
+  await page.selectOption("#operationGraphDirection", "both");
+  await page.selectOption("#operationGraphDepth", "1");
+  await page.click("#modalPrimaryButton");
+  await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Graph query results", null, { timeout: 30000 });
+  const graphQueryResult = await page.evaluate(() => ({
+    markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
+    editorHidden: document.querySelector("#modalEditor")?.hidden,
+    textLength: document.querySelector("#modalMarkdown")?.textContent.length || 0,
+    primary: document.querySelector("#modalPrimaryButton")?.textContent,
+  }));
+  if (!graphQueryResult.markdownVisible || !graphQueryResult.editorHidden || graphQueryResult.primary !== "Close" || graphQueryResult.textLength < 1) {
+    throw new Error(`Expected Graph query results to render readably: ${JSON.stringify(graphQueryResult)}`);
+  }
+  await page.click("#modalCloseButton");
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="timeline-view"]');
+  await page.waitForSelector("#operationModal:not([hidden])");
+  const viewTimelineFields = await page.evaluate(() => ({
+    primary: document.querySelector("#modalPrimaryButton")?.textContent,
+  }));
+  await page.click("#modalPrimaryButton");
+  await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Add timeline event", null, { timeout: 10000 });
+  const addTimelineFields = await page.evaluate(() => ({
+    dateType: document.querySelector("#operationTimelineDate")?.type,
+    dateValue: document.querySelector("#operationTimelineDate")?.value,
+    summary: Boolean(document.querySelector("#operationTimelineSummary")),
+    detail: Boolean(document.querySelector("#operationTimelineDetail")),
+    source: Boolean(document.querySelector("#operationTimelineSource")),
+    editorHidden: document.querySelector("#modalEditor")?.hidden,
+  }));
+  if (viewTimelineFields.primary !== "Add timeline event" || addTimelineFields.dateType !== "date" || !addTimelineFields.dateValue || !addTimelineFields.summary || !addTimelineFields.detail || !addTimelineFields.source || !addTimelineFields.editorHidden) {
+    throw new Error(`Expected guided Add timeline event form: ${JSON.stringify({ viewTimelineFields, addTimelineFields })}`);
+  }
+  await page.click("#modalCloseButton");
 
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
@@ -463,7 +689,7 @@ try {
     return {
       matches: state.matchSlugs.size,
       slugs: [...state.matchSlugs].slice(0, 8),
-      collapsedMetric: document.querySelector("#metricCollapsed")?.textContent,
+      hasCollapsedMetric: Boolean(document.querySelector("#metricCollapsed")),
       sourceStatus: state.graph.source.status,
       searchResults: state.graph.source.coverage?.search_results,
     };
@@ -471,12 +697,20 @@ try {
   if (partSearch.matches < 1) {
     throw new Error("Expected old part title search to find a collapsed parent node");
   }
+  if (partSearch.hasCollapsedMetric) {
+    throw new Error("Expected Parts to be removed from the statistics row");
+  }
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
   await page.fill("#searchInput", "Tony Guan");
   await page.press("#searchInput", "Enter");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
   await page.waitForFunction(
     () => window.__MEMORY_STARGRAPH__.getState().focusSlug === "people/tony-guan",
+    null,
+    { timeout: 15000 },
+  );
+  await page.waitForFunction(
+    () => !document.querySelector("#timelineBadge")?.hidden,
     null,
     { timeout: 15000 },
   );
@@ -488,10 +722,13 @@ try {
       match: state.matchSlugs.has("people/tony-guan"),
       filtered: state.filteredSlugs.has("people/tony-guan"),
       expanded: state.nodeMap.get("people/tony-guan")?.expanded,
+      timelineBadgeVisible: !document.querySelector("#timelineBadge")?.hidden,
+      timelineBadgeText: document.querySelector("#timelineBadge")?.textContent,
+      summary: document.querySelector("#detailSummary")?.textContent,
     };
   });
-  if (!tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony")) {
-    throw new Error("Expected Tony Guan search to focus and show people/tony-guan");
+  if (!tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony") || !tonySearch.timelineBadgeVisible || tonySearch.timelineBadgeText !== "Timeline" || !/engineering leader|civic organizer/i.test(tonySearch.summary || "")) {
+    throw new Error(`Expected Tony Guan search to focus, show timeline badge, and render real summary text: ${JSON.stringify(tonySearch)}`);
   }
   await page.evaluate(() => window.__MEMORY_STARGRAPH__.loadEntity("people/tony-guan"));
   await page.waitForFunction(
@@ -521,21 +758,37 @@ try {
   if (!relationshipLabels.types.includes("employed by") || !relationshipLabels.hover?.includes("relationship: employed by")) {
     throw new Error(`Expected hovering a direct linked company to show the link type: ${JSON.stringify(relationshipLabels)}`);
   }
-  const directLinkHover = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll("#detailLinks button")];
-    const button = buttons.find((candidate) => candidate.textContent.includes("Azul Systems"));
-    if (!button) return null;
-    button.focus();
-    const relationship = getComputedStyle(button.querySelector(".direct-link-relationship")).display;
-    return {
-      text: button.textContent,
-      title: button.title,
-      relationshipDisplay: relationship,
-      hover: document.querySelector("#hoverLabel")?.textContent,
-    };
+  const clusterToggle = await page.evaluate(() => {
+    const button = document.querySelector("#categoryLegend button");
+    const cluster = button?.dataset.cluster;
+    const beforeCount = window.__MEMORY_STARGRAPH__.getState().filteredSlugs.size;
+    button?.click();
+    const afterHideCount = window.__MEMORY_STARGRAPH__.getState().filteredSlugs.size;
+    const hidden = window.__MEMORY_STARGRAPH__.getState().hiddenClusters.has(cluster);
+    const dimmed = document.querySelector(`#categoryLegend button[data-cluster="${CSS.escape(cluster)}"]`)?.classList.contains("is-dimmed");
+    document.querySelector(`#categoryLegend button[data-cluster="${CSS.escape(cluster)}"]`)?.click();
+    const afterShowCount = window.__MEMORY_STARGRAPH__.getState().filteredSlugs.size;
+    return { cluster, beforeCount, afterHideCount, afterShowCount, hidden, dimmed };
   });
-  if (!directLinkHover?.text?.includes("relationship: employed by") || directLinkHover.relationshipDisplay === "none" || !directLinkHover.hover?.includes("relationship: employed by")) {
-    throw new Error(`Expected direct-link chip hover to visibly show employed by: ${JSON.stringify(directLinkHover)}`);
+  if (!clusterToggle.cluster || !clusterToggle.hidden || !clusterToggle.dimmed || !(clusterToggle.afterHideCount < clusterToggle.beforeCount) || clusterToggle.afterShowCount !== clusterToggle.beforeCount) {
+    throw new Error(`Expected clicking a cluster to hide/show its whole cloud: ${JSON.stringify(clusterToggle)}`);
+  }
+  const hubClusterToggle = await page.evaluate(() => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    const button = [...document.querySelectorAll("#hubClusterLegend button")]
+      .find((candidate) => (state.nodeMap.get(candidate.dataset.hub)?.links || []).some((slug) => state.filteredSlugs.has(slug)));
+    const hub = button?.dataset.hub;
+    const neighbor = (state.nodeMap.get(hub)?.links || []).find((slug) => state.filteredSlugs.has(slug));
+    const before = state.filteredSlugs.has(neighbor);
+    button?.click();
+    const hidden = state.hiddenHubConnections.has(hub);
+    const afterHide = state.filteredSlugs.has(neighbor);
+    document.querySelector(`#hubClusterLegend button[data-hub="${CSS.escape(hub)}"]`)?.click();
+    const afterShow = state.filteredSlugs.has(neighbor);
+    return { hub, neighbor, before, hidden, afterHide, afterShow };
+  });
+  if (!hubClusterToggle.hub || !hubClusterToggle.neighbor || !hubClusterToggle.before || !hubClusterToggle.hidden || hubClusterToggle.afterHide || !hubClusterToggle.afterShow) {
+    throw new Error(`Expected clicking a hub cluster to hide/show direct connections: ${JSON.stringify(hubClusterToggle)}`);
   }
   if (rotationBefore.x === rotationAfter.x && rotationBefore.y === rotationAfter.y) {
     throw new Error("Expected drag to change 3D rotation");
