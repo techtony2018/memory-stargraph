@@ -46,134 +46,20 @@ Open:
 http://127.0.0.1:8788
 ```
 
-## Day-To-Day Features
+## Main Features
 
-### 1. Search and Drill Down
+These are the highest-value features for understanding, maintaining, and extending a `gbrain` knowledge base.
 
-- Search by slug, title, tag, or summary.
-- Press `Return` or click `Search` to run a gbrain search.
-- Search input and button are disabled while active search is running.
-- Click any graph node to select it and load its direct neighbors.
-- Double-click a node to open read-only raw details.
-- The root `index` is eagerly loaded so the graph starts with real structure.
-
-### 2. Understand Relationships In Place
-
-- Node size scales with direct connection count.
-- Selected nodes reveal all direct-neighbor labels.
-- Hovering a directly linked node shows a 60% opacity popup near the mouse.
-- On mobile Safari, tap a node to show the same hover-style popup near your finger.
-- On mobile Safari, long-press a node to show the hover-style popup only.
-- Use the `...` button in the selected-node panel on mobile to open node operations.
-- The hover popup shows entity name/category, a brief summary, then relationship type.
-- The relationship is also drawn on the selected-node edge when hovering a direct neighbor.
-- Direct-link chips in the sidebar show relationship type on hover/focus.
-
-### 3. Navigate the Stargraph
-
-- Drag the graph to rotate the 3D-like star cloud.
-- Zoom with the `+` / `-` buttons.
-- Use `Cmd + mouse wheel` to zoom quickly.
-- Use category/type/min-link filters together; filters are ANDed and clearable.
-- Toggle `Only show matches` to reduce visual noise.
-
-### 4. Use GBrain From Node Menus
-
-Right-click a node or use the `...` button beside the node summary. `View` is intentionally first for quick reading, followed by `Ask GBrain` for contextual questions.
-
-Supported node operations:
-
-1. `View` - renders the node's gbrain markdown read-only, shows `slug: <slug>` above the content, and includes a `Modify markdown` button that edits the page with `gbrain put`.
-2. `Timeline` - renders the node timeline read-only, with an `Add timeline event` button in the same window.
-3. `Ask GBrain` - opens a chat-style Q&A panel and answers with direct graph context, detected media when relevant, and targeted `gbrain query` retrieval.
-4. `View media` - opens detected image/video/audio/PDF links from node markdown or frontmatter.
-5. `Graph query from here` - runs typed/directional graph traversal with guided controls for relationship type, direction, and depth.
-6. `View history` - shows page version history.
-7. `Add relationship` - searches/selects a target node and relationship type, while still allowing a new relationship type.
-8. `Remove relationship` - searches/selects from existing relationships only, then removes that edge with `gbrain unlink`.
-9. `Show backlinks` - shows incoming links with `gbrain backlinks`.
-10. `Edit tags` - selects existing tags to add, accepts a new tag, and removes only tags already applied to the entity.
-11. `Attach file` - opens a browser file picker, uploads the selected file, appends a markdown media reference, and previews supported media.
-12. `Refresh embedding` - runs `gbrain embed <slug>` where supported by the active backend.
-13. `Hide` - hides a node in the web UI only.
-14. `Delete from gbrain` - deletes after exact node-name confirmation.
-
-`Add timeline event` uses four guided fields: selectable date, summary, detail, and source.
-
-Node operation API contract:
-
-- `GET /api/node-operations` - lists the supported operation endpoints.
-- `GET /api/entity-media/<slug>` - lists detected media references from node markdown/frontmatter.
-- `GET /api/entity-timeline-view/<slug>` - renders timeline entries read-only.
-- `GET /media/<relative-path>` - serves configured local media files read-only.
-- `POST /api/entity-ask/<slug>` - ask gbrain about a node.
-- `POST /api/entity-backlinks/<slug>` - show backlinks.
-- `POST /api/entity-graph-query/<slug>` - run typed/directional graph traversal.
-- `POST /api/entity-history/<slug>` - show page history.
-- `POST /api/entity-link/<slug>` - add a typed relationship.
-- `POST /api/entity-unlink/<slug>` - remove a relationship.
-- `POST /api/entity-tags/<slug>` - add/remove tags.
-- `POST /api/entity-timeline/<slug>` - add a timeline event.
-- `POST /api/entity-attach-file/<slug>` - attach a file to the node.
-- `POST /api/entity-embed/<slug>` - refresh embedding where supported.
-
-### 5. Keep The View Clean
-
-- Hide nodes from the galaxy without modifying gbrain.
-- Hidden nodes appear in the sidebar `Hidden List`.
-- Hidden nodes can be restored with `Show`.
-- Hidden-list state persists in the local web backend across launches.
-- Repeated dated reports such as `agent/reports/gbrain-usage-YYYY-MM-DD` are collapsed into one aggregate node.
-- Document parts like `The RFC - JTuner - Part xx` are collapsed into one parent node.
-- Path-style labels are humanized, such as `companies/uber` to `Uber`.
-
-### Local Media URLs
-
-Use normal HTTP/HTTPS links when media is already hosted:
-
-```yaml
-cover_image: https://example.com/assets/project-cover.jpg
-```
-
-For local gbrain media, keep a relative path in the node:
-
-```yaml
-cover_image: projects/example-project/project-cover.jpg
-```
-
-When `View media` opens, Memory Stargraph first checks whether that file is already under `media_roots`. If not, it searches `media_discovery_roots`, copies the file into the first media root, and then serves it. By default, discovery stays inside app-owned directories such as `media`, `data/media`, and `data/uploads` so macOS does not ask for access to user folders like Downloads or Desktop. Add user folders only as an explicit local opt-in. If gbrain can produce a signed URL, the service can also fetch that URL into the media root.
-
-When the web service runs on a different host than the gbrain data/media host, configure `remote_media_base_urls` on the web host. Each base URL should point to a trusted read-only `/media/` endpoint on a machine that can see the original media files. The web host will fetch missing media from that endpoint, cache it into its own first `media_roots` entry, and then serve it locally.
-
-Example config:
-
-```json
-{
-  "media_roots": ["media", "data/media"],
-  "media_discovery_roots": ["media", "data/media", "data/uploads"],
-  "remote_media_base_urls": ["https://gbrain-media.example.com/media/"],
-  "media_fetch_timeout_seconds": 8,
-  "max_upload_bytes": 26214400
-}
-```
-
-For day-to-day use, choose `Attach file` from a node menu, pick the file in Finder, and optionally add a short description. The service saves the upload, copies supported media into `media_roots`, appends an `## Attachments` markdown reference to the node page using the description as the caption or alt text, and returns a `/media/...` preview URL. Host-local path attachment remains available through the JSON API for automation.
-
-Memory Stargraph exposes supported image/video/audio/PDF files read-only at:
-
-```text
-http://<host>:8788/media/projects/example-project/project-cover.jpg
-```
-
-The media route rejects path traversal and non-media extensions.
-
-### 6. Refresh and Freshness
-
-- `Refresh Graph` is idempotent and disabled while refresh is in progress.
-- Auto-refresh is optional from the top-right controls.
-- Auto-refresh interval is editable in minutes.
-- Latest refresh time is shown in the header.
-- `/api/health` is intentionally lightweight and does not spend extra gbrain graph/query budget.
+1. **Entity graph exploration** - Search by slug, title, tag, or summary, then click any node to lazily load its direct gbrain neighbors.
+2. **Relationship visibility** - Hover or tap directly linked nodes to see the entity summary and relationship type in a mouse-near popup.
+3. **Read-only knowledge viewing** - Open `View` to render the node's gbrain markdown with entity links and media references resolved for browsing.
+4. **Ask GBrain** - Ask contextual questions in a chat-style panel backed by the selected node, graph context, media hints, and targeted gbrain retrieval.
+5. **Graph query from here** - Run guided typed/directional traversals from the selected node without writing raw graph commands.
+6. **Relationship editing** - Add relationships by searching/selecting target nodes and link types, or remove only existing relationships.
+7. **Timeline viewing and event capture** - Read a node timeline as rendered markdown and add structured timeline events with date, summary, detail, and source.
+8. **Media attachment and preview** - Attach local files through the browser, write markdown references back to gbrain, and preview supported media through configured media roots or trusted remote media endpoints.
+9. **Freshness and source status** - Refresh live gbrain data, enable timed auto-refresh, and inspect source/cache status in the `Graph source` panel.
+10. **Noise reduction for large brains** - Keep the root `index` eagerly loaded, collapse dated report/document-part nodes, humanize path labels, hide UI-only nodes, filter by matches/minimum links, and use selection history to move through visited nodes.
 
 ## GBrain Integration
 
@@ -313,15 +199,11 @@ Supported node operations to preserve:
 3. Ask GBrain
 4. View media
 5. Graph query from here
-6. View history
-7. Add relationship
-8. Remove relationship
-9. Show backlinks
-10. Edit tags
-11. Attach file
-12. Refresh embedding
-13. Hide
-14. Delete from gbrain
+6. Add relationship
+7. Remove relationship
+8. Show backlinks
+9. Attach file
+10. Delete from gbrain
 
 Behavior requirements:
 - Root `index` should always load eagerly.
@@ -335,8 +217,7 @@ Behavior requirements:
 
 Safety:
 - `Hide` is UI-only.
-- `Delete from gbrain`, markdown edits, relationship edits, tags, timeline events, and file attachments modify gbrain.
-- `Refresh embedding` may be unavailable in thin-client mode; surface the real gbrain error instead of hiding it.
+- `Delete from gbrain`, markdown edits, relationship edits, timeline events, and file attachments modify gbrain.
 - Do not push until the verification commands pass and the browser smoke has been run or a specific blocker is reported.
 ```
 
@@ -370,9 +251,3 @@ curl -sS http://127.0.0.1:8788/api/graph
 ## License
 
 Memory Stargraph is released under the MIT License. See [LICENSE](LICENSE).
-
-## Notes
-
-- `Refresh embedding` depends on the active gbrain backend. Thin-client backends may report that `embed` is host-side/not routable.
-- `Hide` is UI-only; it does not modify gbrain.
-- `Delete from gbrain`, markdown edits, relationship edits, tag edits, timeline edits, and file attachments do modify gbrain.

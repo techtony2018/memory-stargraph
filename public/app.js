@@ -25,6 +25,7 @@ const state = {
   clusterLimit: 5,
   timelineDays: 0,
   tour: { active: false, slugs: [], index: 0, timer: null },
+  selectionHistory: { slugs: [], index: -1, navigating: false },
   lazySearch: { timer: null, query: "", loading: false },
   menuSlug: null,
   modalAction: null,
@@ -38,7 +39,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.72";
+const UI_VERSION = "V1.0.73";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -62,6 +63,10 @@ const timelineValue = document.getElementById("timelineValue");
 const tourButton = document.getElementById("tourButton");
 const tourPrevButton = document.getElementById("tourPrevButton");
 const tourNextButton = document.getElementById("tourNextButton");
+const historyBackButton = document.getElementById("historyBackButton");
+const historyForwardButton = document.getElementById("historyForwardButton");
+const floatingHistoryBackButton = document.getElementById("floatingHistoryBackButton");
+const floatingHistoryForwardButton = document.getElementById("floatingHistoryForwardButton");
 
 const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
@@ -265,6 +270,61 @@ function zoomBy(direction) {
   setZoom(state.zoom * factor);
 }
 
+function historyCanMove(delta) {
+  const nextIndex = state.selectionHistory.index + delta;
+  return nextIndex >= 0 && nextIndex < state.selectionHistory.slugs.length;
+}
+
+function updateSelectionHistoryControls() {
+  const canBack = historyCanMove(-1) && !state.selectionHistory.navigating;
+  const canForward = historyCanMove(1) && !state.selectionHistory.navigating;
+  [historyBackButton, floatingHistoryBackButton].forEach((button) => {
+    if (!button) return;
+    button.disabled = !canBack;
+    button.setAttribute("aria-disabled", canBack ? "false" : "true");
+  });
+  [historyForwardButton, floatingHistoryForwardButton].forEach((button) => {
+    if (!button) return;
+    button.disabled = !canForward;
+    button.setAttribute("aria-disabled", canForward ? "false" : "true");
+  });
+}
+
+function recordSelectionHistory(slug) {
+  if (!slug || state.selectionHistory.navigating) {
+    updateSelectionHistoryControls();
+    return;
+  }
+  const currentSlug = state.selectionHistory.slugs[state.selectionHistory.index];
+  if (currentSlug === slug) {
+    updateSelectionHistoryControls();
+    return;
+  }
+  if (state.selectionHistory.index < state.selectionHistory.slugs.length - 1) {
+    state.selectionHistory.slugs = state.selectionHistory.slugs.slice(0, state.selectionHistory.index + 1);
+  }
+  state.selectionHistory.slugs.push(slug);
+  if (state.selectionHistory.slugs.length > 20) {
+    state.selectionHistory.slugs = state.selectionHistory.slugs.slice(-20);
+  }
+  state.selectionHistory.index = state.selectionHistory.slugs.length - 1;
+  updateSelectionHistoryControls();
+}
+
+async function navigateSelectionHistory(delta) {
+  if (!historyCanMove(delta) || state.selectionHistory.navigating) return;
+  state.selectionHistory.index += delta;
+  const slug = state.selectionHistory.slugs[state.selectionHistory.index];
+  state.selectionHistory.navigating = true;
+  updateSelectionHistoryControls();
+  try {
+    await loadEntity(slug, { source: "history", recordHistory: false });
+  } finally {
+    state.selectionHistory.navigating = false;
+    updateSelectionHistoryControls();
+  }
+}
+
 function buildTourSlugs() {
   const seenCategories = new Set();
   const candidates = visibleGraphNodes()
@@ -422,7 +482,7 @@ function pickSearchFocus(graph, query) {
 }
 
 function updateUiVersion(graph) {
-  uiVersion.textContent = graph?.ui_version || UI_VERSION;
+  uiVersion.textContent = UI_VERSION || graph?.ui_version || "";
 }
 
 function buildRuntimeGraph(graph) {
@@ -2544,6 +2604,11 @@ async function loadEntity(slug, options = {}) {
   const payload = response.data;
   const { entity, neighbors, second_ring: secondRing, source } = payload;
   state.focusSlug = entity.slug;
+  if (options.recordHistory !== false) {
+    recordSelectionHistory(entity.slug);
+  } else {
+    updateSelectionHistoryControls();
+  }
   detailTitle.textContent = entity.label;
   setTimelineBadge(entity.slug, false);
   const partText = entity.parts_count ? ` · ${entity.parts_count} collapsed parts` : "";
@@ -2809,6 +2874,22 @@ function bindEvents() {
 
   zoomInButton.addEventListener("click", () => {
     zoomBy(1);
+  });
+
+  historyBackButton?.addEventListener("click", () => {
+    void navigateSelectionHistory(-1);
+  });
+
+  historyForwardButton?.addEventListener("click", () => {
+    void navigateSelectionHistory(1);
+  });
+
+  floatingHistoryBackButton?.addEventListener("click", () => {
+    void navigateSelectionHistory(-1);
+  });
+
+  floatingHistoryForwardButton?.addEventListener("click", () => {
+    void navigateSelectionHistory(1);
   });
 
   newNodeButton.addEventListener("click", () => {
@@ -3138,8 +3219,11 @@ async function fetchGraph(endpoint = "/api/graph", options = {}) {
       throw new Error(graph?.error || `Graph request failed with ${response.status}`);
     }
     applyGraphPayload(graph, previousFocus);
+    if (!state.animationHandle) {
+      render();
+    }
     if (state.focusSlug) {
-      await loadEntity(state.focusSlug, { source: "system" });
+      await loadEntity(state.focusSlug, { source: "system", recordHistory: false });
     }
     return graph;
   } finally {
@@ -3160,6 +3244,7 @@ async function init() {
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
   updateCloudModeControl();
   updateTimelineLabel();
+  updateSelectionHistoryControls();
   setZoom(state.zoom);
   await fetchHidden();
   await fetchGraph();
@@ -3177,6 +3262,7 @@ window.__MEMORY_STARGRAPH__ = {
   showNode,
   ensureExpanded,
   setZoom,
+  navigateSelectionHistory,
   labelForNode,
   relationshipTypes,
   submitSearch,

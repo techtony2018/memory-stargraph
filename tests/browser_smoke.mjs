@@ -69,7 +69,7 @@ try {
       viewOptionsPanelPresent: [...document.querySelectorAll(".panel-label")].some((item) => item.textContent === "View Options"),
       lastRefreshText: document.querySelector("#lastRefresh")?.textContent,
       autoRefreshPresent: Boolean(document.querySelector("#autoRefreshToggle") && document.querySelector("#autoRefreshInterval")),
-      autoRefreshInTopRight: Boolean(document.querySelector(".status-block #autoRefreshToggle") && document.querySelector(".status-block #autoRefreshInterval")),
+      autoRefreshInGraphSource: Boolean(document.querySelector(".source-control-stack #autoRefreshToggle") && document.querySelector(".source-control-stack #autoRefreshInterval")),
       filtersPresent: Boolean(!document.querySelector("#categoryFilter") && !document.querySelector("#tagFilter") && document.querySelector("#minDegreeFilter") && !document.querySelector("#clearFiltersButton")),
       compactTopControls: {
         noSearchLabel: !document.body.textContent.includes("Search entities"),
@@ -82,14 +82,18 @@ try {
         favicon: document.querySelector('link[rel="icon"]')?.getAttribute("href"),
         brandLogo: Boolean(document.querySelector(".brand-logo")),
         brandWordmark: Boolean(document.querySelector(".brand-wordmark")),
+        brandWordmarkLink: document.querySelector(".brand-wordmark-link")?.getAttribute("href"),
         brandWordmarkSrc: document.querySelector(".brand-wordmark")?.getAttribute("src"),
         versionLink: document.querySelector("#uiVersion")?.getAttribute("href"),
         hasTooltip: Boolean(document.querySelector(".has-tooltip")),
+        searchInputNoTooltip: !document.querySelector(".search-wrap.has-tooltip"),
         noCategoryFilter: !document.querySelector("#categoryFilter"),
         noTagFilter: !document.querySelector("#tagFilter"),
       },
       zoomControlsPresent: Boolean(document.querySelector("#zoomInButton") && document.querySelector("#zoomOutButton") && document.querySelector("#zoomLevel")),
       zoomControlsInline: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls .zoom-floating #zoomInButton") && !document.querySelector(".timeline-strip #newNodeButton")),
+      historyControlsPresent: Boolean(document.querySelector("#historyBackButton") && document.querySelector("#historyForwardButton") && document.querySelector("#floatingHistoryBackButton") && document.querySelector("#floatingHistoryForwardButton")),
+      historyControlsDisabledInitially: Boolean(document.querySelector("#historyBackButton")?.disabled && document.querySelector("#historyForwardButton")?.disabled),
       clusteringFloating: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls #cloudModeButton.cluster-icon-button")),
       clusteringIconOnly: document.querySelector("#cloudModeButton")?.textContent.trim() === "",
       newButtonFloating: Boolean(document.querySelector(".graph-canvas-wrap .new-node-floating #newNodeButton.new-node-icon-button")),
@@ -105,7 +109,7 @@ try {
       toolbarAboveMap: (() => {
         const toolbar = document.querySelector("#metrics")?.getBoundingClientRect();
         const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
-        return Boolean(toolbar && map && toolbar.bottom <= map.top + 1);
+        return Boolean(toolbar && map && toolbar.right <= map.right && toolbar.bottom <= map.bottom && toolbar.left >= map.left && toolbar.top >= map.top);
       })(),
       daysAfterNumber: document.querySelector(".timeline-days-wrap input + #timelineValue")?.textContent === "days",
       graphFloatingOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".graph-floating-controls")).opacity),
@@ -141,8 +145,8 @@ try {
       searchButtonPresent: Boolean(document.querySelector("#searchButton")),
       hiddenListText: document.querySelector("#hiddenList")?.textContent,
       metricsColumns: getComputedStyle(document.querySelector("#metrics")).gridTemplateColumns.split(" ").length,
-      topMetricsBeforeRefresh: Boolean(document.querySelector(".status-block .top-metrics + #refreshButton")),
-      searchControlsInMapToolbar: Boolean(document.querySelector("#metrics .search-group") && document.querySelector("#metrics #matchesOnlyToggle") && document.querySelector("#metrics #minDegreeFilter")),
+      sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #refreshButton") && document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #uiVersion")),
+      searchControlsInHeaderWorkflow: Boolean(document.querySelector(".header-workflow .search-group") && document.querySelector(".header-workflow #matchesOnlyToggle") && document.querySelector(".header-workflow #minDegreeFilter") && document.querySelector(".header-workflow #timelineDaysInput")),
       tooltipZIndex: Number.parseInt(getComputedStyle(document.querySelector("#graphTooltip")).zIndex, 10),
       animationRunning: Boolean(state.animationHandle),
       canvasNonBlank: (() => {
@@ -207,8 +211,8 @@ try {
   if (!initial.source?.coverage?.root_index_loaded || !initial.source?.coverage?.expanded_slugs?.includes("index")) {
     throw new Error("Expected root index to be loaded eagerly in the seed graph");
   }
-  if (!initial.autoRefreshInTopRight) {
-    throw new Error("Expected auto refresh controls to render in the top-right status block");
+  if (!initial.autoRefreshInGraphSource) {
+    throw new Error("Expected auto refresh controls to render in the Graph source panel");
   }
   if (!initial.filtersPresent) {
     throw new Error("Expected only the min-link filter to render");
@@ -222,22 +226,24 @@ try {
     || initial.compactTopControls.favicon !== "/assets/brand/logo-circle-transparent.png"
     || !initial.compactTopControls.brandLogo
     || !initial.compactTopControls.brandWordmark
+    || initial.compactTopControls.brandWordmarkLink !== "https://github.com/techtony2018/memory-stargraph"
     || initial.compactTopControls.brandWordmarkSrc !== "/assets/brand/wordmark-line-small.png"
     || initial.compactTopControls.versionLink !== "https://github.com/techtony2018/memory-stargraph"
     || !initial.compactTopControls.hasTooltip
+    || !initial.compactTopControls.searchInputNoTooltip
     || !initial.compactTopControls.noCategoryFilter
     || !initial.compactTopControls.noTagFilter
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 124 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
-    throw new Error("Expected toolbar above map, Memory Tour group to wrap days, transparent controls, and right-top New control");
+  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 124 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
+    throw new Error("Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control");
   }
-  if (initial.metricsColumns !== 5) {
-    throw new Error("Expected search, Matches, Links, and Memory Tour to render in one row on desktop");
+  if (initial.metricsColumns !== 3) {
+    throw new Error("Expected graph statistics to render as three compact cards");
   }
-  if (!initial.topMetricsBeforeRefresh || !initial.searchControlsInMapToolbar || initial.tooltipZIndex < 30) {
-    throw new Error(`Expected statistics before Refresh, search controls in map toolbar, and graph tooltip above graph marks: ${JSON.stringify(initial)}`);
+  if (!initial.sourceControlsInGraphSource || !initial.searchControlsInHeaderWorkflow || initial.tooltipZIndex < 30) {
+    throw new Error(`Expected source controls in Graph source, search controls beside wordmark, and graph tooltip above graph marks: ${JSON.stringify(initial)}`);
   }
 
   await page.fill("#searchInput", "tony");
@@ -303,12 +309,13 @@ try {
       before,
       afterButton,
       afterWheel,
-      iconButtons: document.querySelectorAll(".zoom-floating .zoom-icon-button svg").length,
+      magnifierButtons: Number(Boolean(document.querySelector("#zoomInButton svg"))) + Number(Boolean(document.querySelector("#zoomOutButton svg"))),
+      historyButtons: document.querySelectorAll(".zoom-floating .history-nav-button").length,
       label: document.querySelector("#zoomLevel")?.textContent,
     };
   });
-  if (!(zoom.afterButton > zoom.before) || !(zoom.afterWheel < zoom.afterButton) || zoom.iconButtons !== 2 || !zoom.label?.endsWith("%")) {
-    throw new Error("Expected two floating magnifier zoom buttons, ratio label, and Cmd+wheel gesture to update graph zoom");
+  if (!(zoom.afterButton > zoom.before) || !(zoom.afterWheel < zoom.afterButton) || zoom.magnifierButtons !== 2 || zoom.historyButtons !== 2 || !zoom.label?.endsWith("%")) {
+    throw new Error("Expected two floating magnifier zoom buttons, two history buttons, ratio label, and Cmd+wheel gesture to update graph zoom");
   }
 
   const expansionProbe = await page.evaluate(() => {
@@ -387,6 +394,36 @@ try {
   });
   if (!afterClick.everyDirectLinkHasLabel) {
     throw new Error("Expected all directly linked nodes to have visible labels after selection");
+  }
+
+  const historyNav = await page.evaluate(async () => {
+    const api = window.__MEMORY_STARGRAPH__;
+    const state = api.getState();
+    const first = state.focusSlug;
+    const secondNode = state.nodes.find((node) => node.slug !== first && state.filteredSlugs.has(node.slug) && !state.hiddenSlugs.has(node.slug));
+    if (!first || !secondNode) return null;
+    await api.loadEntity(secondNode.slug);
+    const afterSecond = state.focusSlug;
+    const backEnabled = !document.querySelector("#historyBackButton")?.disabled
+      && !document.querySelector("#floatingHistoryBackButton")?.disabled;
+    await api.navigateSelectionHistory(-1);
+    const afterBack = state.focusSlug;
+    const forwardEnabled = !document.querySelector("#historyForwardButton")?.disabled
+      && !document.querySelector("#floatingHistoryForwardButton")?.disabled;
+    await api.navigateSelectionHistory(1);
+    return {
+      first,
+      afterSecond,
+      afterBack,
+      afterForward: state.focusSlug,
+      historyLength: state.selectionHistory.slugs.length,
+      historyIndex: state.selectionHistory.index,
+      backEnabled,
+      forwardEnabled,
+    };
+  });
+  if (!historyNav || historyNav.afterSecond === historyNav.first || historyNav.afterBack !== historyNav.first || historyNav.afterForward !== historyNav.afterSecond || !historyNav.backEnabled || !historyNav.forwardEnabled || historyNav.historyLength > 20) {
+    throw new Error(`Expected selection history back/forward navigation to work from sidebar and floating buttons: ${JSON.stringify(historyNav)}`);
   }
 
   await page.evaluate(() => {
@@ -529,7 +566,7 @@ try {
     gbrainOperationTemplates.push({ action, menuText, modal });
     await page.click("#modalCloseButton");
   }
-  if (!gbrainOperationTemplates.every((item) => item.modal.primary && (item.modal.editor.includes(":") || item.modal.editorHidden))) {
+  if (!gbrainOperationTemplates.every((item) => item.modal.primary && (item.modal.editor.trim() || item.modal.editorHidden))) {
     throw new Error(`Expected gbrain operation modals to render templates: ${JSON.stringify(gbrainOperationTemplates)}`);
   }
   const timelineTemplate = gbrainOperationTemplates.find((item) => item.action === "timeline-view");
@@ -812,7 +849,7 @@ try {
   }
 
   await page.screenshot({ path: "/private/tmp/memory-stargraph-browser.png", fullPage: true });
-  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, tonySearch, relationshipLabels, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
+  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, historyNav, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, tonySearch, relationshipLabels, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
 } finally {
   await browser.close();
 }
