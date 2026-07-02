@@ -14,9 +14,17 @@ It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it ru
 
 ## Showcase
 
-![Memory Stargraph interactive star-cloud UI](docs/assets/memory-stargraph-ui.png)
+### Interactive Stargraph
 
-![Shared AI memory architecture](docs/assets/shared-ai-memory-architecture.png)
+<p align="center">
+  <img src="docs/assets/memory-stargraph-ui.png" alt="Memory Stargraph interactive star-cloud UI showing clustered gbrain entities, relationship hover, search, refresh, and memory tour controls">
+</p>
+
+### Shared AI Memory Architecture
+
+<p align="center">
+  <img src="docs/assets/shared-ai-memory-architecture.png" alt="Memory Stargraph and GBrain shared AI memory architecture diagram">
+</p>
 
 [Watch the demo video on YouTube](https://youtu.be/GbWZo7g1ZBA)
 
