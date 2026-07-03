@@ -564,6 +564,53 @@ try {
   }
   await page.click("#modalCloseButton");
 
+  const msnBlogSlug = "blogs/tony-guan/msn/20051115-untitled-f35cfca7";
+  await page.evaluate((slug) => window.__MEMORY_STARGRAPH__.loadEntity(slug), msnBlogSlug);
+  await page.waitForFunction(
+    (slug) => window.__MEMORY_STARGRAPH__.getState().focusSlug === slug
+      && !document.querySelector("#detailType")?.textContent?.includes("loading"),
+    msnBlogSlug,
+    { timeout: 30000 },
+  );
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="view"]');
+  await page.waitForSelector("#operationModal:not([hidden])");
+  await page.waitForFunction(() => document.querySelector("#modalMarkdown")?.textContent.includes("Source file:"), null, { timeout: 20000 });
+  const exactMsnView = await page.evaluate(() => ({
+    documentTitle: document.title,
+    modalTitle: document.querySelector("#modalTitle")?.textContent,
+    sourceLink: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.getAttribute("href"),
+    sourceTarget: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.target,
+  }));
+  if (exactMsnView.documentTitle !== "老夫的性格被分类了" || exactMsnView.modalTitle !== "老夫的性格被分类了" || exactMsnView.sourceLink !== "file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html" || exactMsnView.sourceTarget !== "_blank") {
+    throw new Error(`Expected exact MSN blog View title and source file link: ${JSON.stringify(exactMsnView)}`);
+  }
+  await page.click("#modalCloseButton");
+
+  const noiseCollectionSlug = "collections/savemysunnysky-noise-notes-2017-2019";
+  await page.evaluate((slug) => window.__MEMORY_STARGRAPH__.loadEntity(slug), noiseCollectionSlug);
+  await page.waitForFunction(
+    (slug) => window.__MEMORY_STARGRAPH__.getState().focusSlug === slug
+      && !document.querySelector("#detailType")?.textContent?.includes("loading"),
+    noiseCollectionSlug,
+    { timeout: 30000 },
+  );
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="backlinks"]');
+  await page.waitForSelector(".backlink-slug-button", { timeout: 30000 });
+  const exactBacklinks = await page.evaluate(() => ({
+    fieldLabel: document.querySelector(".backlink-field-label")?.textContent,
+    firstSlug: document.querySelector(".backlink-slug-button")?.getAttribute("data-backlink-slug") || "",
+    firstSlugText: document.querySelector(".backlink-slug-button")?.textContent || "",
+    relationshipButton: document.querySelector(".backlink-link-back")?.textContent || "",
+  }));
+  if (exactBacklinks.fieldLabel !== "from_slug" || !exactBacklinks.firstSlug.startsWith(`${noiseCollectionSlug}/`) || exactBacklinks.firstSlugText !== exactBacklinks.firstSlug || exactBacklinks.relationshipButton !== "Add relationship") {
+    throw new Error(`Expected exact collection backlinks to show clickable from_slug and Add relationship: ${JSON.stringify(exactBacklinks)}`);
+  }
+  await page.click("#modalCloseButton");
+
   const gbrainOperationTemplates = [];
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
@@ -816,8 +863,8 @@ try {
       markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
     };
   });
-  if (!backlinksControls.firstSlug || backlinksControls.slugButtons < 1 || !backlinksControls.linkBackButtons.includes("Link back") || !backlinksControls.editorHidden || !backlinksControls.markdownVisible) {
-    throw new Error(`Expected backlinks to render clickable slugs and Link back controls: ${JSON.stringify(backlinksControls)}`);
+  if (!backlinksControls.firstSlug || backlinksControls.slugButtons < 1 || !backlinksControls.linkBackButtons.includes("Add relationship") || !backlinksControls.editorHidden || !backlinksControls.markdownVisible) {
+    throw new Error(`Expected backlinks to render clickable slugs and Add relationship controls: ${JSON.stringify(backlinksControls)}`);
   }
   await page.click(".backlink-link-back");
   await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Add typed relationship", null, { timeout: 10000 });
@@ -827,7 +874,7 @@ try {
     primary: document.querySelector("#modalPrimaryButton")?.textContent,
   }));
   if (reverseLink.source !== "Tony Guan" || reverseLink.target !== backlinksControls.firstSlug || reverseLink.primary !== "Add relationship") {
-    throw new Error(`Expected Link back to prefill a reverse relationship from Tony Guan: ${JSON.stringify({ backlinksControls, reverseLink })}`);
+    throw new Error(`Expected Add relationship to prefill a reverse relationship from Tony Guan: ${JSON.stringify({ backlinksControls, reverseLink })}`);
   }
   await page.click("#modalCloseButton");
   await page.evaluate(() => window.__MEMORY_STARGRAPH__.loadEntity("people/tony-guan"));

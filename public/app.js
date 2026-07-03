@@ -39,7 +39,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.74";
+const UI_VERSION = "V1.0.75";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -1370,6 +1370,15 @@ function appendLocalFileLink(parent, path) {
   return true;
 }
 
+function markdownTitleFromContent(content, fallback) {
+  const text = String(content || "");
+  const frontmatterTitle = text.match(/^---\s*[\s\S]*?\ntitle:\s*['"]?([^\n'"]+)['"]?\s*\n[\s\S]*?---/);
+  if (frontmatterTitle?.[1]?.trim()) return frontmatterTitle[1].trim();
+  const heading = text.match(/^#\s+(.+)$/m);
+  if (heading?.[1]?.trim()) return heading[1].trim();
+  return String(fallback || "Memory Stargraph").trim();
+}
+
 function appendLocalFileLinks(parent, text) {
   const value = String(text || "");
   const pattern = /\/(?:Users|Volumes|private|tmp|var\/folders)\/[^\r\n<>"'`]+/g;
@@ -1402,6 +1411,7 @@ function appendInlineMarkdown(parent, text) {
       const codeNode = document.createElement("code");
       codeNode.textContent = code;
       parent.appendChild(codeNode);
+      appendLocalFileLink(parent, code);
     } else if (boldItalic !== undefined) {
       const strong = document.createElement("strong");
       const em = document.createElement("em");
@@ -1646,6 +1656,9 @@ function renderBacklinksResult(output, slug) {
   rows.forEach((row) => {
     const item = document.createElement("div");
     item.className = "backlink-row";
+    const fromLabel = document.createElement("span");
+    fromLabel.className = "backlink-field-label";
+    fromLabel.textContent = "from_slug";
     const main = document.createElement("button");
     main.type = "button";
     main.className = "backlink-slug-button";
@@ -1661,11 +1674,11 @@ function renderBacklinksResult(output, slug) {
     const linkBack = document.createElement("button");
     linkBack.type = "button";
     linkBack.className = "ghost-button compact-button backlink-link-back";
-    linkBack.textContent = "Link back";
+    linkBack.textContent = "Add relationship";
     linkBack.addEventListener("click", () => {
       void openReverseRelationshipModal(slug, row.from_slug);
     });
-    item.append(main, meta, linkBack);
+    item.append(fromLabel, main, meta, linkBack);
     list.appendChild(item);
   });
   modalMarkdown.appendChild(list);
@@ -2149,7 +2162,9 @@ async function openNodeModal(action, slug = state.focusSlug) {
     const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
     const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
     if (action === "view") {
-      document.title = label;
+      const viewTitle = markdownTitleFromContent(content, label);
+      document.title = viewTitle;
+      modalTitle.textContent = viewTitle;
       renderMarkdownView(content);
     } else {
       modalEditor.value = content;
