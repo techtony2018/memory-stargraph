@@ -483,6 +483,7 @@ try {
   await page.waitForSelector("#operationModal:not([hidden])");
   await page.waitForFunction(() => document.querySelector("#modalMarkdown")?.textContent.length > 0, null, { timeout: 20000 });
   const operationModal = await page.evaluate(() => ({
+    documentTitle: document.title,
     title: document.querySelector("#modalTitle")?.textContent,
     contentLength: document.querySelector("#modalMarkdown")?.textContent.length,
     primary: document.querySelector("#modalPrimaryButton")?.textContent,
@@ -496,11 +497,15 @@ try {
   if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close" || !operationModal.slugLine.startsWith("slug: ") || operationModal.modifyButton !== "Modify markdown" || operationModal.messageText.includes("Rendered from gbrain markdown")) {
     throw new Error("Expected View to render markdown with no Cancel button and a Close action");
   }
+  if (operationModal.documentTitle !== operationModal.title) {
+    throw new Error(`Expected View to update browser title to entity title: ${JSON.stringify(operationModal)}`);
+  }
   const markdownFormatting = await page.evaluate(() => {
     window.__MEMORY_STARGRAPH__.renderMarkdownView([
       "# Format Probe",
       "",
       "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, `code`, and ~~old~~ text.",
+      "Source file: /Users/tony/work/WeChat/MSN Blogs/blog.txt",
       "Timeline link: 2023-11-01T00:00:00.000Z HHS recap [posts/tony-guan-2023-year-in-review-good-fight-good-life-2023-12-31]",
       "Unicode slug link: [人物/张三]",
       "",
@@ -524,6 +529,8 @@ try {
       quote: root.querySelector("blockquote")?.textContent,
       ordered: root.querySelector("ol li")?.textContent,
       tableRows: root.querySelectorAll("table tr").length,
+      fileLinkHref: root.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/blog.txt"]')?.getAttribute("href"),
+      fileLinkTarget: root.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/blog.txt"]')?.target,
     };
   });
   if (
@@ -536,7 +543,9 @@ try {
     markdownFormatting.del !== "old" ||
     markdownFormatting.quote !== "Quoted note" ||
     markdownFormatting.ordered !== "Ordered item" ||
-    markdownFormatting.tableRows !== 2
+    markdownFormatting.tableRows !== 2 ||
+    markdownFormatting.fileLinkHref !== "file:///Users/tony/work/WeChat/MSN%20Blogs/blog.txt" ||
+    markdownFormatting.fileLinkTarget !== "_blank"
   ) {
     throw new Error(`Expected rendered markdown formatting support: ${JSON.stringify(markdownFormatting)}`);
   }
@@ -793,6 +802,34 @@ try {
   if (!tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony") || !tonySearch.timelineBadgeVisible || tonySearch.timelineBadgeText !== "Timeline" || !/engineering leader|civic organizer/i.test(tonySearch.summary || "")) {
     throw new Error(`Expected Tony Guan search to focus, show timeline badge, and render real summary text: ${JSON.stringify(tonySearch)}`);
   }
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="backlinks"]');
+  await page.waitForSelector(".backlink-slug-button", { timeout: 30000 });
+  const backlinksControls = await page.evaluate(() => {
+    const firstSlug = document.querySelector(".backlink-slug-button")?.getAttribute("data-backlink-slug") || "";
+    return {
+      firstSlug,
+      slugButtons: document.querySelectorAll(".backlink-slug-button[data-backlink-slug]").length,
+      linkBackButtons: [...document.querySelectorAll(".backlink-link-back")].map((button) => button.textContent),
+      editorHidden: document.querySelector("#modalEditor")?.hidden,
+      markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
+    };
+  });
+  if (!backlinksControls.firstSlug || backlinksControls.slugButtons < 1 || !backlinksControls.linkBackButtons.includes("Link back") || !backlinksControls.editorHidden || !backlinksControls.markdownVisible) {
+    throw new Error(`Expected backlinks to render clickable slugs and Link back controls: ${JSON.stringify(backlinksControls)}`);
+  }
+  await page.click(".backlink-link-back");
+  await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Add typed relationship", null, { timeout: 10000 });
+  const reverseLink = await page.evaluate(() => ({
+    source: document.querySelector("#modalTitle")?.textContent,
+    target: document.querySelector("#operationTarget")?.value,
+    primary: document.querySelector("#modalPrimaryButton")?.textContent,
+  }));
+  if (reverseLink.source !== "Tony Guan" || reverseLink.target !== backlinksControls.firstSlug || reverseLink.primary !== "Add relationship") {
+    throw new Error(`Expected Link back to prefill a reverse relationship from Tony Guan: ${JSON.stringify({ backlinksControls, reverseLink })}`);
+  }
+  await page.click("#modalCloseButton");
   await page.evaluate(() => window.__MEMORY_STARGRAPH__.loadEntity("people/tony-guan"));
   await page.waitForFunction(
     () => window.__MEMORY_STARGRAPH__.getState().focusSlug === "people/tony-guan"

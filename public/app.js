@@ -1342,8 +1342,46 @@ function cleanMarkdownDestination(value) {
 function appendTextWithBreaks(parent, text) {
   String(text || "").split(/ {2,}\n|\n/).forEach((part, index) => {
     if (index) parent.appendChild(document.createElement("br"));
-    if (part) parent.appendChild(document.createTextNode(part));
+    if (part) appendLocalFileLinks(parent, part);
   });
+}
+
+function localFileLinksAllowed() {
+  return ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+}
+
+function localFileUrlFromPath(path) {
+  const cleaned = String(path || "").trim().replace(/[),.;:]+$/, "");
+  if (!/^\/(?:Users|Volumes|private|tmp|var\/folders)\//.test(cleaned)) return "";
+  const encoded = cleaned.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return `file://${encoded}`;
+}
+
+function appendLocalFileLink(parent, path) {
+  const href = localFileLinksAllowed() ? localFileUrlFromPath(path) : "";
+  if (!href) return false;
+  parent.appendChild(document.createTextNode(" "));
+  const link = document.createElement("a");
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = href;
+  parent.appendChild(link);
+  return true;
+}
+
+function appendLocalFileLinks(parent, text) {
+  const value = String(text || "");
+  const pattern = /\/(?:Users|Volumes|private|tmp|var\/folders)\/[^\r\n<>"'`]+/g;
+  let cursor = 0;
+  value.replace(pattern, (match, offset) => {
+    if (offset > cursor) parent.appendChild(document.createTextNode(value.slice(cursor, offset)));
+    parent.appendChild(document.createTextNode(match));
+    appendLocalFileLink(parent, match);
+    cursor = offset + match.length;
+    return match;
+  });
+  if (cursor < value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
 }
 
 function createEntityMarkdownLink(query, label = query) {
@@ -1563,6 +1601,74 @@ function renderViewModalMessage(slug) {
     void openNodeModal("edit", slug);
   });
   modalMessage.appendChild(editButton);
+}
+
+function parseBacklinkRows(output) {
+  const text = String(output || "").trim();
+  if (!text || text === "(No backlinks)") return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((row) => ({
+          from_slug: String(row?.from_slug || "").trim(),
+          to_slug: String(row?.to_slug || "").trim(),
+          link_type: String(row?.link_type || "").trim(),
+          context: String(row?.context || "").trim(),
+        }))
+        .filter((row) => row.from_slug);
+    }
+  } catch (_error) {
+    // Plain-text gbrain output is handled below for older CLI versions.
+  }
+  return [...text.matchAll(/from_slug["':\s]+([A-Za-z0-9_./-]+)/g)]
+    .map((match) => ({ from_slug: match[1], to_slug: "", link_type: "", context: "" }));
+}
+
+async function openReverseRelationshipModal(sourceSlug, targetSlug) {
+  await openNodeModal("add-link", sourceSlug);
+  const targetInput = modalForm.querySelector("#operationTarget");
+  if (targetInput) {
+    targetInput.value = targetSlug;
+    targetInput.focus();
+  }
+}
+
+function renderBacklinksResult(output, slug) {
+  modalMarkdown.innerHTML = "";
+  const rows = parseBacklinkRows(output);
+  if (!rows.length) {
+    renderMarkdownView(output || "(No backlinks)");
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "backlinks-list";
+  rows.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = "backlink-row";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "backlink-slug-button";
+    main.setAttribute("data-backlink-slug", row.from_slug);
+    main.textContent = row.from_slug;
+    main.addEventListener("click", () => {
+      closeModal();
+      void loadEntity(row.from_slug);
+    });
+    const meta = document.createElement("span");
+    meta.className = "backlink-meta";
+    meta.textContent = row.link_type ? `${row.link_type}${row.context ? ` · ${row.context}` : ""}` : "incoming link";
+    const linkBack = document.createElement("button");
+    linkBack.type = "button";
+    linkBack.className = "ghost-button compact-button backlink-link-back";
+    linkBack.textContent = "Link back";
+    linkBack.addEventListener("click", () => {
+      void openReverseRelationshipModal(slug, row.from_slug);
+    });
+    item.append(main, meta, linkBack);
+    list.appendChild(item);
+  });
+  modalMarkdown.appendChild(list);
 }
 
 function timelineOutputHasEntries(output) {
@@ -2043,6 +2149,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
     const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
     if (action === "view") {
+      document.title = label;
       renderMarkdownView(content);
     } else {
       modalEditor.value = content;
@@ -2116,16 +2223,21 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Loading backlinks...";
     modalEditor.value = "Loading backlinks...";
     modalEditor.readOnly = true;
+    modalEditor.hidden = true;
+    modalMarkdown.hidden = false;
+    renderMarkdownView("Loading backlinks...");
     operationModal.hidden = false;
     state.modalAction = { action: "result", slug, label };
     const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {});
     if (!response.ok) {
       modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
       modalEditor.value = modalMessage.textContent;
+      renderMarkdownView(modalMessage.textContent);
       return;
     }
     modalMessage.textContent = "Incoming gbrain links for this node.";
     modalEditor.value = response.data.output || "(No backlinks)";
+    renderBacklinksResult(response.data.output || "(No backlinks)", slug);
     return;
   }
 
