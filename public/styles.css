@@ -318,6 +318,15 @@ h2 {
   color: var(--text);
 }
 
+.ghost-button.icon-primary-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 22px;
+  line-height: 1;
+}
+
 .ghost-button.danger {
   border-color: rgba(255, 154, 169, 0.36);
   background: rgba(255, 154, 169, 0.12);
@@ -554,6 +563,46 @@ h2 {
   background: rgba(4, 8, 22, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(16px);
+}
+
+.busy-indicator {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 70;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  max-width: min(320px, calc(100vw - 36px));
+  border: 1px solid rgba(136, 246, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(5, 8, 22, 0.84);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 750;
+  box-shadow: 0 12px 34px rgba(2, 6, 20, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.busy-indicator[hidden] {
+  display: none;
+}
+
+.busy-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(136, 246, 255, 0.22);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: busy-spin 0.8s linear infinite;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .graph-tooltip {
@@ -1065,6 +1114,12 @@ h2 {
   width: min(380px, 100%);
 }
 
+.modal-backdrop.compact-modal .modal-actions {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(143, 168, 255, 0.12);
+}
+
 .modal-message {
   display: flex;
   align-items: center;
@@ -1167,6 +1222,52 @@ h2 {
 .markdown-view a[data-entity-query] {
   border-bottom: 1px dashed rgba(136, 246, 255, 0.5);
   text-decoration: none;
+}
+
+.backlink-list {
+  display: grid;
+  gap: 8px;
+}
+
+.backlink-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(143, 168, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px 12px;
+}
+
+.backlink-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.backlink-from-link {
+  font-weight: 750;
+}
+
+.backlink-relation,
+.backlink-target {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backlink-relation {
+  border: 1px solid rgba(136, 246, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(136, 246, 255, 0.07);
+  padding: 2px 7px;
+}
+
+.backlink-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .markdown-view blockquote {

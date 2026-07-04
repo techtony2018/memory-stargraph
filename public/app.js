@@ -36,6 +36,8 @@ const state = {
   rotation: { x: -0.34, y: 0.58, vx: 0.0012, vy: 0.0022 },
   drag: { active: false, moved: false, lastX: 0, lastY: 0, pointerId: null },
   mobileTooltipTimer: null,
+  busyOperations: new Map(),
+  busyOperationId: 0,
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
@@ -104,6 +106,8 @@ const modalChatInput = document.getElementById("modalChatInput");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
+const busyIndicator = document.getElementById("busyIndicator");
+const busyIndicatorLabel = document.getElementById("busyIndicatorLabel");
 
 const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
@@ -223,6 +227,28 @@ function setRefreshing(active) {
   state.isRefreshing = active;
   refreshButton.disabled = active;
   refreshButton.textContent = active ? "Refreshing..." : "Refresh Graph";
+}
+
+function setBusyIndicator(label = "") {
+  if (!busyIndicator) return;
+  const active = state.busyOperations.size > 0;
+  const latest = [...state.busyOperations.values()].at(-1) || label || "Working";
+  busyIndicator.hidden = !active;
+  busyIndicator.setAttribute("aria-busy", active ? "true" : "false");
+  if (busyIndicatorLabel) busyIndicatorLabel.textContent = latest;
+}
+
+function beginBusyOperation(label) {
+  state.busyOperationId += 1;
+  const token = state.busyOperationId;
+  state.busyOperations.set(token, label || "Working");
+  setBusyIndicator(label);
+  return token;
+}
+
+function endBusyOperation(token) {
+  if (token) state.busyOperations.delete(token);
+  setBusyIndicator();
 }
 
 function updateLastRefresh(source) {
@@ -411,6 +437,7 @@ async function runLazySearch(query) {
   if (state.lazySearch.loading) return;
   const submittedQuery = String(query || "").trim();
   if (submittedQuery.length < 2) return;
+  const busyToken = beginBusyOperation("Searching");
   setSearchLoading(true);
   const selectionVersion = state.selectionVersion;
   try {
@@ -424,6 +451,7 @@ async function runLazySearch(query) {
     }
   } finally {
     setSearchLoading(false);
+    endBusyOperation(busyToken);
     searchInput.focus();
   }
 }
@@ -1339,6 +1367,14 @@ function cleanMarkdownDestination(value) {
   return (title ? title[1] : text).trim();
 }
 
+function localFileHrefForValue(value) {
+  const path = String(value || "").trim();
+  if (!path || !path.startsWith("/") || path.startsWith("//")) return "";
+  if (/[\0\r\n]/.test(path) || /^[a-z][a-z0-9+.-]*:/i.test(path)) return "";
+  const encodedPath = path.split("/").map((part, index) => (index === 0 ? "" : encodeURIComponent(part))).join("/");
+  return `file://${encodedPath}`;
+}
+
 function appendTextWithBreaks(parent, text) {
   String(text || "").split(/ {2,}\n|\n/).forEach((part, index) => {
     if (index) parent.appendChild(document.createElement("br"));
@@ -1452,6 +1488,25 @@ function appendInlineMarkdown(parent, text) {
     return match;
   });
   if (cursor < String(text || "").length) appendTextWithBreaks(parent, String(text || "").slice(cursor));
+}
+
+function appendFieldValueMarkdown(parent, fieldName, value) {
+  const strong = document.createElement("strong");
+  strong.textContent = `${fieldName}: `;
+  parent.appendChild(strong);
+  if (fieldName === "source_path") {
+    const fileHref = localFileHrefForValue(value);
+    if (fileHref) {
+      const link = document.createElement("a");
+      link.href = fileHref;
+      link.textContent = value;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      parent.appendChild(link);
+      return;
+    }
+  }
+  appendInlineMarkdown(parent, value);
 }
 
 function renderMarkdownView(markdown) {
@@ -1583,6 +1638,14 @@ function renderMarkdownView(markdown) {
       list.appendChild(item);
       return;
     }
+    const field = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.+)$/);
+    if (field) {
+      closeList();
+      const paragraph = document.createElement("p");
+      appendFieldValueMarkdown(paragraph, field[1], field[2]);
+      modalMarkdown.appendChild(paragraph);
+      return;
+    }
     closeList();
     const paragraph = document.createElement("p");
     appendInlineMarkdown(paragraph, line);
@@ -1613,26 +1676,28 @@ function renderViewModalMessage(slug) {
   modalMessage.appendChild(editButton);
 }
 
-function parseBacklinkRows(output) {
-  const text = String(output || "").trim();
+function parseBacklinkItems(rawOutput, selectedSlug) {
+  const text = String(rawOutput || "").trim();
   if (!text || text === "(No backlinks)") return [];
   try {
     const parsed = JSON.parse(text);
     if (Array.isArray(parsed)) {
       return parsed
-        .map((row) => ({
-          from_slug: String(row?.from_slug || "").trim(),
-          to_slug: String(row?.to_slug || "").trim(),
-          link_type: String(row?.link_type || "").trim(),
-          context: String(row?.context || "").trim(),
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          from_slug: String(item.from_slug || "").trim(),
+          to_slug: String(item.to_slug || selectedSlug || "").trim(),
+          link_type: String(item.link_type || "").trim(),
+          link_source: String(item.link_source || "").trim(),
+          context: String(item.context || "").trim(),
         }))
-        .filter((row) => row.from_slug);
+        .filter((item) => item.from_slug);
     }
   } catch (_error) {
-    // Plain-text gbrain output is handled below for older CLI versions.
+    return [...text.matchAll(/from_slug["':\s]+([A-Za-z0-9_./-]+)/g)]
+      .map((match) => ({ from_slug: match[1], to_slug: selectedSlug || "", link_type: "", link_source: "", context: "" }));
   }
-  return [...text.matchAll(/from_slug["':\s]+([A-Za-z0-9_./-]+)/g)]
-    .map((match) => ({ from_slug: match[1], to_slug: "", link_type: "", context: "" }));
+  return [];
 }
 
 async function openReverseRelationshipModal(sourceSlug, targetSlug) {
@@ -1644,42 +1709,71 @@ async function openReverseRelationshipModal(sourceSlug, targetSlug) {
   }
 }
 
-function renderBacklinksResult(output, slug) {
+function labelForSlug(slug) {
+  const node = state.nodeMap.get(slug);
+  return node?.label || slug;
+}
+
+function renderBacklinksView(rawOutput, selectedSlug) {
+  const items = parseBacklinkItems(rawOutput, selectedSlug);
   modalMarkdown.innerHTML = "";
-  const rows = parseBacklinkRows(output);
-  if (!rows.length) {
-    renderMarkdownView(output || "(No backlinks)");
+  if (!items.length) {
+    renderMarkdownView(rawOutput || "(No backlinks)");
     return;
   }
+  const allTargetsAreSelected = items.every((item) => !item.to_slug || item.to_slug === selectedSlug);
   const list = document.createElement("div");
-  list.className = "backlinks-list";
-  rows.forEach((row) => {
-    const item = document.createElement("div");
-    item.className = "backlink-row";
-    const fromLabel = document.createElement("span");
-    fromLabel.className = "backlink-field-label";
-    fromLabel.textContent = "from_slug";
-    const main = document.createElement("button");
-    main.type = "button";
-    main.className = "backlink-slug-button";
-    main.setAttribute("data-backlink-slug", row.from_slug);
-    main.textContent = row.from_slug;
-    main.addEventListener("click", () => {
-      closeModal();
-      void loadEntity(row.from_slug);
-    });
-    const meta = document.createElement("span");
-    meta.className = "backlink-meta";
-    meta.textContent = row.link_type ? `${row.link_type}${row.context ? ` · ${row.context}` : ""}` : "incoming link";
+  list.className = "backlink-list";
+  items.forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "backlink-item";
+
+    const line = document.createElement("p");
+    line.className = "backlink-line";
+
+    const link = createEntityMarkdownLink(item.from_slug, labelForSlug(item.from_slug));
+    link.className = "backlink-from-link";
+    link.setAttribute("data-backlink-slug", item.from_slug);
+    link.title = `Open ${item.from_slug}`;
+    line.appendChild(link);
+
+    if (item.link_type) {
+      const relation = document.createElement("span");
+      relation.className = "backlink-relation";
+      relation.textContent = item.link_type;
+      line.appendChild(relation);
+    }
+
+    if (!allTargetsAreSelected && item.to_slug) {
+      const target = document.createElement("span");
+      target.className = "backlink-target";
+      target.textContent = `to ${labelForSlug(item.to_slug)}`;
+      target.title = item.to_slug;
+      line.appendChild(target);
+    }
+
+    row.appendChild(line);
+    const details = [
+      allTargetsAreSelected ? "" : item.context,
+      item.link_source ? `source: ${item.link_source}` : "",
+    ].filter(Boolean).join(" · ");
+    if (details) {
+      const meta = document.createElement("p");
+      meta.className = "backlink-meta";
+      meta.textContent = details;
+      row.appendChild(meta);
+    }
     const linkBack = document.createElement("button");
     linkBack.type = "button";
     linkBack.className = "ghost-button compact-button backlink-link-back";
-    linkBack.textContent = "Add relationship";
+    linkBack.textContent = "+";
+    linkBack.title = "Add relationship";
+    linkBack.setAttribute("aria-label", "Add relationship");
     linkBack.addEventListener("click", () => {
-      void openReverseRelationshipModal(slug, row.from_slug);
+      void openReverseRelationshipModal(selectedSlug, item.from_slug);
     });
-    item.append(fromLabel, main, meta, linkBack);
-    list.appendChild(item);
+    row.appendChild(linkBack);
+    list.appendChild(row);
   });
   modalMarkdown.appendChild(list);
 }
@@ -1995,6 +2089,11 @@ function renderAddRelationshipForm(slug) {
   contextInput.id = "operationContext";
   contextInput.placeholder = "Optional context";
   appendField(modalForm, "Context", contextInput);
+
+  const summary = document.createElement("p");
+  summary.className = "operation-summary relationship-action-summary";
+  summary.textContent = "Add relationship";
+  modalForm.appendChild(summary);
 }
 
 function renderNewNodeForm() {
@@ -2090,6 +2189,9 @@ function closeModal() {
   modalChatInput.disabled = false;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
+  modalPrimaryButton.classList.remove("icon-primary-button");
+  modalPrimaryButton.removeAttribute("aria-label");
+  modalPrimaryButton.removeAttribute("title");
   modalCancelButton.hidden = false;
   modalCancelButton.disabled = false;
   modalCancelButton.textContent = "Cancel";
@@ -2126,6 +2228,9 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalChatLog.innerHTML = "";
   modalChatInput.value = "";
   modalChatInput.disabled = false;
+  modalPrimaryButton.classList.remove("icon-primary-button");
+  modalPrimaryButton.removeAttribute("aria-label");
+  modalPrimaryButton.removeAttribute("title");
 
   if (action === "new-node") {
     state.modalAction = { action, slug: "", label: "New Node" };
@@ -2145,6 +2250,9 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalCancelButton.hidden = false;
   modalCancelButton.textContent = "Cancel";
   modalPrimaryButton.classList.remove("danger");
+  modalPrimaryButton.classList.remove("icon-primary-button");
+  modalPrimaryButton.removeAttribute("aria-label");
+  modalPrimaryButton.removeAttribute("title");
 
   if (action === "view" || action === "edit") {
     modalKicker.textContent = action === "view" ? "View" : "Modify gbrain page";
@@ -2159,15 +2267,20 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = action === "view";
     modalMarkdown.hidden = action !== "view";
     operationModal.hidden = false;
-    const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
-    const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
-    if (action === "view") {
-      const viewTitle = markdownTitleFromContent(content, label);
-      document.title = viewTitle;
-      modalTitle.textContent = viewTitle;
-      renderMarkdownView(content);
-    } else {
-      modalEditor.value = content;
+    const busyToken = action === "view" ? beginBusyOperation("Loading view") : null;
+    try {
+      const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
+      const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
+      if (action === "view") {
+        const viewTitle = markdownTitleFromContent(content, label);
+        document.title = viewTitle;
+        modalTitle.textContent = viewTitle;
+        renderMarkdownView(content);
+      } else {
+        modalEditor.value = content;
+      }
+    } finally {
+      if (busyToken) endBusyOperation(busyToken);
     }
     return;
   }
@@ -2181,12 +2294,17 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown/frontmatter. Hosted or locally served media opens on desktop and mobile.";
     operationModal.hidden = false;
     renderMediaItems([]);
-    const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
-    if (!response.ok) {
-      modalMessage.textContent = `Unable to load media: ${response.data?.error || response.status}`;
-      return;
+    const busyToken = beginBusyOperation("Loading media");
+    try {
+      const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
+      if (!response.ok) {
+        modalMessage.textContent = `Unable to load media: ${response.data?.error || response.status}`;
+        return;
+      }
+      renderMediaItems(response.data.media || []);
+    } finally {
+      endBusyOperation(busyToken);
     }
-    renderMediaItems(response.data.media || []);
     return;
   }
 
@@ -2207,7 +2325,10 @@ async function openNodeModal(action, slug = state.focusSlug) {
 
   if (action === "add-link") {
     modalKicker.textContent = "Add typed relationship";
-    modalPrimaryButton.textContent = "Add relationship";
+    modalPrimaryButton.textContent = "+";
+    modalPrimaryButton.classList.add("icon-primary-button");
+    modalPrimaryButton.setAttribute("aria-label", "Add relationship");
+    modalPrimaryButton.title = "Add relationship";
     modalMessage.textContent = "Search/select the target entity and relationship type, or type a new relationship type.";
     modalEditor.hidden = true;
     modalForm.hidden = false;
@@ -2236,23 +2357,24 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalCancelButton.hidden = true;
     modalEditor.readOnly = true;
     modalMessage.textContent = "Loading backlinks...";
-    modalEditor.value = "Loading backlinks...";
-    modalEditor.readOnly = true;
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
     renderMarkdownView("Loading backlinks...");
     operationModal.hidden = false;
     state.modalAction = { action: "result", slug, label };
-    const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {});
-    if (!response.ok) {
-      modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
-      modalEditor.value = modalMessage.textContent;
-      renderMarkdownView(modalMessage.textContent);
-      return;
+    const busyToken = beginBusyOperation("Loading backlinks");
+    try {
+      const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {});
+      if (!response.ok) {
+        modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
+        renderMarkdownView(modalMessage.textContent);
+        return;
+      }
+      modalMessage.textContent = "Incoming gbrain links for this node.";
+      renderBacklinksView(response.data.output || "(No backlinks)", slug);
+    } finally {
+      endBusyOperation(busyToken);
     }
-    modalMessage.textContent = "Incoming gbrain links for this node.";
-    modalEditor.value = response.data.output || "(No backlinks)";
-    renderBacklinksResult(response.data.output || "(No backlinks)", slug);
     return;
   }
 
@@ -2287,13 +2409,18 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMarkdown.hidden = false;
     operationModal.hidden = false;
     renderMarkdownView("Loading timeline...");
-    const response = await apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`);
-    if (!response.ok) {
-      modalMessage.textContent = `Unable to load timeline: ${response.data?.error || response.status}`;
-      renderMarkdownView("");
-      return;
+    const busyToken = beginBusyOperation("Loading timeline");
+    try {
+      const response = await apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`);
+      if (!response.ok) {
+        modalMessage.textContent = `Unable to load timeline: ${response.data?.error || response.status}`;
+        renderMarkdownView("");
+        return;
+      }
+      renderMarkdownView(response.data.output || "(No timeline entries)");
+    } finally {
+      endBusyOperation(busyToken);
     }
-    renderMarkdownView(response.data.output || "(No timeline entries)");
     return;
   }
 
@@ -2466,6 +2593,20 @@ async function runModalPrimaryAction() {
   modalCancelButton.disabled = true;
   const primaryButtonText = modalPrimaryButton.textContent;
   let pendingAskHistory = null;
+  const busyLabels = {
+    edit: "Saving node",
+    "new-node": "Creating node",
+    delete: "Deleting node",
+    "add-link": "Saving relationship",
+    "remove-link": "Saving relationship",
+    tags: "Updating tags",
+    timeline: "Updating timeline",
+    ask: "Asking GBrain",
+    "graph-query": "Running graph query",
+    "attach-file": "Attaching file",
+    embed: "Refreshing embedding",
+  };
+  const busyToken = beginBusyOperation(busyLabels[action] || "Working");
   if (action === "attach-file") {
     modalPrimaryButton.textContent = "Uploading...";
     modalFileInput.disabled = true;
@@ -2682,6 +2823,7 @@ async function runModalPrimaryAction() {
     }
     modalMessage.textContent = error.message || String(error);
   } finally {
+    endBusyOperation(busyToken);
     modalPrimaryButton.disabled = false;
     modalCancelButton.disabled = false;
     modalFileInput.disabled = false;
@@ -2701,6 +2843,7 @@ modalConfirmInput.addEventListener("input", () => {
 
 async function loadEntity(slug, options = {}) {
   if (isHidden(slug)) return;
+  const busyToken = beginBusyOperation("Loading view");
   if (options.source !== "search" && options.source !== "system") {
     state.selectionVersion += 1;
   }
@@ -2723,90 +2866,94 @@ async function loadEntity(slug, options = {}) {
     detailSecondRing.innerHTML = "";
     setHover(slug);
   }
-  await ensureExpanded(slug);
-  if (loadId !== state.entityLoadId) return;
-  const response = await apiGet(`/api/entity/${encodeURIComponent(slug)}`);
-  if (!response.ok) return;
-  if (loadId !== state.entityLoadId) return;
-  const payload = response.data;
-  const { entity, neighbors, second_ring: secondRing, source } = payload;
-  state.focusSlug = entity.slug;
-  if (options.recordHistory !== false) {
-    recordSelectionHistory(entity.slug);
-  } else {
-    updateSelectionHistoryControls();
-  }
-  detailTitle.textContent = entity.label;
-  setTimelineBadge(entity.slug, false);
-  const partText = entity.parts_count ? ` · ${entity.parts_count} collapsed parts` : "";
-  const reportText = entity.report_count ? ` · ${entity.report_count} collapsed reports` : "";
-  detailType.textContent = `${entity.category || entity.type} · ${entity.type} · ${entity.degree} direct link${entity.degree === 1 ? "" : "s"}${partText}${reportText}`;
-  const collapseNote = [
-    entity.parts_count ? `Collapsed ${entity.parts_count} document parts into this entity.` : "",
-    entity.report_count ? `Collapsed ${entity.report_count} dated usage reports into this entity.` : "",
-  ].filter(Boolean).join(" ");
-  const summaryText = displaySummary(entity.summary);
-  detailSummary.textContent = collapseNote
-    ? `${summaryText} ${collapseNote}`
-    : summaryText;
-  updateSource(source);
-  void refreshTimelineBadge(entity.slug, loadId);
-  state.visibleLabelSlugs = [
-    ...new Set([
-      ...state.visibleLabelSlugs,
-      entity.slug,
-      ...neighbors.filter((neighbor) => !isHidden(neighbor.slug)).map((neighbor) => neighbor.slug),
-    ]),
-  ];
-
-  detailLinks.innerHTML = "";
-  neighbors.forEach((neighbor) => {
-    if (isHidden(neighbor.slug)) return;
-    rememberRelationshipTypes(entity.slug, neighbor.slug, neighbor.link_types || []);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "direct-link-chip";
-    const label = document.createElement("span");
-    label.className = "direct-link-label";
-    label.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
-    button.appendChild(label);
-    if (neighbor.link_types?.length) {
-      const relationship = `relationship: ${neighbor.link_types.join(", ")}`;
-      button.title = relationship;
-      button.dataset.relationship = relationship;
-      const relation = document.createElement("span");
-      relation.className = "direct-link-relationship";
-      relation.textContent = relationship;
-      button.appendChild(relation);
+  try {
+    await ensureExpanded(slug);
+    if (loadId !== state.entityLoadId) return;
+    const response = await apiGet(`/api/entity/${encodeURIComponent(slug)}`);
+    if (!response.ok) return;
+    if (loadId !== state.entityLoadId) return;
+    const payload = response.data;
+    const { entity, neighbors, second_ring: secondRing, source } = payload;
+    state.focusSlug = entity.slug;
+    if (options.recordHistory !== false) {
+      recordSelectionHistory(entity.slug);
+    } else {
+      updateSelectionHistoryControls();
     }
-    button.addEventListener("mouseenter", () => setHover(neighbor.slug));
-    button.addEventListener("focus", () => setHover(neighbor.slug));
-    button.addEventListener("mouseleave", () => setHover(entity.slug));
-    button.addEventListener("blur", () => setHover(entity.slug));
-    button.addEventListener("click", () => {
-      void loadEntity(neighbor.slug);
-    });
-    detailLinks.appendChild(button);
-  });
-  if (![...detailLinks.children].length) {
-    const empty = document.createElement("span");
-    empty.textContent = "No direct links";
-    detailLinks.appendChild(empty);
-  }
+    detailTitle.textContent = entity.label;
+    setTimelineBadge(entity.slug, false);
+    const partText = entity.parts_count ? ` · ${entity.parts_count} collapsed parts` : "";
+    const reportText = entity.report_count ? ` · ${entity.report_count} collapsed reports` : "";
+    detailType.textContent = `${entity.category || entity.type} · ${entity.type} · ${entity.degree} direct link${entity.degree === 1 ? "" : "s"}${partText}${reportText}`;
+    const collapseNote = [
+      entity.parts_count ? `Collapsed ${entity.parts_count} document parts into this entity.` : "",
+      entity.report_count ? `Collapsed ${entity.report_count} dated usage reports into this entity.` : "",
+    ].filter(Boolean).join(" ");
+    const summaryText = displaySummary(entity.summary);
+    detailSummary.textContent = collapseNote
+      ? `${summaryText} ${collapseNote}`
+      : summaryText;
+    updateSource(source);
+    void refreshTimelineBadge(entity.slug, loadId);
+    state.visibleLabelSlugs = [
+      ...new Set([
+        ...state.visibleLabelSlugs,
+        entity.slug,
+        ...neighbors.filter((neighbor) => !isHidden(neighbor.slug)).map((neighbor) => neighbor.slug),
+      ]),
+    ];
 
-  detailSecondRing.innerHTML = "";
-  secondRing.forEach((neighbor) => {
-    if (isHidden(neighbor.slug)) return;
-    const tag = document.createElement("span");
-    tag.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
-    detailSecondRing.appendChild(tag);
-  });
-  if (![...detailSecondRing.children].length) {
-    const empty = document.createElement("span");
-    empty.textContent = "No second-ring entities";
-    detailSecondRing.appendChild(empty);
+    detailLinks.innerHTML = "";
+    neighbors.forEach((neighbor) => {
+      if (isHidden(neighbor.slug)) return;
+      rememberRelationshipTypes(entity.slug, neighbor.slug, neighbor.link_types || []);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "direct-link-chip";
+      const label = document.createElement("span");
+      label.className = "direct-link-label";
+      label.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
+      button.appendChild(label);
+      if (neighbor.link_types?.length) {
+        const relationship = `relationship: ${neighbor.link_types.join(", ")}`;
+        button.title = relationship;
+        button.dataset.relationship = relationship;
+        const relation = document.createElement("span");
+        relation.className = "direct-link-relationship";
+        relation.textContent = relationship;
+        button.appendChild(relation);
+      }
+      button.addEventListener("mouseenter", () => setHover(neighbor.slug));
+      button.addEventListener("focus", () => setHover(neighbor.slug));
+      button.addEventListener("mouseleave", () => setHover(entity.slug));
+      button.addEventListener("blur", () => setHover(entity.slug));
+      button.addEventListener("click", () => {
+        void loadEntity(neighbor.slug);
+      });
+      detailLinks.appendChild(button);
+    });
+    if (![...detailLinks.children].length) {
+      const empty = document.createElement("span");
+      empty.textContent = "No direct links";
+      detailLinks.appendChild(empty);
+    }
+
+    detailSecondRing.innerHTML = "";
+    secondRing.forEach((neighbor) => {
+      if (isHidden(neighbor.slug)) return;
+      const tag = document.createElement("span");
+      tag.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
+      detailSecondRing.appendChild(tag);
+    });
+    if (![...detailSecondRing.children].length) {
+      const empty = document.createElement("span");
+      empty.textContent = "No second-ring entities";
+      detailSecondRing.appendChild(empty);
+    }
+    setHover(slug);
+  } finally {
+    endBusyOperation(busyToken);
   }
-  setHover(slug);
 }
 
 async function refreshTimelineBadge(slug, loadId = state.entityLoadId) {

@@ -319,16 +319,63 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
 
         self.assertIn('modalMessage.textContent = "Loading backlinks..."', script)
-        self.assertIn('modalEditor.value = "Loading backlinks..."', script)
+        self.assertIn('renderBacklinksView(response.data.output || "(No backlinks)", slug)', script)
+        self.assertIn("function renderBacklinksView", script)
+        self.assertIn("backlink-from-link", script)
+        self.assertIn("allTargetsAreSelected", script)
+        self.assertIn('link.title = `Open ${item.from_slug}`', script)
+        self.assertIn('allTargetsAreSelected ? "" : item.context', script)
         self.assertIn('apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {})', script)
-        self.assertIn("function renderBacklinksResult", script)
-        self.assertIn("parseBacklinkRows", script)
         self.assertIn("data-backlink-slug", script)
-        self.assertIn('fromLabel.textContent = "from_slug"', script)
-        self.assertIn('linkBack.textContent = "Add relationship"', script)
+        self.assertIn('linkBack.textContent = "+"', script)
+        self.assertIn('linkBack.title = "Add relationship"', script)
         self.assertIn("openReverseRelationshipModal", script)
         self.assertIn('state.modalAction = { action: "result", slug, label }', script)
         self.assertNotIn('modalPrimaryButton.textContent = "Load backlinks"', script)
+        self.assertNotIn('modalEditor.value = response.data.output || "(No backlinks)"', script)
+
+    def test_source_path_fields_render_as_safe_file_links(self):
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn("function localFileHrefForValue", script)
+        self.assertIn('fieldName === "source_path"', script)
+        self.assertIn('link.href = fileHref', script)
+        self.assertIn('link.textContent = value', script)
+        self.assertIn('link.target = "_blank"', script)
+        self.assertIn('return `file://${encodedPath}`', script)
+        self.assertIn('return ""', script)
+
+    def test_busy_indicator_covers_long_running_ui_operations(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn('id="busyIndicator"', markup)
+        self.assertIn('class="busy-indicator"', markup)
+        self.assertIn("function beginBusyOperation", script)
+        self.assertIn("function endBusyOperation", script)
+        self.assertIn("setBusyIndicator(", script)
+        self.assertIn('beginBusyOperation("Searching")', script)
+        self.assertIn('beginBusyOperation("Loading view")', script)
+        self.assertIn('beginBusyOperation("Loading backlinks")', script)
+        self.assertIn('"add-link": "Saving relationship"', script)
+        self.assertIn('delete: "Deleting node"', script)
+        self.assertIn('timeline: "Updating timeline"', script)
+        self.assertIn('"attach-file": "Attaching file"', script)
+        self.assertIn('embed: "Refreshing embedding"', script)
+        self.assertIn(".busy-indicator", styles)
+        self.assertIn("@keyframes busy-spin", styles)
+
+    def test_ui_version_is_synchronized_for_runtime_and_assets(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public/app.js").read_text()
+        server = (ROOT / "server.py").read_text()
+
+        self.assertIn('href="/styles.css?v=1.0.75"', markup)
+        self.assertIn('src="/app.js?v=1.0.75"', markup)
+        self.assertIn('>V1.0.75</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.75"', script)
+        self.assertIn('UI_VERSION = "V1.0.75"', server)
 
     def test_canvas_hint_adapts_to_pointer_type(self):
         script = (ROOT / "public/app.js").read_text()
