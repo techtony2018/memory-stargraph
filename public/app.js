@@ -41,7 +41,7 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.75";
+const UI_VERSION = "V1.0.76";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -438,9 +438,15 @@ async function runLazySearch(query) {
   const submittedQuery = String(query || "").trim();
   if (submittedQuery.length < 2) return;
   const busyToken = beginBusyOperation("Searching");
+  const searchStartedAt = performance.now();
   setSearchLoading(true);
   const selectionVersion = state.selectionVersion;
   try {
+    const exactSlugLoaded = await tryExactSlugSearch(submittedQuery);
+    if (exactSlugLoaded) {
+      reportSearchTiming(searchStartedAt);
+      return;
+    }
     const response = await apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`);
     if (!response.ok) return;
     const preferredFocus = pickSearchFocus(response.data.graph, submittedQuery) || state.focusSlug;
@@ -449,6 +455,7 @@ async function runLazySearch(query) {
     if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
       await loadEntity(preferredFocus, { source: "search" });
     }
+    reportSearchTiming(searchStartedAt);
   } finally {
     setSearchLoading(false);
     endBusyOperation(busyToken);
@@ -483,6 +490,32 @@ function visibleGraphNodes() {
 
 function normalizeSearchText(value) {
   return String(value || "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function looksLikeExactSlug(value) {
+  const text = String(value || "").trim();
+  const slugSegmentPattern = "[A-Za-z0-9][A-Za-z0-9" + "._-]*";
+  const exactSlugPattern = new RegExp(`^${slugSegmentPattern}(?:\\/${slugSegmentPattern})+$`);
+  return exactSlugPattern.test(text)
+    && !text.includes("..")
+    && !text.includes("//");
+}
+
+function reportSearchTiming(searchStartedAt) {
+  const elapsed = Math.max(0, Math.round(performance.now() - searchStartedAt));
+  hoverLabel.textContent = `Search completed in ${elapsed}ms`;
+}
+
+async function tryExactSlugSearch(slug) {
+  if (!looksLikeExactSlug(slug)) return false;
+  const response = await apiPost(`/api/entity-expand/${encodeURIComponent(slug)}`);
+  if (!response.ok || !response.data?.graph) return false;
+  applyGraphPayload(response.data.graph, slug);
+  if (!state.animationHandle) {
+    render();
+  }
+  await loadEntity(slug, { source: "search" });
+  return state.focusSlug === slug;
 }
 
 function pickSearchFocus(graph, query) {

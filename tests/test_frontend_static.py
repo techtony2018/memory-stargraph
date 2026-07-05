@@ -295,9 +295,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.75"', markup)
-        self.assertIn('src="/app.js?v=1.0.75"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.75"', script)
+        self.assertIn('href="/styles.css?v=1.0.76"', markup)
+        self.assertIn('src="/app.js?v=1.0.76"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.76"', script)
         self.assertIn("height: 34px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -371,11 +371,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.75"', markup)
-        self.assertIn('src="/app.js?v=1.0.75"', markup)
-        self.assertIn('>V1.0.75</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.75"', script)
-        self.assertIn('UI_VERSION = "V1.0.75"', server)
+        self.assertIn('href="/styles.css?v=1.0.76"', markup)
+        self.assertIn('src="/app.js?v=1.0.76"', markup)
+        self.assertIn('>V1.0.76</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.76"', script)
+        self.assertIn('UI_VERSION = "V1.0.76"', server)
 
     def test_canvas_hint_adapts_to_pointer_type(self):
         script = (ROOT / "public/app.js").read_text()
@@ -393,6 +393,35 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("toLocaleLowerCase()", script)
         self.assertIn("queryTerms.length > 0", script)
         self.assertNotIn(r"replace(/[^a-z0-9]+/g", script)
+
+    def test_search_prefers_exact_slug_and_reports_elapsed_time(self):
+        script = (ROOT / "public/app.js").read_text()
+        search_start = script.index("async function runLazySearch")
+        search_end = script.index("async function submitSearch", search_start)
+        search_block = script[search_start:search_end]
+
+        self.assertIn("function looksLikeExactSlug", script)
+        self.assertIn("const searchStartedAt = performance.now()", search_block)
+        self.assertLess(search_block.index("await tryExactSlugSearch"), search_block.index('apiGet(`/api/search?q='))
+        self.assertIn('apiPost(`/api/entity-expand/${encodeURIComponent(slug)}`)', script)
+        self.assertIn('hoverLabel.textContent = `Search completed in ${elapsed}ms`', script)
+
+    def test_console_theme_is_compact_hud_style(self):
+        styles = (ROOT / "public" / "styles.css").read_text()
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn('href="/styles.css?v=1.0.76"', markup)
+        self.assertIn('src="/app.js?v=1.0.76"', markup)
+        self.assertIn('V1.0.76', markup)
+        self.assertIn('const UI_VERSION = "V1.0.76"', script)
+        self.assertIn("--hud-green: #74ff9f", styles)
+        self.assertIn("--hud-line: rgba(116, 255, 159, 0.24)", styles)
+        self.assertIn("linear-gradient(90deg, rgba(116, 255, 159, 0.14), transparent 34%)", styles)
+        self.assertIn("box-shadow: inset 0 0 0 1px rgba(136, 246, 255, 0.04)", styles)
+        self.assertIn("padding: 6px", styles)
+        self.assertIn("min-height: 42px", styles)
+        self.assertIn("height: 30px", styles)
 
 
 if __name__ == "__main__":
