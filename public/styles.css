@@ -2015,6 +2015,17 @@ body::after {
   clip-path: var(--chamfer);
 }
 
+.topbar::after,
+.modal-panel::after {
+  background:
+    linear-gradient(135deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.62) 78%, transparent 84%),
+    linear-gradient(225deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.58) 78%, transparent 84%);
+  box-shadow:
+    inset 16px -16px 26px rgba(34, 211, 238, 0.08),
+    inset -16px -16px 26px rgba(34, 211, 238, 0.08),
+    0 0 24px rgba(34, 211, 238, 0.16);
+}
+
 .brand-lockup {
   position: relative;
   gap: 12px;
@@ -2699,9 +2710,15 @@ body::after {
   inset: 0;
   clip-path: var(--chamfer);
   border: 1px solid rgba(103, 232, 249, 0.42);
-  background: transparent;
+  background:
+    linear-gradient(135deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.62) 78%, transparent 84%),
+    linear-gradient(225deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.58) 78%, transparent 84%);
   opacity: 0.44;
-  box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.1), 0 0 18px rgba(34, 211, 238, 0.12);
+  box-shadow:
+    inset 0 0 18px rgba(34, 211, 238, 0.1),
+    inset 16px -16px 26px rgba(34, 211, 238, 0.08),
+    inset -16px -16px 26px rgba(34, 211, 238, 0.08),
+    0 0 22px rgba(34, 211, 238, 0.16);
 }
 
 .nav-logo {
@@ -2742,8 +2759,16 @@ body::after {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34), 0 0 28px rgba(34, 211, 238, 0.16), inset 0 0 22px rgba(34, 211, 238, 0.07);
 }
 
+.graph-canvas-wrap > .busy-indicator {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 18;
+  max-width: min(320px, calc(100% - 36px));
+}
+
 .busy-indicator {
-  z-index: 70;
+  z-index: 18;
 }
 
 .search-flyout {
@@ -2776,10 +2801,21 @@ body::after {
   width: min(380px, calc(100% - 44px));
   display: grid;
   align-items: stretch;
+  gap: 8px;
 }
 
 .settings-flyout .source-control-stack {
   align-items: center;
+}
+
+.settings-title {
+  margin: 0;
+  color: #dffbff;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .graph-wordmark-link {
@@ -2928,9 +2964,15 @@ body::after {
   font-size: 12px;
 }
 
+.graph-canvas-wrap > .new-node-floating {
+  right: 18px;
+  top: 18px;
+  z-index: 18;
+}
+
 .new-node-floating {
-  right: 28px;
-  top: 190px;
+  right: 18px;
+  top: 18px;
   opacity: 0.28;
   transition: opacity 0.18s ease;
 }
@@ -3009,7 +3051,9 @@ body::after {
     font-size: 7px;
   }
 
+  .graph-canvas-wrap > .new-node-floating,
   .new-node-floating {
-    top: 132px;
+    top: 12px;
+    right: 12px;
   }
 }

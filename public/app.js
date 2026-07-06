@@ -1,3 +1,10 @@
+const UI_VERSION = "V1.0.81";
+const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
+const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
+const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
+const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
+const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
+
 const state = {
   graph: null,
   filteredSlugs: new Set(),
@@ -20,6 +27,7 @@ const state = {
   autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
   pendingSettings: null,
   cloudMode: true,
+  flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, false),
   hiddenClusters: new Set(),
   hiddenHubConnections: new Set(),
   categoryLimit: 5,
@@ -34,6 +42,7 @@ const state = {
   askYodaChats: new Map(),
   busyOperations: new Map(),
   busyOperationId: 0,
+  animationTick: 0,
   entityLoadId: 0,
   selectionVersion: 0,
   zoom: 1,
@@ -43,11 +52,6 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.80";
-const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
-const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
-const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
-const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
@@ -65,6 +69,7 @@ const matchesOnlyToggle = document.getElementById("matchesOnlyToggle");
 const refreshButton = document.getElementById("refreshButton");
 const autoRefreshToggle = document.getElementById("autoRefreshToggle");
 const autoRefreshInterval = document.getElementById("autoRefreshInterval");
+const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
 const lastRefresh = document.getElementById("lastRefresh");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const newNodeButton = document.getElementById("newNodeButton");
@@ -132,6 +137,7 @@ const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
 const metricDegree = document.getElementById("metricDegree");
 const metricMode = document.getElementById("metricMode");
+const radarCacheUsage = document.getElementById("radarCacheUsage");
 
 const CATEGORY_PALETTE = [
   "#88f6ff",
@@ -183,6 +189,13 @@ function safeJsonParse(value, fallback) {
   } catch (_error) {
     return fallback;
   }
+}
+
+function readBooleanSetting(key, fallback = false) {
+  const value = window.localStorage?.getItem(key);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }
 
 function cacheLimitBytes() {
@@ -354,6 +367,12 @@ function updateCacheSettingsView() {
   const usage = document.getElementById("cacheUsageValue");
   if (input) input.value = String(Math.round(cacheLimitBytes() / (1024 * 1024)));
   if (usage) usage.textContent = `${formatBytes(cacheUsedBytes())} used of ${formatBytes(cacheLimitBytes())}`;
+  updateRadarCacheUsage();
+}
+
+function updateRadarCacheUsage() {
+  if (!radarCacheUsage) return;
+  radarCacheUsage.textContent = `Cache ${formatBytes(cacheUsedBytes())}`;
 }
 
 function snapshotSettings() {
@@ -361,6 +380,7 @@ function snapshotSettings() {
     cacheLimitBytes: cacheLimitBytes(),
     autoRefresh: Boolean(state.autoRefresh.enabled),
     autoRefreshInterval: state.autoRefresh.intervalMinutes,
+    flowingEdges: state.flowingEdges,
   };
 }
 
@@ -370,6 +390,8 @@ function applySettingsFromControls() {
   window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(mb * 1024 * 1024));
   state.autoRefresh.enabled = Boolean(autoRefreshToggle?.checked);
   state.autoRefresh.intervalMinutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval?.value || "10", 10) || 10));
+  state.flowingEdges = Boolean(flowingEdgesToggle?.checked);
+  window.localStorage?.setItem(FLOWING_EDGE_EFFECT_KEY, state.flowingEdges ? "true" : "false");
   enforceCacheLimit();
   scheduleAutoRefresh();
   updateCacheSettingsView();
@@ -381,8 +403,10 @@ function cancelSettingsChanges() {
   window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(snapshot.cacheLimitBytes));
   state.autoRefresh.enabled = Boolean(snapshot.autoRefresh);
   state.autoRefresh.intervalMinutes = snapshot.autoRefreshInterval;
+  state.flowingEdges = Boolean(snapshot.flowingEdges);
   if (autoRefreshToggle) autoRefreshToggle.checked = state.autoRefresh.enabled;
   if (autoRefreshInterval) autoRefreshInterval.value = String(state.autoRefresh.intervalMinutes);
+  if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
   scheduleAutoRefresh();
   updateCacheSettingsView();
   hideFloatingPanels();
@@ -692,6 +716,8 @@ function setFlyoutOpen(panel, button, open) {
   button.classList.toggle("is-open", open);
   if (panel === settingsFlyout && open) {
     state.pendingSettings = snapshotSettings();
+    if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
+    updateCacheSettingsView();
   }
   updateNavModeState();
 }
@@ -1356,7 +1382,23 @@ function drawEdges() {
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
     ctx.stroke();
 
-    if (layer > 0 || isHoveredFocusEdge) {
+    if (state.flowingEdges) {
+      ctx.save();
+      ctx.setLineDash([6, 14]);
+      ctx.lineDashOffset = -state.animationTick;
+      ctx.strokeStyle = layer === 2
+        ? `rgba(250, 204, 21, ${Math.min(0.45, baseAlpha + 0.08)})`
+        : `rgba(34, 211, 238, ${Math.min(0.28, baseAlpha + 0.04)})`;
+      ctx.lineWidth = Math.max(0.8, ctx.lineWidth * 0.86);
+      ctx.beginPath();
+      ctx.moveTo(edge.source.screenX, edge.source.screenY);
+      ctx.lineTo(edge.target.screenX, edge.target.screenY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    if (state.flowingEdges && (layer > 0 || isHoveredFocusEdge)) {
       const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
       const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
       const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
@@ -1588,6 +1630,7 @@ function drawNodes() {
 }
 
 function render() {
+  state.animationTick = (state.animationTick + 0.7) % 1000;
   drawBackground();
   tick();
   drawClusterClouds();
@@ -4046,6 +4089,7 @@ async function init() {
   bindEvents();
   uiVersion.textContent = UI_VERSION;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
+  if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
   updateCloudModeControl();
   updateTimelineLabel();
   updateSelectionHistoryControls();
