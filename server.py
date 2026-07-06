@@ -112,7 +112,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.83"
+UI_VERSION = "V1.0.84"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -2261,11 +2261,14 @@ class GraphStore:
         sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
         return "\n\n".join(sections)
 
-    def build_yoda_prompt(self, slug, question, history=None):
+    def build_yoda_prompt(self, slug, question, history=None, depth="4"):
         history = history or []
+        depth = str(depth or "4").strip()
+        if depth not in {"1", "2", "3", "4", "5", "6"}:
+            depth = "4"
         lines = [
             "You are Ask Yoda inside Memory Stargraph.",
-            "Answer using the selected GBrain node, direct relationships, and recent chat only.",
+            f"Answer using the selected GBrain node, graph context up to depth {depth}, and recent chat only.",
             "Be concise, cite relevant slugs, and say when the graph does not contain enough evidence.",
             "",
             f"Selected node: {slug}",
@@ -2282,14 +2285,14 @@ class GraphStore:
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
         try:
-            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1")
+            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", depth)
         except Exception as exc:  # noqa: BLE001
             graph_output = f"Direct relationship context unavailable: {exc}"
-        lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
+        lines.extend(["", f"Graph context depth {depth}:", str(graph_output or "")[:6000]])
         return "\n".join(lines)
 
-    def ask_yoda(self, slug, question, history=None):
-        prompt = self.build_yoda_prompt(slug, question, history)
+    def ask_yoda(self, slug, question, history=None, depth="4"):
+        prompt = self.build_yoda_prompt(slug, question, history, depth)
         agent_output = run_openclaw_agent(prompt)
         if agent_output:
             return {"output": agent_output, "source": "openclaw-agent"}
@@ -2685,9 +2688,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 payload = self.read_json_body()
                 question = str(payload.get("question") or "").strip()
                 history = payload.get("history") if isinstance(payload.get("history"), list) else []
+                depth = str(payload.get("depth") or "4").strip()
                 if not question:
                     return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
-                result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history))
+                result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history, depth))
                 return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)

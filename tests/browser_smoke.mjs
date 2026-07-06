@@ -208,8 +208,8 @@ try {
   if (!initial.pointerHint?.includes("Hover for full names. Click to select") || initial.pointerHint.includes("Long-press")) {
     throw new Error(`Expected desktop pointer hint to use hover/click wording: ${initial.pointerHint}`);
   }
-  if (initial.lastRefreshPresent || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Cache", "Refresh"]) || !initial.flushCachePresent || !initial.refreshInlineControls || !initial.selectionYodaPresent) {
-    throw new Error(`Expected Settings Display/Cache/Refresh with Flush, inline refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
+  if (initial.lastRefreshPresent || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Yoda", "Cache", "Refresh"]) || !initial.flushCachePresent || !initial.refreshInlineControls || !initial.selectionYodaPresent) {
+    throw new Error(`Expected Settings Display/Yoda/Cache/Refresh with Flush, inline refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
   }
   if (!initial.autoRefreshPresent) {
     throw new Error("Expected auto refresh controls to render");
@@ -936,9 +936,13 @@ try {
     relation: document.querySelector(".relationship-type")?.textContent || "",
     addButton: document.querySelector(".relationship-add-backlink")?.textContent || "",
     removeButton: document.querySelector(".relationship-remove")?.textContent || "",
+    hasAuthoredBy: [...document.querySelectorAll(".relationship-type")].some((item) => /authored_by/i.test(item.textContent || "")),
   }));
   if (relationshipView.title !== "View Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
     throw new Error(`Expected Relationships to render compact outgoing wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
+  }
+  if (relationshipView.hasAuthoredBy) {
+    throw new Error(`Expected Relationships to exclude incoming authored_by backlinks: ${JSON.stringify(relationshipView)}`);
   }
   await page.click("#modalCloseButton");
   const clusterToggle = await page.evaluate(() => {

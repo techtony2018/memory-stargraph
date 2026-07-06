@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.83";
+const UI_VERSION = "V1.0.84";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -6,6 +6,7 @@ const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
 const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
+const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 
 const state = {
   graph: null,
@@ -30,7 +31,9 @@ const state = {
   autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
   pendingSettings: null,
   cloudMode: true,
-  flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, false),
+  flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, true),
+  yodaDepth: readNumberSetting(YODA_CONTEXT_DEPTH_KEY, 4, 1, 6),
+  mapFiltersVisible: true,
   hiddenClusters: new Set(),
   hiddenHubConnections: new Set(),
   categoryLimit: 5,
@@ -75,10 +78,13 @@ const refreshButton = document.getElementById("refreshButton");
 const autoRefreshToggle = document.getElementById("autoRefreshToggle");
 const autoRefreshInterval = document.getElementById("autoRefreshInterval");
 const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
+const yodaDepthInput = document.getElementById("yodaDepthInput");
 const lastRefresh = document.getElementById("lastRefresh");
 const flushCacheButton = document.getElementById("flushCacheButton");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const newNodeButton = document.getElementById("newNodeButton");
+const mapFilterToggleButton = document.getElementById("mapFilterToggleButton");
+const mapFilterPanel = document.getElementById("mapFilterPanel");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
 const zoomLevel = document.getElementById("zoomLevel");
@@ -204,6 +210,12 @@ function readBooleanSetting(key, fallback = false) {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
+}
+
+function readNumberSetting(key, fallback, min, max) {
+  const value = Number.parseInt(window.localStorage?.getItem(key) || "", 10);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
 }
 
 function cacheLimitBytes() {
@@ -421,6 +433,7 @@ function snapshotSettings() {
     autoRefresh: Boolean(state.autoRefresh.enabled),
     autoRefreshInterval: state.autoRefresh.intervalMinutes,
     flowingEdges: state.flowingEdges,
+    yodaDepth: state.yodaDepth,
   };
 }
 
@@ -431,7 +444,9 @@ function applySettingsFromControls() {
   state.autoRefresh.enabled = Boolean(autoRefreshToggle?.checked);
   state.autoRefresh.intervalMinutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval?.value || "10", 10) || 10));
   state.flowingEdges = Boolean(flowingEdgesToggle?.checked);
+  state.yodaDepth = Math.max(1, Math.min(6, Number.parseInt(yodaDepthInput?.value || "4", 10) || 4));
   window.localStorage?.setItem(FLOWING_EDGE_EFFECT_KEY, state.flowingEdges ? "true" : "false");
+  window.localStorage?.setItem(YODA_CONTEXT_DEPTH_KEY, String(state.yodaDepth));
   enforceCacheLimit();
   scheduleAutoRefresh();
   updateCacheSettingsView();
@@ -444,9 +459,11 @@ function cancelSettingsChanges() {
   state.autoRefresh.enabled = Boolean(snapshot.autoRefresh);
   state.autoRefresh.intervalMinutes = snapshot.autoRefreshInterval;
   state.flowingEdges = Boolean(snapshot.flowingEdges);
+  state.yodaDepth = Math.max(1, Math.min(6, Number.parseInt(snapshot.yodaDepth || "4", 10) || 4));
   if (autoRefreshToggle) autoRefreshToggle.checked = state.autoRefresh.enabled;
   if (autoRefreshInterval) autoRefreshInterval.value = String(state.autoRefresh.intervalMinutes);
   if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
+  if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
   scheduleAutoRefresh();
   updateCacheSettingsView();
   hideFloatingPanels();
@@ -512,6 +529,12 @@ function updateCloudModeControl() {
   cloudModeButton.dataset.tooltip = tooltip;
   cloudModeButton.title = tooltip;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
+}
+
+function updateMapFilterPanel() {
+  mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
+  mapFilterToggleButton?.classList.toggle("is-on", state.mapFiltersVisible);
+  mapFilterToggleButton?.setAttribute("aria-pressed", state.mapFiltersVisible ? "true" : "false");
 }
 
 function zoomBy(direction) {
@@ -713,6 +736,9 @@ function updateTourControls() {
   if (!tourButton) return;
   const stopText = `Autopilot ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}`;
   const tooltip = state.tour.active ? `${stopText}. Click to stop.` : "Start autopilot through important nodes.";
+  if (autopilotFlyout) {
+    autopilotFlyout.hidden = !state.tour.active && !navAutopilotButton?.classList.contains("is-open");
+  }
   tourButton.classList.toggle("is-active", state.tour.active);
   tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
   tourButton.setAttribute("aria-label", state.tour.active ? "Stop Autopilot" : "Start Autopilot");
@@ -803,6 +829,7 @@ function setFlyoutOpen(panel, button, open) {
   if (panel === settingsFlyout && open) {
     state.pendingSettings = snapshotSettings();
     if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
+    if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
     updateCacheSettingsView();
   }
   updateNavModeState();
@@ -2318,6 +2345,52 @@ function clampRelationshipPage(slug, itemCount) {
   return page;
 }
 
+function relationshipPageWindow(page, totalPages) {
+  const startPage = Math.max(0, Math.min(page - 4, Math.max(0, totalPages - 10)));
+  const endPage = Math.min(totalPages, startPage + 10);
+  return { startPage, endPage };
+}
+
+function renderRelationshipPager(page, totalPages, onPage) {
+  const pager = document.createElement("div");
+  pager.className = "relationship-pagination";
+  const previous = document.createElement("button");
+  previous.id = "relationshipPrevPage";
+  previous.className = "ghost-button";
+  previous.type = "button";
+  previous.textContent = "Previous";
+  previous.disabled = page <= 0;
+  previous.addEventListener("click", () => onPage(page - 1));
+  pager.appendChild(previous);
+
+  const { startPage, endPage } = relationshipPageWindow(page, totalPages);
+  for (let pageIndex = startPage; pageIndex < endPage; pageIndex += 1) {
+    const button = document.createElement("button");
+    button.className = "relationship-page-number";
+    button.type = "button";
+    button.textContent = String(pageIndex + 1);
+    button.setAttribute("aria-current", pageIndex === page ? "page" : "false");
+    button.disabled = pageIndex === page;
+    button.addEventListener("click", () => onPage(pageIndex));
+    pager.appendChild(button);
+  }
+
+  const count = document.createElement("span");
+  count.className = "relationship-page-total";
+  count.textContent = `of ${totalPages}`;
+  pager.appendChild(count);
+
+  const next = document.createElement("button");
+  next.id = "relationshipNextPage";
+  next.className = "ghost-button";
+  next.type = "button";
+  next.textContent = "Next";
+  next.disabled = page >= totalPages - 1;
+  next.addEventListener("click", () => onPage(page + 1));
+  pager.appendChild(next);
+  return pager;
+}
+
 function labelForSlug(slug) {
   const node = state.nodeMap.get(slug);
   return node?.label || slug;
@@ -2381,32 +2454,11 @@ function renderRelationshipWikiList(items, selectedSlug, options = {}) {
   }
   modalMarkdown.appendChild(list);
   if (items.length > RELATIONSHIP_PAGE_SIZE) {
-    const pager = document.createElement("div");
-    pager.className = "relationship-pagination";
-    const previous = document.createElement("button");
-    previous.id = "relationshipPrevPage";
-    previous.className = "ghost-button";
-    previous.type = "button";
-    previous.textContent = "Previous";
-    previous.disabled = page <= 0;
-    previous.addEventListener("click", () => {
-      state.relationshipPages.set(selectedSlug, page - 1);
+    const totalPages = Math.ceil(items.length / RELATIONSHIP_PAGE_SIZE);
+    modalMarkdown.appendChild(renderRelationshipPager(page, totalPages, (nextPage) => {
+      state.relationshipPages.set(selectedSlug, nextPage);
       renderRelationshipWikiList(items, selectedSlug, options);
-    });
-    const count = document.createElement("span");
-    count.textContent = `Page ${page + 1} of ${Math.ceil(items.length / RELATIONSHIP_PAGE_SIZE)}`;
-    const next = document.createElement("button");
-    next.id = "relationshipNextPage";
-    next.className = "ghost-button";
-    next.type = "button";
-    next.textContent = "Next";
-    next.disabled = start + RELATIONSHIP_PAGE_SIZE >= items.length;
-    next.addEventListener("click", () => {
-      state.relationshipPages.set(selectedSlug, page + 1);
-      renderRelationshipWikiList(items, selectedSlug, options);
-    });
-    pager.append(previous, count, next);
-    modalMarkdown.appendChild(pager);
+    }));
   }
 }
 
@@ -2419,9 +2471,13 @@ function renderBacklinksView(rawOutput, selectedSlug) {
   }
   const allTargetsAreSelected = items.every((item) => !item.to_slug || item.to_slug === selectedSlug);
   modalMarkdown.innerHTML = "";
+  const totalPages = Math.max(1, Math.ceil(items.length / RELATIONSHIP_PAGE_SIZE));
+  const currentPage = Math.max(0, Math.min(totalPages - 1, state.backlinkPages.get(selectedSlug) || 0));
+  state.backlinkPages.set(selectedSlug, currentPage);
+  const visibleItems = items.slice(currentPage * RELATIONSHIP_PAGE_SIZE, (currentPage + 1) * RELATIONSHIP_PAGE_SIZE);
   const list = document.createElement("div");
   list.className = "relationship-wiki-list backlink-list";
-  items.forEach((item) => {
+  visibleItems.forEach((item) => {
     const row = document.createElement("article");
     row.className = "relationship-wiki-row backlink-item";
     const link = createEntityMarkdownLink(item.from_slug, labelForSlug(item.from_slug));
@@ -2433,23 +2489,6 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     relation.className = "relationship-type backlink-relation";
     relation.textContent = item.link_type || "related to";
     row.appendChild(relation);
-    if (!allTargetsAreSelected && item.to_slug) {
-      const target = document.createElement("span");
-      target.className = "backlink-target";
-      target.textContent = `to ${labelForSlug(item.to_slug)}`;
-      target.title = item.to_slug;
-      row.appendChild(target);
-    }
-    const details = [
-      allTargetsAreSelected ? "" : item.context,
-      item.link_source ? `source: ${item.link_source}` : "",
-    ].filter(Boolean).join(" · ");
-    if (details) {
-      const meta = document.createElement("p");
-      meta.className = "backlink-meta";
-      meta.textContent = details;
-      row.appendChild(meta);
-    }
     const linkBack = document.createElement("button");
     linkBack.type = "button";
     linkBack.className = "relationship-icon-button relationship-add-backlink backlink-link-back";
@@ -2464,10 +2503,34 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     list.appendChild(row);
   });
   modalMarkdown.appendChild(list);
+  if (items.length > RELATIONSHIP_PAGE_SIZE) {
+    modalMarkdown.appendChild(renderRelationshipPager(currentPage, totalPages, (nextPage) => {
+      state.backlinkPages.set(selectedSlug, nextPage);
+      renderBacklinksView(rawOutput, selectedSlug);
+    }));
+  }
 }
 
-function renderOutgoingRelationshipsView(slug) {
-  const items = outgoingRelationshipOptions(slug).map((option) => ({
+function parseOutgoingRelationshipItems(rawOutput) {
+  return String(rawOutput || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\s*--(.+?)->\s+(\S+)/);
+      if (!match) return null;
+      const linkType = match[1].trim().replace(/_/g, " ");
+      const targetSlug = match[2].trim();
+      if (!targetSlug) return null;
+      return {
+        source_slug: targetSlug,
+        link_type: linkType || "related to",
+      };
+    })
+    .filter(Boolean);
+}
+
+function renderOutgoingRelationshipsView(slug, rawOutput = "") {
+  const parsedItems = parseOutgoingRelationshipItems(rawOutput);
+  const items = parsedItems.length ? parsedItems : outgoingRelationshipOptions(slug).map((option) => ({
     source_slug: option.targetSlug,
     link_type: option.type || "related to",
   }));
@@ -3101,7 +3164,22 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Outgoing direct relationships for this node.";
     operationModal.hidden = false;
     state.modalAction = { action: "result", slug, label };
-    renderOutgoingRelationshipsView(slug);
+    renderMarkdownView("Loading outgoing relationships...");
+    const busyToken = beginBusyOperation("Loading relationships");
+    try {
+      const response = await apiPost(`/api/entity-graph-query/${encodeURIComponent(slug)}`, {
+        direction: "outgoing",
+        depth: "1",
+      });
+      if (!response.ok) {
+        modalMessage.textContent = `Unable to load relationships: ${response.data?.error || response.status}`;
+        renderOutgoingRelationshipsView(slug);
+        return;
+      }
+      renderOutgoingRelationshipsView(slug, response.data.output || "");
+    } finally {
+      endBusyOperation(busyToken);
+    }
     return;
   }
 
@@ -3446,7 +3524,7 @@ async function runModalPrimaryAction() {
       modalChatInput.disabled = true;
       modalMessage.textContent = "Asking Yoda...";
       const historyPayload = history.filter((message) => message.role !== "system" && message.content !== "Thinking...").slice(-8);
-      const response = await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload });
+      const response = await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload, depth: state.yodaDepth });
       if (!response.ok) throw new Error(response.data?.error || `Ask Yoda failed with ${response.status}`);
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
@@ -3825,6 +3903,11 @@ function bindEvents() {
   flushCacheButton?.addEventListener("click", flushNodeCache);
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
+  });
+  mapFilterToggleButton?.addEventListener("click", () => {
+    state.mapFiltersVisible = !state.mapFiltersVisible;
+    mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
+    updateMapFilterPanel();
   });
 
   searchInput.addEventListener("input", (event) => {
@@ -4294,7 +4377,9 @@ async function init() {
   uiVersion.textContent = UI_VERSION;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
   if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
+  if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
   updateCloudModeControl();
+  updateMapFilterPanel();
   updateTimelineLabel();
   updateSelectionHistoryControls();
   updateNavModeState();

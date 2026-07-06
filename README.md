@@ -17,7 +17,7 @@ It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it ru
 ### Interactive Stargraph
 
 <p align="center">
-  <img src="docs/assets/memory-stargraph-ui.png" alt="Memory Stargraph interactive star-cloud UI showing clustered gbrain entities, relationship hover, search, refresh, and memory tour controls">
+  <img src="docs/assets/memory-stargraph-ui-2026-07-06.png" alt="Memory Stargraph interactive star-cloud UI showing clustered gbrain entities, relationship hover, Ask Yoda, Autopilot, and local cache controls">
 </p>
 
 ### Shared AI Memory Architecture
@@ -50,16 +50,16 @@ http://127.0.0.1:8788
 
 These are the highest-value features for understanding, maintaining, and extending a `gbrain` knowledge base.
 
-1. **Entity graph exploration** - Search by slug, title, tag, or summary, then click any node to lazily load its direct gbrain neighbors.
-2. **Relationship visibility** - Hover or tap directly linked nodes to see the entity summary and relationship type in a mouse-near popup.
-3. **Read-only knowledge viewing** - Open `View` to render the node's gbrain markdown with entity links and media references resolved for browsing.
-4. **Ask GBrain** - Ask contextual questions in a chat-style panel backed by the selected node, graph context, media hints, and targeted gbrain retrieval.
-5. **Graph query from here** - Run guided typed/directional traversals from the selected node without writing raw graph commands.
-6. **Relationship editing** - Add relationships by searching/selecting target nodes and link types, or remove only existing relationships.
-7. **Timeline viewing and event capture** - Read a node timeline as rendered markdown and add structured timeline events with date, summary, detail, and source.
-8. **Media attachment and preview** - Attach local files through the browser, write markdown references back to gbrain, and preview supported media through configured media roots or trusted remote media endpoints.
-9. **Freshness and source status** - Refresh live gbrain data, enable timed auto-refresh, and inspect source/cache status in the `Graph source` panel.
-10. **Noise reduction for large brains** - Keep the root `index` eagerly loaded, collapse dated report/document-part nodes, humanize path labels, hide UI-only nodes, filter by matches/minimum links, and use selection history to move through visited nodes.
+1. **Ask Yoda** - Ask contextual questions in a chat-style panel backed by the selected node, configurable graph depth, media hints, and targeted gbrain retrieval.
+2. **Autopilot memory tour** - Step through important nodes with previous/next controls, a visible counter, and load-timeout recovery.
+3. **Local caching** - Cache node content and media in the browser with a configurable memory limit, usage readout, and one-click flush.
+4. **Entity graph exploration** - Search by slug, title, tag, or summary, then click any node to lazily load its direct gbrain neighbors.
+5. **Relationship and backlink traversal** - Inspect outgoing relationships, incoming backlinks, page through long lists, and jump directly to related nodes.
+6. **Media and document attachments** - Attach local files through the browser, write markdown references back to gbrain, and preview supported media from trusted roots.
+7. **Fast exact-slug search** - Resolve exact slugs before indexed search, preserve Unicode terms, and report search timing after render.
+8. **Performance-optimized large graph rendering** - Cull hidden nodes and filtered edges, use idle rendering, and limit animated edge work to relevant neighborhoods.
+9. **Settings and graph controls** - Configure display effects, cache limits, Yoda depth, refresh behavior, clustering, filters, zoom, and history navigation.
+10. **Remote and dashboard operation** - Run locally, behind All Things Codex Dashboard, or on remote hosts with health/version checks and host-specific config.
 
 ## GBrain Integration
 
@@ -196,7 +196,7 @@ Verification commands:
 Supported node operations to preserve:
 1. View
 2. Timeline
-3. Ask GBrain
+3. Ask Yoda
 4. View media
 5. Graph query from here
 6. Add relationship

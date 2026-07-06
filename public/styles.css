@@ -2669,6 +2669,31 @@ body::after {
   font-weight: 800;
 }
 
+.relationship-page-number {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid rgba(103, 232, 249, 0.22);
+  background: rgba(15, 23, 42, 0.64);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.relationship-page-number[aria-current="page"] {
+  color: #67e8f9;
+  font-weight: 950;
+  border-color: rgba(103, 232, 249, 0.56);
+  background: rgba(34, 211, 238, 0.16);
+  cursor: default;
+}
+
+.relationship-page-total {
+  color: rgba(205, 218, 255, 0.76);
+}
+
 @media (max-width: 1080px) {
   .workspace {
     grid-template-columns: 72px minmax(0, 1fr);
@@ -2808,16 +2833,16 @@ body::after {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34), 0 0 28px rgba(34, 211, 238, 0.16), inset 0 0 22px rgba(34, 211, 238, 0.07);
 }
 
-.graph-canvas-wrap > .busy-indicator {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  z-index: 18;
-  max-width: min(320px, calc(100% - 36px));
-}
-
+.graph-canvas-wrap > .busy-indicator,
 .busy-indicator {
-  z-index: 18;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  z-index: 38;
+  max-width: min(320px, calc(100% - 36px));
+  transform: translate(-50%, -50%);
 }
 
 .search-flyout {
@@ -2844,9 +2869,17 @@ body::after {
   top: 108px;
 }
 
+.autopilot-flyout.tour-active {
+  left: 70px;
+  top: 18px;
+  min-height: 36px;
+  padding: 2px 6px;
+  gap: 4px;
+}
+
 .settings-flyout {
   right: 22px;
-  top: 160px;
+  top: 76px;
   width: min(380px, calc(100% - 44px));
   display: grid;
   align-items: stretch;
@@ -3029,6 +3062,8 @@ body::after {
 .new-node-floating {
   right: 18px;
   top: 18px;
+  display: grid;
+  gap: 8px;
   opacity: 0.28;
   transition: opacity 0.18s ease;
 }
@@ -3038,10 +3073,77 @@ body::after {
   opacity: 1;
 }
 
-.new-node-icon-button {
+.new-node-icon-button,
+.map-filter-toggle-button {
   width: 36px;
   min-width: 36px;
   height: 36px;
+}
+
+.map-filter-toggle-button {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.map-filter-toggle-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.map-filter-toggle-button.is-on {
+  color: #bff8ff;
+  background: rgba(34, 211, 238, 0.14);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.28);
+}
+
+.map-filter-panel {
+  position: absolute;
+  right: 4px;
+  top: 70px;
+  z-index: 30;
+  display: grid;
+  gap: 10px;
+  width: 138px;
+  max-height: calc(100% - 230px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: rgba(2, 8, 22, 0.76);
+  clip-path: var(--chamfer);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.24), inset 0 0 18px rgba(34, 211, 238, 0.08);
+}
+
+.map-filter-panel.is-hidden {
+  display: none;
+}
+
+.map-filter-panel .panel-label-row {
+  display: grid;
+  gap: 5px;
+}
+
+.map-filter-panel .panel-label,
+.map-filter-panel .limit-control {
+  font-size: 9px;
+}
+
+.map-filter-panel .category-legend {
+  gap: 4px;
+}
+
+.map-filter-panel .category-item {
+  font-size: 9px;
+  line-height: 1.15;
 }
 
 .autopilot-start-button.is-active {
@@ -3064,6 +3166,20 @@ body::after {
   width: 34px;
   min-width: 34px;
   height: 34px;
+}
+
+.selection-yoda-button .yoda-avatar {
+  width: 22px;
+  height: 22px;
+  fill: rgba(190, 242, 100, 0.18);
+  stroke: #bef264;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.selection-yoda-button {
+  color: #ecfccb;
 }
 
 @media (max-width: 1080px) {
@@ -3100,6 +3216,8 @@ body::after {
   .radar-widget {
     width: 78px;
     height: 78px;
+    right: 12px;
+    bottom: 12px;
   }
 
   .radar-stats {
@@ -3111,5 +3229,19 @@ body::after {
   .new-node-floating {
     top: 12px;
     right: 12px;
+  }
+
+  .map-filter-panel {
+    right: 12px;
+    top: 96px;
+    width: 118px;
+    max-height: calc(100% - 194px);
+  }
+
+  .graph-canvas-wrap > .canvas-overlay,
+  .canvas-overlay {
+    left: 12px;
+    right: 104px;
+    bottom: 12px;
   }
 }

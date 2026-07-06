@@ -751,7 +751,7 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
