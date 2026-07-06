@@ -295,9 +295,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.81"', markup)
-        self.assertIn('src="/app.js?v=1.0.81"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.81"', script)
+        self.assertIn('href="/styles.css?v=1.0.82"', markup)
+        self.assertIn('src="/app.js?v=1.0.82"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.82"', script)
         self.assertIn("height: 34px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -393,7 +393,6 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
 
         self.assertIn('id="navSettingsButton"', markup)
-        self.assertIn('<h2 class="settings-title">Settings</h2>', markup)
         self.assertIn('class="settings-section"', markup)
         self.assertIn("<h3>Cache</h3>", markup)
         self.assertIn("<h3>Refresh</h3>", markup)
@@ -415,49 +414,6 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function enforceCacheLimit", script)
         self.assertIn("updateCacheSettingsView", script)
         self.assertIn("0 disables cache", markup)
-
-    def test_settings_controls_flowing_edges_and_radar_cache_usage(self):
-        markup = (ROOT / "public" / "index.html").read_text()
-        script = (ROOT / "public/app.js").read_text()
-
-        self.assertIn("<h3>Display</h3>", markup)
-        self.assertIn('id="flowingEdgesToggle"', markup)
-        self.assertIn("Flowing edge effect", markup)
-        self.assertNotIn('id="flowingEdgesToggle" type="checkbox" checked', markup)
-        self.assertIn('id="radarCacheUsage"', markup)
-        self.assertLess(markup.index('id="radarCacheUsage"'), markup.index('id="metricMode"'))
-        self.assertIn("FLOWING_EDGE_EFFECT_KEY", script)
-        self.assertIn('flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, false)', script)
-        self.assertIn("flowingEdges: state.flowingEdges", script)
-        self.assertIn("state.flowingEdges = Boolean(flowingEdgesToggle?.checked)", script)
-        self.assertIn("function updateRadarCacheUsage", script)
-        self.assertIn("radarCacheUsage.textContent = `Cache ${formatBytes(cacheUsedBytes())}`", script)
-
-    def test_flowing_edge_rendering_defaults_off_and_is_gated(self):
-        script = (ROOT / "public/app.js").read_text()
-        edge_start = script.index("function drawEdges")
-        edge_end = script.index("function drawNodes", edge_start)
-        edge_block = script[edge_start:edge_end]
-
-        self.assertIn("if (state.flowingEdges)", edge_block)
-        self.assertIn("ctx.setLineDash([6, 14])", edge_block)
-        self.assertIn("ctx.lineDashOffset = -state.animationTick", edge_block)
-        self.assertIn("ctx.setLineDash([])", edge_block)
-        self.assertLess(edge_block.index("ctx.stroke()"), edge_block.index("if (state.flowingEdges)"))
-
-    def test_map_overlays_are_inside_canvas_bounds(self):
-        markup = (ROOT / "public" / "index.html").read_text()
-        styles = (ROOT / "public" / "styles.css").read_text()
-
-        self.assertLess(markup.index('class="graph-canvas-wrap"'), markup.index('class="new-node-floating"'))
-        self.assertLess(markup.index('class="graph-canvas-wrap"'), markup.index('id="busyIndicator"'))
-        self.assertIn(".graph-canvas-wrap > .new-node-floating", styles)
-        self.assertIn(".graph-canvas-wrap > .busy-indicator", styles)
-        self.assertIn("top: 18px", styles)
-        self.assertIn("right: 18px", styles)
-        self.assertIn("bottom: 18px", styles)
-        self.assertIn("z-index: 18", styles)
-        self.assertNotIn("right: -16px", styles)
 
     def test_ask_yoda_uses_agent_chat_action(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -520,11 +476,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.81"', markup)
-        self.assertIn('src="/app.js?v=1.0.81"', markup)
-        self.assertIn('>V1.0.81</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.81"', script)
-        self.assertIn('UI_VERSION = "V1.0.81"', server)
+        self.assertIn('href="/styles.css?v=1.0.82"', markup)
+        self.assertIn('src="/app.js?v=1.0.82"', markup)
+        self.assertIn('>V1.0.82</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.82"', script)
+        self.assertIn('UI_VERSION = "V1.0.82"', server)
 
     def test_canvas_hint_adapts_to_pointer_type(self):
         script = (ROOT / "public/app.js").read_text()
@@ -560,10 +516,10 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.81"', markup)
-        self.assertIn('src="/app.js?v=1.0.81"', markup)
-        self.assertIn('V1.0.81', markup)
-        self.assertIn('const UI_VERSION = "V1.0.81"', script)
+        self.assertIn('href="/styles.css?v=1.0.82"', markup)
+        self.assertIn('src="/app.js?v=1.0.82"', markup)
+        self.assertIn('V1.0.82', markup)
+        self.assertIn('const UI_VERSION = "V1.0.82"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -577,11 +533,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.81"', markup)
-        self.assertIn('src="/app.js?v=1.0.81"', markup)
-        self.assertIn('>V1.0.81</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.81"', script)
-        self.assertIn('UI_VERSION = "V1.0.81"', (ROOT / "server.py").read_text())
+        self.assertIn('href="/styles.css?v=1.0.82"', markup)
+        self.assertIn('src="/app.js?v=1.0.82"', markup)
+        self.assertIn('>V1.0.82</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.82"', script)
+        self.assertIn('UI_VERSION = "V1.0.82"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)

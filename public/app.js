@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.81";
+const UI_VERSION = "V1.0.82";
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";

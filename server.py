@@ -112,7 +112,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.81"
+UI_VERSION = "V1.0.82"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -356,11 +356,56 @@ def run_gbrain(*args, input_text=None, timeout=20):
     return decode_process_output(result.stdout)
 
 
+def extract_json_object(text):
+    source = str(text or "")
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(source):
+        if char != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(source[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def extract_openclaw_answer(output):
+    payload = extract_json_object(output)
+    if not payload:
+        return ""
+    for key in ("finalAssistantVisibleText", "finalAssistantRawText"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    payloads = payload.get("payloads")
+    if isinstance(payloads, list):
+        parts = []
+        for item in payloads:
+            if isinstance(item, dict) and str(item.get("text") or "").strip():
+                parts.append(str(item["text"]).strip())
+        if parts:
+            return "\n\n".join(parts)
+    return ""
+
+
 def run_openclaw_agent(prompt, timeout=45):
     agent_ref = str(CONFIG.get("yoda_agent") or os.environ.get("MEMORY_STARGRAPH_YODA_AGENT") or "").strip()
-    if not agent_ref:
-        return None
-    command = ["openclaw", "agent", "run", agent_ref, "--stdin"]
+    command = [
+        "openclaw",
+        "agent",
+        "--local",
+        "--json",
+        "--timeout",
+        str(max(5, int(timeout) - 5)),
+        "--session-key",
+        "agent:memory-stargraph-ask-yoda:web",
+        "--message",
+        prompt,
+    ]
+    if agent_ref:
+        command.extend(["--agent", agent_ref])
     env = os.environ.copy()
     bun_bin = Path.home() / ".bun" / "bin"
     env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
@@ -372,14 +417,20 @@ def run_openclaw_agent(prompt, timeout=45):
             timeout=timeout,
             check=False,
             env=env,
-            input=prompt.encode("utf-8"),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
-    output = decode_process_output(result.stdout).strip()
-    return output or None
+    output = "\n".join(
+        value
+        for value in (
+            decode_process_output(result.stdout),
+            decode_process_output(result.stderr),
+        )
+        if value
+    )
+    return extract_openclaw_answer(output) or None
 
 
 def sanitize_yoda_result(result):

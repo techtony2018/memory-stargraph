@@ -10,6 +10,7 @@ from server import (
     collapse_part_identity,
     collect_seed_graph,
     ensure_media_references_available,
+    extract_openclaw_answer,
     expand_raw_graph,
     finalize_graph,
     friendly_label,
@@ -26,6 +27,7 @@ from server import (
     parse_search_results,
     remote_media_url_for_relative_path,
     resolve_media_file_path,
+    run_openclaw_agent,
     run_gbrain,
     serve_url_for_media_reference,
     gbrain_file_url_for_relative_path,
@@ -720,7 +722,11 @@ cover_image: companies/example-inc/logo.jpg
 
     def test_graph_store_node_operations_call_gbrain_commands(self):
         store = GraphStore()
-        with mock.patch("server.run_gbrain") as run, mock.patch.object(store, "invalidate") as invalidate:
+        with (
+            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_openclaw_agent", return_value="agent answer"),
+            mock.patch.object(store, "invalidate") as invalidate,
+        ):
             run.return_value = "ok"
             store.add_relationship("people/tony-guan", "companies/azul-systems", "employed by", "past role")
             store.remove_relationship("people/tony-guan", "companies/azul-systems", "employed by")
@@ -746,8 +752,6 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
-                mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
@@ -770,6 +774,27 @@ cover_image: companies/example-inc/logo.jpg
         self.assertNotIn("OpenClaw agent unavailable", result["output"])
         self.assertNotIn("retrieved context", result["output"])
         self.assertNotIn("prompt", result)
+
+    def test_extract_openclaw_answer_ignores_cli_warnings(self):
+        output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'
+
+        self.assertEqual(extract_openclaw_answer(output), "visible answer")
+
+    def test_run_openclaw_agent_uses_current_cli_shape(self):
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = b'noise\n{"finalAssistantVisibleText":"agent answer"}'
+        completed.stderr = b"[agent] done"
+        with mock.patch("server.subprocess.run", return_value=completed) as run:
+            answer = run_openclaw_agent("answer this", timeout=30)
+
+        self.assertEqual(answer, "agent answer")
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["openclaw", "agent", "--local", "--json"])
+        self.assertIn("--message", command)
+        self.assertIn("answer this", command)
+        self.assertNotIn("run", command)
+        self.assertNotIn("--stdin", command)
 
     def test_graph_store_uses_cache_for_fast_startup(self):
         store = GraphStore()
