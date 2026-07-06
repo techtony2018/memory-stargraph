@@ -24,28 +24,40 @@ const state = {
   categoryLimit: 5,
   clusterLimit: 5,
   timelineDays: 0,
-  tour: { active: false, slugs: [], index: 0, timer: null },
+  tour: { active: false, slugs: [], index: 0, timer: null, pending: false },
   selectionHistory: { slugs: [], index: -1, navigating: false },
   lazySearch: { timer: null, query: "", loading: false },
   menuSlug: null,
   modalAction: null,
   askChats: new Map(),
+  askYodaChats: new Map(),
+  busyOperations: new Map(),
+  busyOperationId: 0,
   entityLoadId: 0,
   selectionVersion: 0,
   zoom: 1,
   rotation: { x: -0.34, y: 0.58, vx: 0.0012, vy: 0.0022 },
   drag: { active: false, moved: false, lastX: 0, lastY: 0, pointerId: null },
   mobileTooltipTimer: null,
-  busyOperations: new Map(),
-  busyOperationId: 0,
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.76";
+const UI_VERSION = "V1.0.79";
+const NODE_CACHE_DEFAULT_BYTES = 2 * 1024 * 1024;
+const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
+const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
+const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
 const hoverLabel = document.getElementById("hoverLabel");
 const graphTooltip = document.getElementById("graphTooltip");
+const navStargraphButton = document.getElementById("navStargraphButton");
+const navSearchButton = document.getElementById("navSearchButton");
+const navAutopilotButton = document.getElementById("navAutopilotButton");
+const navSettingsButton = document.getElementById("navSettingsButton");
+const searchFlyout = document.getElementById("searchFlyout");
+const autopilotFlyout = document.getElementById("autopilotFlyout");
+const settingsFlyout = document.getElementById("settingsFlyout");
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
 const matchesOnlyToggle = document.getElementById("matchesOnlyToggle");
@@ -74,6 +86,8 @@ const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
+const selectionMediaPreview = document.getElementById("selectionMediaPreview");
+const selectionMediaSlug = document.getElementById("selectionMediaSlug");
 const detailLinks = document.getElementById("detailLinks") || document.createElement("div");
 const detailSecondRing = document.getElementById("detailSecondRing") || document.createElement("div");
 const sourceBadge = document.getElementById("sourceBadge");
@@ -112,6 +126,7 @@ const busyIndicatorLabel = document.getElementById("busyIndicatorLabel");
 const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
 const metricDegree = document.getElementById("metricDegree");
+const metricMode = document.getElementById("metricMode");
 
 const CATEGORY_PALETTE = [
   "#88f6ff",
@@ -157,13 +172,89 @@ function resizeCanvas() {
   ctx.setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
 }
 
+function safeJsonParse(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function cacheLimitBytes() {
+  const stored = Number.parseInt(window.localStorage?.getItem(NODE_CACHE_LIMIT_KEY) || "", 10);
+  if (Number.isFinite(stored)) return Math.max(0, Math.min(NODE_CACHE_MAX_BYTES, stored));
+  return NODE_CACHE_DEFAULT_BYTES;
+}
+
+function cacheStore() {
+  return safeJsonParse(window.localStorage?.getItem(NODE_CACHE_STORAGE_KEY) || "", { entries: {} });
+}
+
+function saveCacheStore(store) {
+  window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, JSON.stringify(store));
+}
+
+function cacheableGetUrl(url) {
+  return /^\/api\/entity(?:-raw|-media)?\/[^?]+$/.test(String(url || ""));
+}
+
+function cacheUsedBytes(store = cacheStore()) {
+  return JSON.stringify(store.entries || {}).length;
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function cacheGet(url) {
+  if (!cacheableGetUrl(url) || cacheLimitBytes() <= 0) return null;
+  const store = cacheStore();
+  const entry = store.entries?.[url];
+  if (!entry) return null;
+  entry.lastAccessed = Date.now();
+  saveCacheStore(store);
+  return { ok: true, status: 200, data: entry.data, cached: true };
+}
+
+function enforceCacheLimit(store = cacheStore()) {
+  const limit = cacheLimitBytes();
+  if (limit <= 0) {
+    saveCacheStore({ entries: {} });
+    return { entries: {} };
+  }
+  const entries = Object.entries(store.entries || {}).sort((left, right) => (left[1].lastAccessed || 0) - (right[1].lastAccessed || 0));
+  while (JSON.stringify(store.entries || {}).length > limit && entries.length) {
+    const [key] = entries.shift();
+    delete store.entries[key];
+  }
+  saveCacheStore(store);
+  return store;
+}
+
+function cacheSet(url, data) {
+  if (!cacheableGetUrl(url) || cacheLimitBytes() <= 0) return;
+  const store = cacheStore();
+  store.entries = store.entries || {};
+  store.entries[url] = { data, lastAccessed: Date.now() };
+  enforceCacheLimit(store);
+  updateCacheSettingsView();
+}
+
 function apiGet(url) {
+  const cached = cacheGet(url);
+  if (cached) return Promise.resolve(cached);
   if (typeof window.fetch === "function") {
-    return window.fetch(url).then(async (response) => ({
-      ok: response.ok,
-      status: response.status,
-      data: await response.json(),
-    }));
+    return window.fetch(url).then(async (response) => {
+      const result = {
+        ok: response.ok,
+        status: response.status,
+        data: await response.json(),
+      };
+      if (result.ok) cacheSet(url, result.data);
+      return result;
+    });
   }
 
   return new Promise((resolve, reject) => {
@@ -176,10 +267,12 @@ function apiGet(url) {
       }
       if (request.status >= 200 && request.status < 300) {
         try {
+          const data = JSON.parse(request.responseText);
+          cacheSet(url, data);
           resolve({
             ok: true,
             status: request.status,
-            data: JSON.parse(request.responseText),
+            data,
           });
         } catch (error) {
           reject(error);
@@ -249,6 +342,13 @@ function beginBusyOperation(label) {
 function endBusyOperation(token) {
   if (token) state.busyOperations.delete(token);
   setBusyIndicator();
+}
+
+function updateCacheSettingsView() {
+  const input = document.getElementById("cacheLimitInput");
+  const usage = document.getElementById("cacheUsageValue");
+  if (input) input.value = String(Math.round(cacheLimitBytes() / (1024 * 1024)));
+  if (usage) usage.textContent = `${formatBytes(cacheUsedBytes())} used of ${formatBytes(cacheLimitBytes())}`;
 }
 
 function updateLastRefresh(source) {
@@ -371,22 +471,62 @@ function buildTourSlugs() {
 }
 
 async function showTourStop(index) {
-  if (!state.tour.slugs.length) return;
+  if (!state.tour.slugs.length || state.tour.pending) return;
+  state.tour.pending = true;
   state.tour.index = (index + state.tour.slugs.length) % state.tour.slugs.length;
   const slug = state.tour.slugs[state.tour.index];
   const node = state.nodeMap.get(slug);
-  if (!node) return;
-  hoverLabel.textContent = `Memory Tour ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
+  if (!node) {
+    state.tour.pending = false;
+    return;
+  }
+  hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
   updateTourControls();
-  await loadEntity(slug, { source: "system" });
+  try {
+    await loadEntity(slug, { source: "system" });
+    await waitForTourSelectionLoad(slug);
+  } finally {
+    state.tour.pending = false;
+  }
+  if (state.tour.active) scheduleNextTourStop();
+}
+
+function selectionIsLoadedForTour(slug) {
+  return state.focusSlug === slug
+    && detailTitle.textContent.trim().length > 0
+    && detailType.textContent.trim().length > 0
+    && detailSummary.textContent.trim().length > 0;
+}
+
+function waitForTourSelectionLoad(slug) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (selectionIsLoadedForTour(slug) || Date.now() - startedAt > 12000) {
+        resolve();
+        return;
+      }
+      window.setTimeout(check, 120);
+    };
+    check();
+  });
+}
+
+function scheduleNextTourStop() {
+  if (!state.tour.active) return;
+  if (state.tour.timer) window.clearTimeout(state.tour.timer);
+  state.tour.timer = window.setTimeout(() => {
+    void showTourStop(state.tour.index + 1);
+  }, 5200);
 }
 
 function stopTour() {
   state.tour.active = false;
   if (state.tour.timer) {
-    window.clearInterval(state.tour.timer);
+    window.clearTimeout(state.tour.timer);
     state.tour.timer = null;
   }
+  state.tour.pending = false;
   updateTourControls();
 }
 
@@ -396,10 +536,6 @@ async function startTour() {
   state.tour.active = true;
   updateTourControls();
   await showTourStop(state.tour.index || 0);
-  if (state.tour.timer) window.clearInterval(state.tour.timer);
-  state.tour.timer = window.setInterval(() => {
-    void showTourStop(state.tour.index + 1);
-  }, 5200);
 }
 
 function toggleTour() {
@@ -420,10 +556,16 @@ function moveTour(delta) {
 
 function updateTourControls() {
   if (!tourButton) return;
-  tourButton.textContent = state.tour.active ? `Tour ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}` : "Memory Tour";
+  const stopText = `Autopilot ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}`;
+  const tooltip = state.tour.active ? `${stopText}. Click to stop.` : "Start autopilot through important nodes.";
   tourButton.classList.toggle("is-active", state.tour.active);
   tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
-  tourButton.closest(".timeline-strip")?.classList.toggle("tour-active", state.tour.active);
+  tourButton.setAttribute("aria-label", state.tour.active ? "Stop Autopilot" : "Start Autopilot");
+  tourButton.dataset.tooltip = tooltip;
+  tourButton.title = tooltip;
+  if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
+  tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-active", state.tour.active);
+  updateNavModeState();
 }
 
 function setSearchLoading(active) {
@@ -480,6 +622,72 @@ async function searchEntityLink(query) {
   await runLazySearch(value);
 }
 
+const flyoutPairs = [
+  { panel: searchFlyout, button: navSearchButton },
+  { panel: autopilotFlyout, button: navAutopilotButton },
+  { panel: settingsFlyout, button: navSettingsButton },
+];
+
+function setFlyoutOpen(panel, button, open) {
+  if (!panel || !button) return;
+  if (open) positionFloatingPanel(panel, button);
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  button.classList.toggle("is-open", open);
+  updateNavModeState();
+}
+
+function hideFloatingPanels(exceptPanel = null) {
+  flyoutPairs.forEach(({ panel, button }) => {
+    if (panel && panel !== exceptPanel) {
+      setFlyoutOpen(panel, button, false);
+    }
+  });
+}
+
+function toggleFloatingPanel(panel, button) {
+  if (!panel || !button) return;
+  const willOpen = panel.hidden;
+  hideFloatingPanels(panel);
+  setFlyoutOpen(panel, button, willOpen);
+}
+
+function positionFloatingPanel(panel, button) {
+  const wrap = canvas?.parentElement;
+  if (!panel || !button || !wrap) return;
+  const wrapRect = wrap.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  const top = Math.max(12, Math.min(wrapRect.height - 80, buttonRect.top - wrapRect.top));
+  panel.style.left = "12px";
+  panel.style.right = "auto";
+  panel.style.top = `${Math.round(top)}px`;
+}
+
+function showFloatingPanel(panel, button) {
+  hideFloatingPanels(panel);
+  setFlyoutOpen(panel, button, true);
+}
+
+function targetIsInsideFloatingPanel(target) {
+  return flyoutPairs.some(({ panel, button }) => (
+    (panel && panel.contains(target)) || (button && button.contains(target))
+  ));
+}
+
+function updateNavModeState() {
+  const searchOpen = Boolean(searchFlyout && !searchFlyout.hidden);
+  const settingsOpen = Boolean(settingsFlyout && !settingsFlyout.hidden);
+  const autopilotOpen = Boolean(autopilotFlyout && !autopilotFlyout.hidden);
+  navStargraphButton?.classList.toggle("is-active", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen);
+  navStargraphButton?.classList.toggle("is-flashing", !state.tour.active && !searchOpen && !settingsOpen && !autopilotOpen);
+  navSearchButton?.classList.toggle("is-active", searchOpen);
+  navSearchButton?.classList.toggle("is-flashing", searchOpen);
+  navSettingsButton?.classList.toggle("is-active", settingsOpen);
+  navSettingsButton?.classList.toggle("is-flashing", settingsOpen);
+  navAutopilotButton?.classList.toggle("is-active", state.tour.active || autopilotOpen);
+  navAutopilotButton?.classList.toggle("is-flashing", state.tour.active || autopilotOpen);
+}
+
 function isHidden(slug) {
   return state.hiddenSlugs.has(slug);
 }
@@ -497,8 +705,9 @@ function looksLikeExactSlug(value) {
   const slugSegmentPattern = "[A-Za-z0-9][A-Za-z0-9" + "._-]*";
   const exactSlugPattern = new RegExp(`^${slugSegmentPattern}(?:\\/${slugSegmentPattern})+$`);
   return exactSlugPattern.test(text)
-    && !text.includes("..")
-    && !text.includes("//");
+    && !text.includes(" ")
+    && !text.startsWith("/")
+    && !text.endsWith("/");
 }
 
 function reportSearchTiming(searchStartedAt) {
@@ -515,7 +724,7 @@ async function tryExactSlugSearch(slug) {
     render();
   }
   await loadEntity(slug, { source: "search" });
-  return state.focusSlug === slug;
+  return true;
 }
 
 function pickSearchFocus(graph, query) {
@@ -648,16 +857,12 @@ function updateMetrics(graph) {
   metricNodes.textContent = visibleNodes.length;
   metricEdges.textContent = visibleEdges.length;
   metricDegree.textContent = Math.max(0, ...visibleNodes.map((node) => node.degree || 0));
+  if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
 }
 
 function updateSource(source) {
-  const mode = source.mode || "unknown";
-  const status = source.status || "unknown";
-  sourceBadge.textContent = `${mode} · ${status}`;
-  const coverage = source.coverage || {};
-  const expanded = coverage.expanded_slugs?.length || 0;
-  const lazyText = source.lazy ? ` ${expanded} node${expanded === 1 ? "" : "s"} expanded lazily.` : "";
-  sourceMessage.textContent = `${source.message || "No source note provided."}${lazyText}`;
+  if (sourceBadge) sourceBadge.textContent = "";
+  if (sourceMessage) sourceMessage.textContent = "";
   sourceWarnings.innerHTML = "";
   const warnings = [...(source.warnings || []), ...(source.errors || [])].slice(0, 6);
   warnings.forEach((warning) => {
@@ -978,12 +1183,39 @@ function drawBackground() {
   const height = state.viewport.height;
   ctx.clearRect(0, 0, width, height);
 
-  const glow = ctx.createRadialGradient(width * 0.5, height * 0.48, 10, width * 0.5, height * 0.48, width * 0.42);
-  glow.addColorStop(0, "rgba(143, 124, 255, 0.14)");
-  glow.addColorStop(0.5, "rgba(136, 246, 255, 0.05)");
+  const nebula = ctx.createRadialGradient(width * 0.28, height * 0.54, 20, width * 0.28, height * 0.54, width * 0.34);
+  nebula.addColorStop(0, "rgba(168, 85, 247, 0.18)");
+  nebula.addColorStop(0.42, "rgba(34, 211, 238, 0.055)");
+  nebula.addColorStop(1, "rgba(4, 8, 18, 0)");
+  ctx.fillStyle = nebula;
+  ctx.fillRect(0, 0, width, height);
+
+  const glow = ctx.createRadialGradient(width * 0.5, height * 0.48, 10, width * 0.5, height * 0.48, width * 0.44);
+  glow.addColorStop(0, "rgba(34, 211, 238, 0.1)");
+  glow.addColorStop(0.5, "rgba(59, 130, 246, 0.045)");
   glow.addColorStop(1, "rgba(4, 8, 18, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(34, 211, 238, 0.07)";
+  ctx.lineWidth = 1;
+  const radarX = width * 0.48;
+  const radarY = height * 0.52;
+  const maxRadius = Math.min(width, height) * 0.44;
+  for (let radius = maxRadius * 0.25; radius <= maxRadius; radius += maxRadius * 0.18) {
+    ctx.beginPath();
+    ctx.arc(radarX, radarY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (let index = 0; index < 10; index += 1) {
+    const angle = (index / 10) * Math.PI * 2 + performance.now() / 24000;
+    ctx.beginPath();
+    ctx.moveTo(radarX, radarY);
+    ctx.lineTo(radarX + Math.cos(angle) * maxRadius, radarY + Math.sin(angle) * maxRadius);
+    ctx.stroke();
+  }
+  ctx.restore();
 
   for (let i = 0; i < 80; i += 1) {
     const x = ((i * 97) % width) + 0.5;
@@ -1035,6 +1267,7 @@ function drawClusterClouds() {
 }
 
 function drawEdges() {
+  const now = performance.now();
   [...state.edges].sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
     const alpha = edgeAlpha(edge);
     if (alpha <= 0) return;
@@ -1064,6 +1297,21 @@ function drawEdges() {
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
     ctx.stroke();
 
+    if (layer > 0 || isHoveredFocusEdge) {
+      const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
+      const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
+      const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.86, 0.28 + alpha * 0.58);
+      ctx.fillStyle = layer === 2 ? "rgba(250, 204, 21, 0.95)" : "rgba(34, 211, 238, 0.86)";
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(particleX, particleY, layer === 2 ? 2.4 : 1.7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     const linkTypes = isHoveredFocusEdge ? relationshipTypes(edge.source.slug, edge.target.slug) : [];
     if (linkTypes.length) {
       const label = shortLabel(linkTypes.join(", "), 34);
@@ -1075,7 +1323,7 @@ function drawEdges() {
       const labelX = midX + (-dy / length) * 16;
       const labelY = midY + (dx / length) * 16;
       ctx.save();
-      ctx.font = "700 12px Inter, sans-serif";
+      ctx.font = "700 12px Rajdhani, Inter, sans-serif";
       const metrics = ctx.measureText(label);
       const pillWidth = metrics.width + 18;
       const pillHeight = 22;
@@ -1136,7 +1384,14 @@ function visibleTopHubs(limit = 8) {
 
 function shouldShowLabel(node, topMatches, topHubs) {
   if (node.slug === state.focusSlug || node.slug === state.hoverSlug) return true;
-  if (isLinkedToFocus(node)) return true;
+  if (isLinkedToFocus(node)) {
+    const focused = state.focusSlug ? state.nodeMap.get(state.focusSlug) : null;
+    const focusedDegree = focused?.degree || 0;
+    if (focusedDegree <= 80) return true;
+    if (topHubs.has(node.slug)) return true;
+    if ((node.degree || 0) >= 5) return true;
+    return state.zoom >= 1.65;
+  }
   if (state.query && topMatches.has(node.slug)) return true;
   if (topHubs.has(node.slug)) return true;
   if (state.zoom < 1.35) return false;
@@ -1254,7 +1509,7 @@ function drawNodes() {
       const labelX = node.screenX + radius + 8;
       const labelY = node.screenY - radius - 6;
       const label = labelForNode(node);
-      ctx.font = "600 12px Inter, sans-serif";
+      ctx.font = "700 12px Rajdhani, Inter, sans-serif";
       const labelWidth = ctx.measureText(label).width;
       const rect = { left: labelX - 2, top: labelY - 13, right: labelX + labelWidth + 2, bottom: labelY + 4 };
       const required = node.slug === state.focusSlug || node.slug === state.hoverSlug || isLinkedToFocus(node);
@@ -1387,11 +1642,75 @@ function mediaDisplayUrl(url) {
   let value = String(url || "").trim();
   if (!value) return "";
   if (value.startsWith("gbrain:files/")) {
-    value = value.slice("gbrain:files/".length);
+    value = decodeURIComponent(value.slice("gbrain:files/".length));
   }
   if (/^https?:\/\//i.test(value)) return value;
   if (value.startsWith("/")) return encodeURI(value);
   return `/media/${value.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function mediaItemDisplayUrl(item) {
+  if (item?.served_url) return item.served_url;
+  return mediaDisplayUrl(item?.url || "");
+}
+
+function renderSingleMediaPreview(container, item, options = {}) {
+  if (!container) return false;
+  container.innerHTML = "";
+  if (!item) return false;
+  const displayUrl = mediaItemDisplayUrl(item);
+  if (!displayUrl) return false;
+  const canEmbed = Boolean(item.embeddable || item.served_available || item.served_url);
+  let element = null;
+  if (canEmbed && item.kind === "image") {
+    element = document.createElement("img");
+    element.src = displayUrl;
+    element.alt = item.label || "Node media";
+    element.loading = options.eager ? "eager" : "lazy";
+  } else if (canEmbed && item.kind === "video") {
+    element = document.createElement("video");
+    element.src = displayUrl;
+    element.controls = true;
+    element.playsInline = true;
+    element.muted = true;
+  } else if (canEmbed && item.kind === "audio") {
+    element = document.createElement("audio");
+    element.src = displayUrl;
+    element.controls = true;
+  } else {
+    element = document.createElement("a");
+    element.href = displayUrl;
+    element.target = "_blank";
+    element.rel = "noopener noreferrer";
+    element.textContent = item.label || item.url || "Open media";
+  }
+  container.appendChild(element);
+  return true;
+}
+
+function renderSelectionMediaPreview(items = [], slug = state.focusSlug || "") {
+  if (!selectionMediaPreview) return;
+  if (selectionMediaSlug) {
+    selectionMediaSlug.textContent = slug || "No selection";
+    selectionMediaSlug.title = slug || "";
+  }
+  const first = [...items].find((item) => item && (item.served_url || item.url));
+  const rendered = renderSingleMediaPreview(selectionMediaPreview, first, { eager: true });
+  selectionMediaPreview.hidden = !rendered;
+  selectionMediaPreview.closest(".selection-blueprint")?.classList.toggle("has-media", rendered);
+}
+
+async function loadSelectionMediaPreview(slug, loadId) {
+  renderSelectionMediaPreview([], slug);
+  try {
+    const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
+    if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
+    renderSelectionMediaPreview(response.ok ? response.data.media || [] : [], slug);
+  } catch (_error) {
+    if (loadId === state.entityLoadId && state.focusSlug === slug) {
+      renderSelectionMediaPreview([], slug);
+    }
+  }
 }
 
 function cleanMarkdownDestination(value) {
@@ -1439,15 +1758,6 @@ function appendLocalFileLink(parent, path) {
   return true;
 }
 
-function markdownTitleFromContent(content, fallback) {
-  const text = String(content || "");
-  const frontmatterTitle = text.match(/^---\s*[\s\S]*?\ntitle:\s*['"]?([^\n'"]+)['"]?\s*\n[\s\S]*?---/);
-  if (frontmatterTitle?.[1]?.trim()) return frontmatterTitle[1].trim();
-  const heading = text.match(/^#\s+(.+)$/m);
-  if (heading?.[1]?.trim()) return heading[1].trim();
-  return String(fallback || "Memory Stargraph").trim();
-}
-
 function appendLocalFileLinks(parent, text) {
   const value = String(text || "");
   const pattern = /\/(?:Users|Volumes|private|tmp|var\/folders)\/[^\r\n<>"'`]+/g;
@@ -1460,6 +1770,15 @@ function appendLocalFileLinks(parent, text) {
     return match;
   });
   if (cursor < value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function markdownTitleFromContent(content, fallback) {
+  const text = String(content || "");
+  const frontmatterTitle = text.match(/^---\s*[\s\S]*?\ntitle:\s*['"]?([^\n'"]+)['"]?\s*\n[\s\S]*?---/);
+  if (frontmatterTitle?.[1]?.trim()) return frontmatterTitle[1].trim();
+  const heading = text.match(/^#\s+(.+)$/m);
+  if (heading?.[1]?.trim()) return heading[1].trim();
+  return String(fallback || "Memory Stargraph").trim();
 }
 
 function createEntityMarkdownLink(query, label = query) {
@@ -1671,14 +1990,6 @@ function renderMarkdownView(markdown) {
       list.appendChild(item);
       return;
     }
-    const field = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.+)$/);
-    if (field) {
-      closeList();
-      const paragraph = document.createElement("p");
-      appendFieldValueMarkdown(paragraph, field[1], field[2]);
-      modalMarkdown.appendChild(paragraph);
-      return;
-    }
     closeList();
     const paragraph = document.createElement("p");
     appendInlineMarkdown(paragraph, line);
@@ -1742,50 +2053,104 @@ async function openReverseRelationshipModal(sourceSlug, targetSlug) {
   }
 }
 
+async function openRemoveRelationshipModal(sourceSlug, targetSlug, linkType) {
+  await openNodeModal("remove-link", sourceSlug);
+  const input = modalForm.querySelector("#operationExistingRelationship");
+  if (input) {
+    input.value = `${targetSlug} | ${linkType || "all"}`;
+    input.focus();
+  }
+}
+
 function labelForSlug(slug) {
   const node = state.nodeMap.get(slug);
   return node?.label || slug;
 }
 
+function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
+  const row = document.createElement("article");
+  row.className = "relationship-wiki-row backlink-item";
+  const link = createEntityMarkdownLink(sourceSlug, labelForSlug(sourceSlug));
+  link.className = "relationship-source-link backlink-from-link";
+  link.setAttribute("data-backlink-slug", sourceSlug);
+  link.title = `Open ${sourceSlug}`;
+  row.appendChild(link);
+
+  const relation = document.createElement("span");
+  relation.className = "relationship-type backlink-relation";
+  relation.textContent = linkType || "related to";
+  row.appendChild(relation);
+
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "relationship-icon-button relationship-add-backlink backlink-link-back";
+  addButton.textContent = "+";
+  addButton.title = options.addTitle || "Add backlink";
+  addButton.setAttribute("aria-label", "Add backlink");
+  addButton.addEventListener("click", () => {
+    void openReverseRelationshipModal(sourceSlug, selectedSlug);
+  });
+  row.appendChild(addButton);
+
+  if (options.removable) {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "relationship-icon-button relationship-remove";
+    removeButton.textContent = "×";
+    removeButton.title = "Remove relationship";
+    removeButton.setAttribute("aria-label", "Remove relationship");
+    removeButton.addEventListener("click", () => {
+      void openRemoveRelationshipModal(selectedSlug, sourceSlug, linkType);
+    });
+    row.appendChild(removeButton);
+  }
+  return row;
+}
+
+function renderRelationshipWikiList(items, selectedSlug, options = {}) {
+  modalMarkdown.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "relationship-wiki-list backlink-list";
+  items.forEach((item) => {
+    list.appendChild(relationshipRow(item.source_slug, item.link_type, selectedSlug, options));
+  });
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.textContent = options.emptyText || "No relationships";
+    list.appendChild(empty);
+  }
+  modalMarkdown.appendChild(list);
+}
+
 function renderBacklinksView(rawOutput, selectedSlug) {
   const items = parseBacklinkItems(rawOutput, selectedSlug);
-  modalMarkdown.innerHTML = "";
   if (!items.length) {
     renderMarkdownView(rawOutput || "(No backlinks)");
     return;
   }
   const allTargetsAreSelected = items.every((item) => !item.to_slug || item.to_slug === selectedSlug);
+  modalMarkdown.innerHTML = "";
   const list = document.createElement("div");
-  list.className = "backlink-list";
+  list.className = "relationship-wiki-list backlink-list";
   items.forEach((item) => {
     const row = document.createElement("article");
-    row.className = "backlink-item";
-
-    const line = document.createElement("p");
-    line.className = "backlink-line";
-
+    row.className = "relationship-wiki-row backlink-item";
     const link = createEntityMarkdownLink(item.from_slug, labelForSlug(item.from_slug));
-    link.className = "backlink-from-link";
+    link.className = "relationship-source-link backlink-from-link";
     link.setAttribute("data-backlink-slug", item.from_slug);
     link.title = `Open ${item.from_slug}`;
-    line.appendChild(link);
-
-    if (item.link_type) {
-      const relation = document.createElement("span");
-      relation.className = "backlink-relation";
-      relation.textContent = item.link_type;
-      line.appendChild(relation);
-    }
-
+    row.appendChild(link);
+    const relation = document.createElement("span");
+    relation.className = "relationship-type backlink-relation";
+    relation.textContent = item.link_type || "related to";
+    row.appendChild(relation);
     if (!allTargetsAreSelected && item.to_slug) {
       const target = document.createElement("span");
       target.className = "backlink-target";
       target.textContent = `to ${labelForSlug(item.to_slug)}`;
       target.title = item.to_slug;
-      line.appendChild(target);
+      row.appendChild(target);
     }
-
-    row.appendChild(line);
     const details = [
       allTargetsAreSelected ? "" : item.context,
       item.link_source ? `source: ${item.link_source}` : "",
@@ -1798,7 +2163,7 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     }
     const linkBack = document.createElement("button");
     linkBack.type = "button";
-    linkBack.className = "ghost-button compact-button backlink-link-back";
+    linkBack.className = "relationship-icon-button relationship-add-backlink backlink-link-back";
     linkBack.textContent = "+";
     linkBack.title = "Add relationship";
     linkBack.setAttribute("aria-label", "Add relationship");
@@ -1809,6 +2174,14 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     list.appendChild(row);
   });
   modalMarkdown.appendChild(list);
+}
+
+function renderOutgoingRelationshipsView(slug) {
+  const items = existingRelationshipOptions(slug).map((option) => ({
+    source_slug: option.targetSlug,
+    link_type: option.type || "related to",
+  }));
+  renderRelationshipWikiList(items, slug, { removable: true, emptyText: "No outgoing relationships" });
 }
 
 function timelineOutputHasEntries(output) {
@@ -1832,31 +2205,17 @@ function renderMediaItems(items) {
     return;
   }
   items.forEach((item) => {
-    const displayUrl = item.served_url || item.url;
-    const canEmbed = Boolean(item.embeddable || item.served_available);
+    const displayUrl = mediaItemDisplayUrl(item);
     const card = document.createElement("div");
     card.className = "media-card";
     const label = document.createElement("span");
     label.textContent = `${item.kind || "media"} · ${item.label || item.url}`;
     card.appendChild(label);
 
-    if (canEmbed && item.kind === "image") {
-      const image = document.createElement("img");
-      image.src = displayUrl;
-      image.alt = item.label || "Node media";
-      image.loading = "lazy";
-      card.appendChild(image);
-    } else if (canEmbed && item.kind === "video") {
-      const video = document.createElement("video");
-      video.src = displayUrl;
-      video.controls = true;
-      video.playsInline = true;
-      card.appendChild(video);
-    } else if (canEmbed && item.kind === "audio") {
-      const audio = document.createElement("audio");
-      audio.src = displayUrl;
-      audio.controls = true;
-      card.appendChild(audio);
+    const preview = document.createElement("div");
+    preview.className = "media-card-preview";
+    if (renderSingleMediaPreview(preview, item)) {
+      card.appendChild(preview);
     }
 
     const link = document.createElement("a");
@@ -1880,20 +2239,23 @@ function renderMediaItems(items) {
   });
 }
 
-function chatHistoryFor(slug, label) {
-  if (!state.askChats.has(slug)) {
-    state.askChats.set(slug, [
+function chatHistoryFor(slug, label, options = {}) {
+  const store = options.mode === "yoda" ? state.askYodaChats : state.askChats;
+  if (!store.has(slug)) {
+    store.set(slug, [
       {
         role: "system",
-        content: `Ask GBrain about ${label}. Each question runs against the current node context.`,
+        content: options.mode === "yoda"
+          ? `Ask Yoda about ${label}. Answers use an agent when available and fall back to GBrain context.`
+          : `Ask GBrain about ${label}. Each question runs against the current node context.`,
       },
     ]);
   }
-  return state.askChats.get(slug);
+  return store.get(slug);
 }
 
-function renderAskChat(slug, label) {
-  const history = chatHistoryFor(slug, label);
+function renderAskChat(slug, label, options = {}) {
+  const history = chatHistoryFor(slug, label, options);
   modalChatLog.innerHTML = "";
   if (!history.length) {
     const empty = document.createElement("div");
@@ -1908,7 +2270,7 @@ function renderAskChat(slug, label) {
 
     const speaker = document.createElement("span");
     speaker.className = "chat-speaker";
-    speaker.textContent = message.role === "user" ? "You" : message.role === "assistant" ? "GBrain" : "Context";
+    speaker.textContent = message.role === "user" ? "You" : message.role === "assistant" ? (options.mode === "yoda" ? "Yoda" : "GBrain") : "Context";
     row.appendChild(speaker);
 
     const bubble = document.createElement("div");
@@ -2122,11 +2484,6 @@ function renderAddRelationshipForm(slug) {
   contextInput.id = "operationContext";
   contextInput.placeholder = "Optional context";
   appendField(modalForm, "Context", contextInput);
-
-  const summary = document.createElement("p");
-  summary.className = "operation-summary relationship-action-summary";
-  summary.textContent = "Add relationship";
-  modalForm.appendChild(summary);
 }
 
 function renderNewNodeForm() {
@@ -2222,9 +2579,6 @@ function closeModal() {
   modalChatInput.disabled = false;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
-  modalPrimaryButton.classList.remove("icon-primary-button");
-  modalPrimaryButton.removeAttribute("aria-label");
-  modalPrimaryButton.removeAttribute("title");
   modalCancelButton.hidden = false;
   modalCancelButton.disabled = false;
   modalCancelButton.textContent = "Cancel";
@@ -2261,9 +2615,6 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalChatLog.innerHTML = "";
   modalChatInput.value = "";
   modalChatInput.disabled = false;
-  modalPrimaryButton.classList.remove("icon-primary-button");
-  modalPrimaryButton.removeAttribute("aria-label");
-  modalPrimaryButton.removeAttribute("title");
 
   if (action === "new-node") {
     state.modalAction = { action, slug: "", label: "New Node" };
@@ -2283,9 +2634,6 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalCancelButton.hidden = false;
   modalCancelButton.textContent = "Cancel";
   modalPrimaryButton.classList.remove("danger");
-  modalPrimaryButton.classList.remove("icon-primary-button");
-  modalPrimaryButton.removeAttribute("aria-label");
-  modalPrimaryButton.removeAttribute("title");
 
   if (action === "view" || action === "edit") {
     modalKicker.textContent = action === "view" ? "View" : "Modify gbrain page";
@@ -2358,10 +2706,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
 
   if (action === "add-link") {
     modalKicker.textContent = "Add typed relationship";
-    modalPrimaryButton.textContent = "+";
-    modalPrimaryButton.classList.add("icon-primary-button");
-    modalPrimaryButton.setAttribute("aria-label", "Add relationship");
-    modalPrimaryButton.title = "Add relationship";
+    modalPrimaryButton.textContent = "Add relationship";
     modalMessage.textContent = "Search/select the target entity and relationship type, or type a new relationship type.";
     modalEditor.hidden = true;
     modalForm.hidden = false;
@@ -2371,14 +2716,23 @@ async function openNodeModal(action, slug = state.focusSlug) {
     return;
   }
 
-  if (action === "ask") {
-    modalKicker.textContent = "Ask GBrain";
+  if (action === "ask" || action === "ask-yoda") {
+    const isYoda = action === "ask-yoda";
+    if (isYoda) {
+      modalKicker.textContent = "Ask Yoda";
+    } else {
+      modalKicker.textContent = "Ask GBrain";
+    }
     modalPrimaryButton.textContent = "Send";
-    modalMessage.textContent = "Chat with GBrain using this node as context.";
+    modalMessage.textContent = isYoda ? "Chat with an agent using this node as context." : "Chat with GBrain using this node as context.";
     modalEditor.hidden = true;
     modalChat.hidden = false;
     modalChatInput.value = "";
-    renderAskChat(slug, label);
+    if (isYoda) {
+      renderAskChat(slug, label, { mode: "yoda" });
+    } else {
+      renderAskChat(slug, label);
+    }
     operationModal.hidden = false;
     modalChatInput.focus();
     return;
@@ -2420,6 +2774,19 @@ async function openNodeModal(action, slug = state.focusSlug) {
     renderGraphQueryForm(slug);
     operationModal.hidden = false;
     modalForm.querySelector("#operationGraphLinkType")?.focus();
+    return;
+  }
+
+  if (action === "view-relationships") {
+    modalKicker.textContent = "View relationship";
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalEditor.hidden = true;
+    modalMarkdown.hidden = false;
+    modalMessage.textContent = "Outgoing direct relationships for this node.";
+    operationModal.hidden = false;
+    state.modalAction = { action: "result", slug, label };
+    renderOutgoingRelationshipsView(slug);
     return;
   }
 
@@ -2627,14 +2994,13 @@ async function runModalPrimaryAction() {
   const primaryButtonText = modalPrimaryButton.textContent;
   let pendingAskHistory = null;
   const busyLabels = {
-    edit: "Saving node",
+    edit: "Saving page",
     "new-node": "Creating node",
     delete: "Deleting node",
     "add-link": "Saving relationship",
-    "remove-link": "Saving relationship",
+    "remove-link": "Removing relationship",
     tags: "Updating tags",
     timeline: "Updating timeline",
-    ask: "Asking GBrain",
     "graph-query": "Running graph query",
     "attach-file": "Attaching file",
     embed: "Refreshing embedding",
@@ -2748,27 +3114,29 @@ async function runModalPrimaryAction() {
       await openNodeModal("timeline-view", slug);
       return;
     }
-    if (action === "ask") {
+    if (action === "ask" || action === "ask-yoda") {
+      const isYoda = action === "ask-yoda";
       const question = modalChatInput.value.trim();
       if (!question) {
-        modalMessage.textContent = "Type a question for GBrain first.";
+        modalMessage.textContent = isYoda ? "Type a question for Yoda first." : "Type a question for GBrain first.";
         modalChatInput.focus();
         return;
       }
-      const history = chatHistoryFor(slug, label);
+      const history = chatHistoryFor(slug, label, isYoda ? { mode: "yoda" } : {});
       pendingAskHistory = history;
       history.push({ role: "user", content: question });
       history.push({ role: "assistant", content: "Thinking..." });
-      renderAskChat(slug, label);
+      renderAskChat(slug, label, isYoda ? { mode: "yoda" } : {});
       modalChatInput.value = "";
       modalChatInput.disabled = true;
-      modalMessage.textContent = "Asking GBrain...";
-      const response = await apiPost(`/api/entity-ask/${encodeURIComponent(slug)}`, {
-        question,
-      });
-      if (!response.ok) throw new Error(response.data?.error || `Ask GBrain failed with ${response.status}`);
+      modalMessage.textContent = isYoda ? "Asking Yoda..." : "Asking GBrain...";
+      const historyPayload = history.filter((message) => message.role !== "system" && message.content !== "Thinking...").slice(-8);
+      const response = isYoda
+        ? await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload })
+        : await apiPost(`/api/entity-ask/${encodeURIComponent(slug)}`, { question });
+      if (!response.ok) throw new Error(response.data?.error || `${isYoda ? "Ask Yoda" : "Ask GBrain"} failed with ${response.status}`);
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)" };
-      renderAskChat(slug, label);
+      renderAskChat(slug, label, isYoda ? { mode: "yoda" } : {});
       modalMessage.textContent = "Ask another question or close the chat.";
       modalChatInput.disabled = false;
       modalChatInput.focus();
@@ -2847,12 +3215,12 @@ async function runModalPrimaryAction() {
       await loadEntity(slug, { source: "system" });
     }
   } catch (error) {
-    if (action === "ask" && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
+    if ((action === "ask" || action === "ask-yoda") && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
       pendingAskHistory[pendingAskHistory.length - 1] = {
         role: "assistant",
-        content: `Ask GBrain failed: ${error.message || String(error)}`,
+        content: `${action === "ask-yoda" ? "Ask Yoda" : "Ask GBrain"} failed: ${error.message || String(error)}`,
       };
-      renderAskChat(slug, label);
+      renderAskChat(slug, label, action === "ask-yoda" ? { mode: "yoda" } : {});
     }
     modalMessage.textContent = error.message || String(error);
   } finally {
@@ -2880,26 +3248,27 @@ async function loadEntity(slug, options = {}) {
   if (options.source !== "search" && options.source !== "system") {
     state.selectionVersion += 1;
   }
-  const loadId = (state.entityLoadId || 0) + 1;
-  state.entityLoadId = loadId;
-  const requestedNode = state.nodeMap.get(slug);
-  const shouldExpand = requestedNode && !requestedNode.expanded;
-  state.focusSlug = slug;
-  if (requestedNode) {
-    detailTitle.textContent = requestedNode.label || slug;
-    setTimelineBadge(slug, false);
-    detailType.textContent = `${requestedNode.category || requestedNode.type || "entity"} · ${shouldExpand ? "loading direct links" : "loading details"}`;
-    detailSummary.textContent = shouldExpand
-      ? `Loading direct neighbors for ${requestedNode.label || slug}...`
-      : `Loading summary for ${requestedNode.label || slug}...`;
-    detailLinks.innerHTML = "";
-    const loading = document.createElement("span");
-    loading.textContent = "Loading direct links...";
-    detailLinks.appendChild(loading);
-    detailSecondRing.innerHTML = "";
-    setHover(slug);
-  }
   try {
+    const loadId = (state.entityLoadId || 0) + 1;
+    state.entityLoadId = loadId;
+    const requestedNode = state.nodeMap.get(slug);
+    const shouldExpand = requestedNode && !requestedNode.expanded;
+    state.focusSlug = slug;
+    if (requestedNode) {
+      detailTitle.textContent = requestedNode.label || slug;
+      setTimelineBadge(slug, false);
+      detailType.textContent = `${requestedNode.category || requestedNode.type || "entity"} · ${shouldExpand ? "loading direct links" : "loading details"}`;
+      detailSummary.textContent = shouldExpand
+        ? `Loading direct neighbors for ${requestedNode.label || slug}...`
+        : `Loading summary for ${requestedNode.label || slug}...`;
+      renderSelectionMediaPreview([], slug);
+      detailLinks.innerHTML = "";
+      const loading = document.createElement("span");
+      loading.textContent = "Loading direct links...";
+      detailLinks.appendChild(loading);
+      detailSecondRing.innerHTML = "";
+      setHover(slug);
+    }
     await ensureExpanded(slug);
     if (loadId !== state.entityLoadId) return;
     const response = await apiGet(`/api/entity/${encodeURIComponent(slug)}`);
@@ -2928,6 +3297,7 @@ async function loadEntity(slug, options = {}) {
       : summaryText;
     updateSource(source);
     void refreshTimelineBadge(entity.slug, loadId);
+    void loadSelectionMediaPreview(entity.slug, loadId);
     state.visibleLabelSlugs = [
       ...new Set([
         ...state.visibleLabelSlugs,
@@ -2936,53 +3306,53 @@ async function loadEntity(slug, options = {}) {
       ]),
     ];
 
-    detailLinks.innerHTML = "";
-    neighbors.forEach((neighbor) => {
-      if (isHidden(neighbor.slug)) return;
-      rememberRelationshipTypes(entity.slug, neighbor.slug, neighbor.link_types || []);
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "direct-link-chip";
-      const label = document.createElement("span");
-      label.className = "direct-link-label";
-      label.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
-      button.appendChild(label);
-      if (neighbor.link_types?.length) {
-        const relationship = `relationship: ${neighbor.link_types.join(", ")}`;
-        button.title = relationship;
-        button.dataset.relationship = relationship;
-        const relation = document.createElement("span");
-        relation.className = "direct-link-relationship";
-        relation.textContent = relationship;
-        button.appendChild(relation);
-      }
-      button.addEventListener("mouseenter", () => setHover(neighbor.slug));
-      button.addEventListener("focus", () => setHover(neighbor.slug));
-      button.addEventListener("mouseleave", () => setHover(entity.slug));
-      button.addEventListener("blur", () => setHover(entity.slug));
-      button.addEventListener("click", () => {
-        void loadEntity(neighbor.slug);
-      });
-      detailLinks.appendChild(button);
-    });
-    if (![...detailLinks.children].length) {
-      const empty = document.createElement("span");
-      empty.textContent = "No direct links";
-      detailLinks.appendChild(empty);
+  detailLinks.innerHTML = "";
+  neighbors.forEach((neighbor) => {
+    if (isHidden(neighbor.slug)) return;
+    rememberRelationshipTypes(entity.slug, neighbor.slug, neighbor.link_types || []);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "direct-link-chip";
+    const label = document.createElement("span");
+    label.className = "direct-link-label";
+    label.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
+    button.appendChild(label);
+    if (neighbor.link_types?.length) {
+      const relationship = `relationship: ${neighbor.link_types.join(", ")}`;
+      button.title = relationship;
+      button.dataset.relationship = relationship;
+      const relation = document.createElement("span");
+      relation.className = "direct-link-relationship";
+      relation.textContent = relationship;
+      button.appendChild(relation);
     }
+    button.addEventListener("mouseenter", () => setHover(neighbor.slug));
+    button.addEventListener("focus", () => setHover(neighbor.slug));
+    button.addEventListener("mouseleave", () => setHover(entity.slug));
+    button.addEventListener("blur", () => setHover(entity.slug));
+    button.addEventListener("click", () => {
+      void loadEntity(neighbor.slug);
+    });
+    detailLinks.appendChild(button);
+  });
+  if (![...detailLinks.children].length) {
+    const empty = document.createElement("span");
+    empty.textContent = "No direct links";
+    detailLinks.appendChild(empty);
+  }
 
-    detailSecondRing.innerHTML = "";
-    secondRing.forEach((neighbor) => {
-      if (isHidden(neighbor.slug)) return;
-      const tag = document.createElement("span");
-      tag.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
-      detailSecondRing.appendChild(tag);
-    });
-    if (![...detailSecondRing.children].length) {
-      const empty = document.createElement("span");
-      empty.textContent = "No second-ring entities";
-      detailSecondRing.appendChild(empty);
-    }
+  detailSecondRing.innerHTML = "";
+  secondRing.forEach((neighbor) => {
+    if (isHidden(neighbor.slug)) return;
+    const tag = document.createElement("span");
+    tag.textContent = `${neighbor.category || neighbor.type} · ${neighbor.label} (${neighbor.degree})`;
+    detailSecondRing.appendChild(tag);
+  });
+  if (![...detailSecondRing.children].length) {
+    const empty = document.createElement("span");
+    empty.textContent = "No second-ring entities";
+    detailSecondRing.appendChild(empty);
+  }
     setHover(slug);
   } finally {
     endBusyOperation(busyToken);
@@ -3012,6 +3382,7 @@ async function focusFallbackNode() {
   setTimelineBadge("", false);
   detailType.textContent = "";
   detailSummary.textContent = "Use the Hidden List to show nodes again.";
+  renderSelectionMediaPreview([]);
   detailLinks.innerHTML = "";
   detailSecondRing.innerHTML = "";
 }
@@ -3093,6 +3464,49 @@ function showMobileNodeHint(node, clientX, clientY) {
 }
 
 function bindEvents() {
+  navSearchButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFloatingPanel(searchFlyout, navSearchButton);
+    if (searchFlyout && !searchFlyout.hidden) {
+      window.setTimeout(() => searchInput?.focus(), 0);
+    }
+  });
+
+  navAutopilotButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (state.tour.active) {
+      stopTour();
+      hideFloatingPanels();
+      return;
+    }
+    toggleFloatingPanel(autopilotFlyout, navAutopilotButton);
+  });
+
+  navSettingsButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFloatingPanel(settingsFlyout, navSettingsButton);
+  });
+
+  navSearchButton?.addEventListener("mouseenter", () => {
+    showFloatingPanel(searchFlyout, navSearchButton);
+    window.setTimeout(() => searchInput?.focus(), 0);
+  });
+
+  navAutopilotButton?.addEventListener("mouseenter", () => {
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
+  });
+
+  navSettingsButton?.addEventListener("mouseenter", () => {
+    showFloatingPanel(settingsFlyout, navSettingsButton);
+  });
+
+  document.getElementById("cacheLimitInput")?.addEventListener("input", (event) => {
+    const mb = Math.max(0, Math.min(20, Number.parseInt(event.target.value, 10) || 0));
+    window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(mb * 1024 * 1024));
+    enforceCacheLimit();
+    updateCacheSettingsView();
+  });
+
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
     applyFilter();
@@ -3101,10 +3515,12 @@ function bindEvents() {
   searchInput.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
+    hideFloatingPanels();
     void submitSearch();
   });
 
   searchButton.addEventListener("click", () => {
+    hideFloatingPanels();
     void submitSearch();
   });
 
@@ -3158,7 +3574,10 @@ function bindEvents() {
     applyFilter();
   });
 
-  tourButton?.addEventListener("click", toggleTour);
+  tourButton?.addEventListener("click", () => {
+    hideFloatingPanels();
+    toggleTour();
+  });
   tourPrevButton?.addEventListener("click", () => moveTour(-1));
   tourNextButton?.addEventListener("click", () => moveTour(1));
 
@@ -3234,6 +3653,9 @@ function bindEvents() {
   window.addEventListener("click", (event) => {
     if (!contextMenu.hidden && !contextMenu.contains(event.target) && event.target !== nodeMenuButton) {
       hideContextMenu();
+    }
+    if (!targetIsInsideFloatingPanel(event.target)) {
+      hideFloatingPanels();
     }
   });
 
@@ -3552,6 +3974,8 @@ async function init() {
   updateCloudModeControl();
   updateTimelineLabel();
   updateSelectionHistoryControls();
+  updateNavModeState();
+  updateCacheSettingsView();
   setZoom(state.zoom);
   await fetchHidden();
   await fetchGraph();

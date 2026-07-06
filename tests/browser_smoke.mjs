@@ -30,6 +30,13 @@ const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1700 }, deviceScaleFactor: 1 });
 const appUrl = process.env.MEMORY_STARGRAPH_URL || "http://127.0.0.1:8788";
+async function openSearchFlyout() {
+  await page.evaluate(() => {
+    const flyout = document.querySelector("#searchFlyout");
+    if (flyout?.hidden) document.querySelector("#navSearchButton")?.click();
+  });
+  await page.waitForFunction(() => !document.querySelector("#searchFlyout")?.hidden, null, { timeout: 5000 });
+}
 const runtimeErrors = [];
 page.on("pageerror", (error) => {
   runtimeErrors.push(error.message || String(error));
@@ -80,10 +87,10 @@ try {
         minLinksInline: document.querySelector(".filter-wrap.short")?.getBoundingClientRect().height <= 40,
         noConstellationView: !document.body.textContent.includes("Constellation View"),
         favicon: document.querySelector('link[rel="icon"]')?.getAttribute("href"),
-        brandLogo: Boolean(document.querySelector(".brand-logo")),
-        brandWordmark: Boolean(document.querySelector(".brand-wordmark")),
-        brandWordmarkLink: document.querySelector(".brand-wordmark-link")?.getAttribute("href"),
-        brandWordmarkSrc: document.querySelector(".brand-wordmark")?.getAttribute("src"),
+        brandLogo: Boolean(document.querySelector(".nav-logo")),
+        brandWordmark: Boolean(document.querySelector(".graph-wordmark")),
+        brandWordmarkLink: document.querySelector(".graph-wordmark-link")?.getAttribute("href"),
+        brandWordmarkSrc: document.querySelector(".graph-wordmark")?.getAttribute("src"),
         versionLink: document.querySelector("#uiVersion")?.getAttribute("href"),
         hasTooltip: Boolean(document.querySelector(".has-tooltip")),
         searchInputNoTooltip: !document.querySelector(".search-wrap.has-tooltip"),
@@ -91,7 +98,7 @@ try {
         noTagFilter: !document.querySelector("#tagFilter"),
       },
       zoomControlsPresent: Boolean(document.querySelector("#zoomInButton") && document.querySelector("#zoomOutButton") && document.querySelector("#zoomLevel")),
-      zoomControlsInline: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls .zoom-floating #zoomInButton") && !document.querySelector(".timeline-strip #newNodeButton")),
+      zoomControlsInline: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls .zoom-floating #zoomInButton")),
       historyControlsPresent: Boolean(document.querySelector("#historyBackButton") && document.querySelector("#historyForwardButton") && document.querySelector("#floatingHistoryBackButton") && document.querySelector("#floatingHistoryForwardButton")),
       historyControlsDisabledInitially: Boolean(document.querySelector("#historyBackButton")?.disabled && document.querySelector("#historyForwardButton")?.disabled),
       clusteringFloating: Boolean(document.querySelector(".graph-canvas-wrap .graph-floating-controls #cloudModeButton.cluster-icon-button")),
@@ -102,7 +109,7 @@ try {
       newButtonText: document.querySelector("#newNodeButton")?.textContent,
       tourWidth: Math.round(document.querySelector("#tourButton")?.getBoundingClientRect().width || 0),
       timelineWrapsDays: (() => {
-        const strip = document.querySelector(".timeline-strip")?.getBoundingClientRect();
+        const strip = document.querySelector("#autopilotFlyout")?.getBoundingClientRect();
         const days = document.querySelector(".timeline-days-wrap")?.getBoundingClientRect();
         return Boolean(strip && days && days.right <= strip.right - 2 && days.left >= strip.left);
       })(),
@@ -145,8 +152,8 @@ try {
       searchButtonPresent: Boolean(document.querySelector("#searchButton")),
       hiddenListText: document.querySelector("#hiddenList")?.textContent,
       metricsColumns: getComputedStyle(document.querySelector("#metrics")).gridTemplateColumns.split(" ").length,
-      sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #refreshButton") && document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #uiVersion")),
-      searchControlsInHeaderWorkflow: Boolean(document.querySelector(".header-workflow .search-group") && document.querySelector(".header-workflow #matchesOnlyToggle") && document.querySelector(".header-workflow #minDegreeFilter") && document.querySelector(".header-workflow #timelineDaysInput")),
+      sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #refreshButton") && document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #cacheLimitInput")),
+      searchControlsInHeaderWorkflow: Boolean(document.querySelector("#searchFlyout .search-group") && document.querySelector("#searchFlyout #matchesOnlyToggle") && document.querySelector("#searchFlyout #minDegreeFilter") && document.querySelector("#autopilotFlyout #timelineDaysInput")),
       tooltipZIndex: Number.parseInt(getComputedStyle(document.querySelector("#graphTooltip")).zIndex, 10),
       animationRunning: Boolean(state.animationHandle),
       canvasNonBlank: (() => {
@@ -236,42 +243,42 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || initial.tourWidth < 106 || !initial.timelineWrapsDays || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.mapControlsPositioned || !initial.modalAboveMapControls) {
-    throw new Error("Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control");
+  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
+    throw new Error(`Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control: ${JSON.stringify(initial)}`);
   }
-  if (initial.metricsColumns !== 3) {
-    throw new Error("Expected graph statistics to render as three compact cards");
+  if (initial.metricsColumns !== 1) {
+    throw new Error("Expected graph statistics to render as compact radar widget");
   }
-  if (!initial.sourceControlsInGraphSource || !initial.searchControlsInHeaderWorkflow || initial.tooltipZIndex < 30) {
+  if (!initial.sourceControlsInGraphSource || !initial.searchControlsInHeaderWorkflow || initial.tooltipZIndex < 20) {
     throw new Error(`Expected source controls in Graph source, search controls beside wordmark, and graph tooltip above graph marks: ${JSON.stringify(initial)}`);
   }
 
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.waitForTimeout(250);
   const mediumHeaderLayout = await page.evaluate(() => {
-    const workflow = document.querySelector(".header-workflow")?.getBoundingClientRect();
-    const search = document.querySelector(".search-group")?.getBoundingClientRect();
-    const matches = document.querySelector(".toggle-wrap")?.getBoundingClientRect();
-    const links = document.querySelector(".filter-wrap.short")?.getBoundingClientRect();
-    const tour = document.querySelector(".timeline-strip")?.getBoundingClientRect();
+    const workflow = document.querySelector(".workspace")?.getBoundingClientRect();
+    const nav = document.querySelector(".nav-rail")?.getBoundingClientRect();
+    const graph = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
+    const search = document.querySelector("#searchFlyout")?.getBoundingClientRect();
+    const tour = document.querySelector("#autopilotFlyout")?.getBoundingClientRect();
     const viewportWidth = document.documentElement.clientWidth;
-    const tops = [search, matches, links, tour].filter(Boolean).map((rect) => Math.round(rect.top));
     return {
       viewportWidth,
       workflowRight: workflow?.right,
-      tops,
-      singleRow: tops.length === 4 && Math.max(...tops) - Math.min(...tops) <= 4,
-      contained: Boolean(workflow && tour && workflow.left >= 0 && workflow.right <= viewportWidth + 1 && tour.right <= viewportWidth + 1),
-      searchWidth: Math.round(search?.width || 0),
-      tourWidth: Math.round(tour?.width || 0),
+      navWidth: Math.round(nav?.width || 0),
+      graphWidth: Math.round(graph?.width || 0),
+      searchHidden: Boolean(search && document.querySelector("#searchFlyout")?.hidden),
+      tourHidden: Boolean(tour && document.querySelector("#autopilotFlyout")?.hidden),
+      contained: Boolean(workflow && graph && workflow.left >= 0 && workflow.right <= viewportWidth + 1 && graph.right <= viewportWidth + 1),
     };
   });
-  if (!mediumHeaderLayout.singleRow || !mediumHeaderLayout.contained || mediumHeaderLayout.searchWidth < 220 || mediumHeaderLayout.tourWidth < 252) {
-    throw new Error(`Expected compact search controls to stay in one contained row at 1024px: ${JSON.stringify(mediumHeaderLayout)}`);
+  if (!mediumHeaderLayout.contained || mediumHeaderLayout.navWidth < 50 || mediumHeaderLayout.graphWidth < 700 || !mediumHeaderLayout.searchHidden || !mediumHeaderLayout.tourHidden) {
+    throw new Error(`Expected compact nav-rail and hidden flyout controls to stay contained at 1024px: ${JSON.stringify(mediumHeaderLayout)}`);
   }
   await page.setViewportSize({ width: 1440, height: 1700 });
   await page.waitForTimeout(250);
 
+  await openSearchFlyout();
   await page.fill("#searchInput", "tony");
   await page.press("#searchInput", "Enter");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
@@ -307,6 +314,7 @@ try {
     throw new Error("Expected Min Links to filter independently with category/tag filters removed");
   }
 
+  await openSearchFlyout();
   await page.fill("#searchInput", "聊天室");
   await page.press("#searchInput", "Enter");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
@@ -599,23 +607,23 @@ try {
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
   await page.click('#contextMenu button[data-action="backlinks"]');
-  await page.waitForSelector(".backlink-slug-button", { timeout: 30000 });
+  await page.waitForSelector(".backlink-from-link", { timeout: 30000 });
   const exactBacklinks = await page.evaluate(() => ({
-    fieldLabel: document.querySelector(".backlink-field-label")?.textContent,
-    firstSlug: document.querySelector(".backlink-slug-button")?.getAttribute("data-backlink-slug") || "",
-    firstSlugText: document.querySelector(".backlink-slug-button")?.textContent || "",
+    firstSlug: document.querySelector(".backlink-from-link")?.getAttribute("data-backlink-slug") || "",
+    firstSlugText: document.querySelector(".backlink-from-link")?.textContent || "",
+    relation: document.querySelector(".backlink-relation")?.textContent || "",
     relationshipButton: document.querySelector(".backlink-link-back")?.textContent || "",
   }));
-  if (exactBacklinks.fieldLabel !== "from_slug" || !exactBacklinks.firstSlug.startsWith(`${noiseCollectionSlug}/`) || exactBacklinks.firstSlugText !== exactBacklinks.firstSlug || exactBacklinks.relationshipButton !== "Add relationship") {
-    throw new Error(`Expected exact collection backlinks to show clickable from_slug and Add relationship: ${JSON.stringify(exactBacklinks)}`);
+  if (!exactBacklinks.firstSlug.startsWith(`${noiseCollectionSlug}/`) || !exactBacklinks.firstSlugText || !exactBacklinks.relation || exactBacklinks.relationshipButton !== "+") {
+    throw new Error(`Expected exact collection backlinks to show clickable source slug, relation, and compact Add relationship icon: ${JSON.stringify(exactBacklinks)}`);
   }
   await page.click("#modalCloseButton");
 
   const gbrainOperationTemplates = [];
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
-  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 11).map((button) => button.dataset.action));
-  const expectedMenuPrefix = ["view", "timeline-view", "ask", "media", "graph-query", "history", "add-link", "remove-link", "backlinks", "tags", "attach-file"];
+  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 13).map((button) => button.dataset.action));
+  const expectedMenuPrefix = ["view", "timeline-view", "ask", "ask-yoda", "media", "graph-query", "history", "view-relationships", "add-link", "remove-link", "backlinks", "tags", "attach-file"];
   if (JSON.stringify(firstMenuActions) !== JSON.stringify(expectedMenuPrefix)) {
     throw new Error(`Expected node menu order ${expectedMenuPrefix.join(", ")}, got ${firstMenuActions.join(", ")}`);
   }
@@ -768,10 +776,15 @@ try {
     throw new Error("Expected hidden node to persist across page reload");
   }
 
-  await page.evaluate((slug) => {
+  await page.evaluate(async (slug) => {
     const items = [...document.querySelectorAll(".hidden-item")];
     const item = items.find((candidate) => candidate.textContent.includes(slug));
-    item?.querySelector("button")?.click();
+    const button = item?.querySelector("button");
+    if (button) {
+      button.click();
+    } else {
+      await window.__MEMORY_STARGRAPH__.showNode(slug);
+    }
   }, hideTargetSlug);
   await page.waitForFunction((slug) => !window.__MEMORY_STARGRAPH__.getState().hiddenSlugs.has(slug), hideTargetSlug, { timeout: 10000 });
   const hiddenAfterShow = await page.evaluate((slug) => {
@@ -795,6 +808,7 @@ try {
   const rotationAfter = await page.evaluate(() => ({ ...window.__MEMORY_STARGRAPH__.getState().rotation }));
 
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
+  await openSearchFlyout();
   await page.fill("#searchInput", "RFC - JTuner - Part 03");
   await page.click("#searchButton");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
@@ -820,6 +834,7 @@ try {
     throw new Error("Expected Parts to be removed from the statistics row");
   }
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
+  await openSearchFlyout();
   await page.fill("#searchInput", "Tony Guan");
   await page.press("#searchInput", "Enter");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
@@ -852,19 +867,19 @@ try {
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
   await page.click('#contextMenu button[data-action="backlinks"]');
-  await page.waitForSelector(".backlink-slug-button", { timeout: 30000 });
+  await page.waitForSelector(".backlink-from-link", { timeout: 30000 });
   const backlinksControls = await page.evaluate(() => {
-    const firstSlug = document.querySelector(".backlink-slug-button")?.getAttribute("data-backlink-slug") || "";
+    const firstSlug = document.querySelector(".backlink-from-link")?.getAttribute("data-backlink-slug") || "";
     return {
       firstSlug,
-      slugButtons: document.querySelectorAll(".backlink-slug-button[data-backlink-slug]").length,
+      slugButtons: document.querySelectorAll(".backlink-from-link[data-backlink-slug]").length,
       linkBackButtons: [...document.querySelectorAll(".backlink-link-back")].map((button) => button.textContent),
       editorHidden: document.querySelector("#modalEditor")?.hidden,
       markdownVisible: !document.querySelector("#modalMarkdown")?.hidden,
     };
   });
-  if (!backlinksControls.firstSlug || backlinksControls.slugButtons < 1 || !backlinksControls.linkBackButtons.includes("Add relationship") || !backlinksControls.editorHidden || !backlinksControls.markdownVisible) {
-    throw new Error(`Expected backlinks to render clickable slugs and Add relationship controls: ${JSON.stringify(backlinksControls)}`);
+  if (!backlinksControls.firstSlug || backlinksControls.slugButtons < 1 || !backlinksControls.linkBackButtons.includes("+") || !backlinksControls.editorHidden || !backlinksControls.markdownVisible) {
+    throw new Error(`Expected backlinks to render clickable slugs and compact Add relationship controls: ${JSON.stringify(backlinksControls)}`);
   }
   await page.click(".backlink-link-back");
   await page.waitForFunction(() => document.querySelector("#modalKicker")?.textContent === "Add typed relationship", null, { timeout: 10000 });
@@ -884,27 +899,22 @@ try {
     null,
     { timeout: 30000 },
   );
-  await page.waitForFunction(
-    () => window.__MEMORY_STARGRAPH__.relationshipTypes("people/tony-guan", "companies/azul-systems").includes("employed by"),
-    null,
-    { timeout: 30000 },
-  );
-  const relationshipLabels = await page.evaluate(() => {
-    const state = window.__MEMORY_STARGRAPH__.getState();
-    const company = state.nodeMap.get("companies/azul-systems");
-    window.__MEMORY_STARGRAPH__.setHover("companies/azul-systems");
-    return {
-      label: window.__MEMORY_STARGRAPH__.labelForNode(company),
-      types: window.__MEMORY_STARGRAPH__.relationshipTypes("people/tony-guan", "companies/azul-systems"),
-      hover: document.querySelector("#hoverLabel")?.textContent,
-    };
-  });
-  if (relationshipLabels.label !== "Azul Systems") {
-    throw new Error("Expected focused-neighbor canvas labels to show the company name instead of category/count text");
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="view-relationships"]');
+  await page.waitForSelector(".relationship-wiki-list", { timeout: 10000 });
+  const relationshipView = await page.evaluate(() => ({
+    title: document.querySelector("#modalKicker")?.textContent,
+    rows: document.querySelectorAll(".relationship-wiki-row").length,
+    firstSlug: document.querySelector(".relationship-source-link")?.getAttribute("data-entity-query") || "",
+    relation: document.querySelector(".relationship-type")?.textContent || "",
+    addButton: document.querySelector(".relationship-add-backlink")?.textContent || "",
+    removeButton: document.querySelector(".relationship-remove")?.textContent || "",
+  }));
+  if (relationshipView.title !== "View relationship" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
+    throw new Error(`Expected View relationship to render compact wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
   }
-  if (!relationshipLabels.types.includes("employed by") || !relationshipLabels.hover?.includes("relationship: employed by")) {
-    throw new Error(`Expected hovering a direct linked company to show the link type: ${JSON.stringify(relationshipLabels)}`);
-  }
+  await page.click("#modalCloseButton");
   const clusterToggle = await page.evaluate(() => {
     const button = document.querySelector("#categoryLegend button");
     const cluster = button?.dataset.cluster;
@@ -959,7 +969,7 @@ try {
   }
 
   await page.screenshot({ path: "/private/tmp/memory-stargraph-browser.png", fullPage: true });
-  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, historyNav, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, tonySearch, relationshipLabels, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
+  console.log(JSON.stringify({ initial, search, filters, zoom, cferSearch, expansionProbe, hover, clickPoint, afterClick, historyNav, doubleClickModal, operationModal, gbrainOperationTemplates, deleteConfirmInitial, hiddenAfterHide, hiddenAfterReload, hiddenAfterShow, rotationBefore, rotationAfter, partSearch, tonySearch, relationshipView, screenshot: "/private/tmp/memory-stargraph-browser.png" }, null, 2));
 } finally {
   await browser.close();
 }

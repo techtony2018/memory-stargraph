@@ -58,6 +58,10 @@ class FakeStore:
         self.calls.append(("ask_gbrain", slug, question))
         return "answer"
 
+    def ask_yoda(self, slug, question, history=None):
+        self.calls.append(("ask_yoda", slug, question, tuple(history or [])))
+        return {"output": "yoda answer", "source": "fallback"}
+
     def backlinks(self, slug):
         self.calls.append(("backlinks", slug))
         return "backlinks"
@@ -124,6 +128,7 @@ class ApiEndpointTests(unittest.TestCase):
                 ("/api/entity-timeline/people%2Ftony-guan", {"date": "2026-06-29", "summary": "Updated node ops", "detail": "Details", "source": "test"}),
                 ("/api/entity-create", {"name": "New Person", "description": "A new test node", "category": "people"}),
                 ("/api/entity-ask/people%2Ftony-guan", {"question": "What should I know?"}),
+                ("/api/entity-ask-yoda/people%2Ftony-guan", {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}]}),
                 ("/api/entity-backlinks/people%2Ftony-guan", {}),
                 ("/api/entity-graph-query/people%2Ftony-guan", {"link_type": "employed by", "direction": "both", "depth": "1"}),
                 ("/api/entity-attach-file/people%2Ftony-guan", {"file_path": "/tmp/example.pdf", "description": "Example file"}),
@@ -146,6 +151,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("add_timeline_event", call_names)
         self.assertIn("create_entity", call_names)
         self.assertIn("ask_gbrain", call_names)
+        self.assertIn("ask_yoda", call_names)
         self.assertIn("backlinks", call_names)
         self.assertIn("graph_query", call_names)
         self.assertIn("attach_file", call_names)
@@ -202,6 +208,7 @@ class ApiEndpointTests(unittest.TestCase):
             endpoints,
             {
                 "/api/entity-ask/<slug>",
+                "/api/entity-ask-yoda/<slug>",
                 "/api/entity-create",
                 "/api/entity-media/<slug>",
                 "/api/entity-timeline-view/<slug>",

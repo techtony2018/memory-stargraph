@@ -727,6 +727,7 @@ cover_image: companies/example-inc/logo.jpg
             store.update_tags("people/tony-guan", ["founder", "java"], ["old"])
             store.add_timeline_event("people/tony-guan", "2026-06-29", "Updated graph operations", "Details", "memory-stargraph")
             store.ask_gbrain("people/tony-guan", "What should I know?")
+            store.ask_yoda("people/tony-guan", "What should I know?", [{"role": "user", "content": "Earlier"}])
             store.backlinks("people/tony-guan")
             store.graph_query("people/tony-guan", "employed by", "both", "2")
             store.attach_file("people/tony-guan", "/tmp/example.pdf")
@@ -743,6 +744,10 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("timeline-add", "people/tony-guan", "2026-06-29", "Updated graph operations", "--detail", "Details", "--source", "memory-stargraph"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
+                mock.call("get", "people/tony-guan"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
+                mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
@@ -752,6 +757,17 @@ cover_image: companies/example-inc/logo.jpg
             ]
         )
         self.assertEqual(invalidate.call_count, 6)
+
+    def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
+        store = GraphStore()
+        with mock.patch("server.run_gbrain") as run, mock.patch("server.run_openclaw_agent", return_value=None):
+            run.side_effect = ["# Tony Guan\n\nEngineer", "direct graph", "fallback graph", "retrieved context"]
+            result = store.ask_yoda("people/tony-guan", "What changed?", [{"role": "user", "content": "Earlier question"}])
+
+        self.assertEqual(result["source"], "fallback")
+        self.assertIn("OpenClaw agent unavailable", result["output"])
+        self.assertIn("Selected node: people/tony-guan", result["output"])
+        self.assertIn("Earlier question", result["prompt"])
 
     def test_graph_store_uses_cache_for_fast_startup(self):
         store = GraphStore()

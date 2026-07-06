@@ -112,7 +112,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.76"
+UI_VERSION = "V1.0.79"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -130,6 +130,7 @@ BLOCKED_LABELS = {
 NODE_OPERATION_ENDPOINTS = [
     {"action": "create", "method": "POST", "endpoint": "/api/entity-create", "mutates_gbrain": True},
     {"action": "ask", "method": "POST", "endpoint": "/api/entity-ask/<slug>", "mutates_gbrain": False},
+    {"action": "ask-yoda", "method": "POST", "endpoint": "/api/entity-ask-yoda/<slug>", "mutates_gbrain": False},
     {"action": "media", "method": "GET", "endpoint": "/api/entity-media/<slug>", "mutates_gbrain": False},
     {"action": "backlinks", "method": "POST", "endpoint": "/api/entity-backlinks/<slug>", "mutates_gbrain": False},
     {"action": "graph-query", "method": "POST", "endpoint": "/api/entity-graph-query/<slug>", "mutates_gbrain": False},
@@ -355,6 +356,32 @@ def run_gbrain(*args, input_text=None, timeout=20):
     return decode_process_output(result.stdout)
 
 
+def run_openclaw_agent(prompt, timeout=45):
+    agent_ref = str(CONFIG.get("yoda_agent") or os.environ.get("MEMORY_STARGRAPH_YODA_AGENT") or "").strip()
+    if not agent_ref:
+        return None
+    command = ["openclaw", "agent", "run", agent_ref, "--stdin"]
+    env = os.environ.copy()
+    bun_bin = Path.home() / ".bun" / "bin"
+    env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+            input=prompt.encode("utf-8"),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    output = decode_process_output(result.stdout).strip()
+    return output or None
+
+
 def parse_slugs(raw_text):
     slugs = []
     for line in raw_text.splitlines():
@@ -548,7 +575,10 @@ def serve_url_for_media_reference(value):
 
 
 def media_served_url_for_relative_path(relative_path):
-    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if isinstance(relative_path, Path):
+        safe_path = relative_path
+    else:
+        safe_path = safe_media_relative_path(str(relative_path or ""))
     if not safe_path:
         return None
     return "/media/" + "/".join(quote(part) for part in safe_path.parts)
@@ -2158,6 +2188,45 @@ class GraphStore:
         sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
         return "\n\n".join(sections)
 
+    def build_yoda_prompt(self, slug, question, history=None):
+        history = history or []
+        lines = [
+            "You are Ask Yoda inside Memory Stargraph.",
+            "Answer using the selected GBrain node, direct relationships, and recent chat only.",
+            "Be concise, cite relevant slugs, and say when the graph does not contain enough evidence.",
+            "",
+            f"Selected node: {slug}",
+            f"Question: {question}",
+        ]
+        if history:
+            lines.extend(["", "Recent chat:"])
+            for item in history[-8:]:
+                role = str(item.get("role") or "user").strip()[:20]
+                content = str(item.get("content") or "").strip()
+                if content:
+                    lines.append(f"- {role}: {content}")
+        raw = self.get_entity_raw(slug) or ""
+        if raw:
+            lines.extend(["", "Selected node content:", raw[:6000]])
+        try:
+            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1")
+        except Exception as exc:  # noqa: BLE001
+            graph_output = f"Direct relationship context unavailable: {exc}"
+        lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
+        return "\n".join(lines)
+
+    def ask_yoda(self, slug, question, history=None):
+        prompt = self.build_yoda_prompt(slug, question, history)
+        agent_output = run_openclaw_agent(prompt)
+        if agent_output:
+            return {"output": agent_output, "source": "openclaw-agent", "prompt": prompt}
+        fallback = self.ask_gbrain(slug, question)
+        return {
+            "output": f"OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.\n\n{fallback}",
+            "source": "fallback",
+            "prompt": prompt,
+        }
+
     def backlinks(self, slug):
         return run_gbrain("backlinks", slug)
 
@@ -2529,6 +2598,18 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 STORE.add_timeline_event(slug, date, summary, detail, source)
                 graph = STORE.get_seed_graph(force=True)
                 return self.end_json({"ok": True, "slug": slug, "graph": graph})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path.startswith("/api/entity-ask-yoda/"):
+            slug = unquote(parsed.path.split("/api/entity-ask-yoda/", 1)[1]).strip("/")
+            try:
+                payload = self.read_json_body()
+                question = str(payload.get("question") or "").strip()
+                history = payload.get("history") if isinstance(payload.get("history"), list) else []
+                if not question:
+                    return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
+                result = STORE.ask_yoda(slug, question, history)
+                return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-ask/"):

@@ -6,61 +6,95 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.76">
+    <link rel="stylesheet" href="/styles.css?v=1.0.79">
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-lockup">
-          <img class="brand-logo" src="/assets/brand/logo-circle-transparent.png" alt="" aria-hidden="true">
-          <a class="brand-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
-            <img class="brand-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
-          </a>
-          <h1 class="sr-only">Memory Stargraph</h1>
-        </div>
-        <div class="header-workflow" aria-label="Search and memory tour controls">
-          <div class="search-group">
-            <label class="search-wrap">
-              <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
-            </label>
-            <button id="searchButton" class="ghost-button search-button has-tooltip" type="button" data-tooltip="Run search and load the best matching entity." title="Run search and load the best matching entity.">Search</button>
-          </div>
-          <label class="toggle-wrap has-tooltip" data-tooltip="Only show nodes matching the active search." title="Only show nodes matching the active search.">
-            <input id="matchesOnlyToggle" type="checkbox">
-            <span>Matches</span>
-          </label>
-          <label class="filter-wrap short has-tooltip" data-tooltip="Minimum number of direct links required for visible nodes." title="Minimum number of direct links required for visible nodes.">
-            <span>Links</span>
-            <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
-          </label>
-          <div class="timeline-strip" aria-label="Graph time and tour controls">
-            <button id="tourButton" class="ghost-button primary compact-button has-tooltip" type="button" aria-pressed="false" data-tooltip="Start or stop a guided tour through important nodes." title="Start or stop a guided tour through important nodes.">Memory Tour</button>
-            <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous tour stop" data-tooltip="Go to previous tour stop." title="Go to previous tour stop.">‹</button>
-            <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next tour stop" data-tooltip="Go to next tour stop." title="Go to next tour stop.">›</button>
-            <label class="timeline-days-wrap has-tooltip" data-tooltip="Filter graph to nodes updated within the last N days. 0 means all time." title="Filter graph to nodes updated within the last N days. 0 means all time.">
-              <input id="timelineDaysInput" type="number" min="0" max="7" step="1" value="0" aria-label="Timeline days, zero means all time">
-              <span id="timelineValue">days</span>
-            </label>
-          </div>
-        </div>
-      </header>
-
       <main class="workspace">
+        <nav class="nav-rail" aria-label="Memory Stargraph navigation">
+          <button id="navStargraphButton" class="nav-rail-button is-active is-flashing has-tooltip" type="button" aria-label="Stargraph" data-tooltip="Stargraph cockpit display.">
+            <img class="nav-logo" src="/assets/brand/logo-circle-transparent.png" alt="" aria-hidden="true">
+            <span>Stargraph</span>
+          </button>
+          <button id="navSearchButton" class="nav-rail-button has-tooltip" type="button" aria-label="Search" aria-expanded="false" data-tooltip="Search memory nodes.">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="5"></circle><path d="M14 14l6 6"></path></svg>
+            <span>Search</span>
+          </button>
+          <button id="navAutopilotButton" class="nav-rail-button has-tooltip" type="button" aria-label="Autopilot" aria-expanded="false" data-tooltip="Autopilot tour controls.">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5 9.5 7l8-2.5 2 2-2.5 8-6.5 6.5-1.8-5.2z"></path><path d="m9.5 7 4.8 4.8"></path><path d="M6.6 16.4 3.8 19.2"></path><path d="M9 18.8 6.8 21"></path><circle cx="16" cy="8" r="1.4"></circle></svg>
+            <span>Autopilot</span>
+          </button>
+          <button id="navSettingsButton" class="nav-rail-button has-tooltip" type="button" aria-label="Settings" aria-expanded="false" data-tooltip="Graph source and controls.">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path><path d="m4.9 4.9 2.1 2.1"></path><path d="m17 17 2.1 2.1"></path><path d="m19.1 4.9-2.1 2.1"></path><path d="m7 17-2.1 2.1"></path></svg>
+            <span>Settings</span>
+          </button>
+          <div class="nav-status">
+            <span>Graph status</span>
+            <strong>Active</strong>
+            <i></i>
+          </div>
+        </nav>
         <section class="graph-panel">
           <div class="graph-canvas-wrap">
             <canvas id="graphCanvas" width="1200" height="760"></canvas>
-            <div class="metrics graph-stats-overlay graph-metrics-corner" id="metrics" aria-label="Graph statistics">
-              <div class="metric-card">
-                <span class="metric-label">Nodes</span>
-                <strong id="metricNodes">0</strong>
+            <div id="searchFlyout" class="floating-tool-panel search-flyout" hidden aria-label="Search controls">
+              <div class="search-group">
+                <label class="search-wrap">
+                  <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
+                </label>
+                <button id="searchButton" class="ghost-button search-button has-tooltip" type="button" data-tooltip="Run search and load the best matching entity." title="Run search and load the best matching entity.">Search</button>
               </div>
-              <div class="metric-card">
-                <span class="metric-label">Edges</span>
-                <strong id="metricEdges">0</strong>
+              <label class="toggle-wrap has-tooltip" data-tooltip="Only show nodes matching the active search." title="Only show nodes matching the active search.">
+                <input id="matchesOnlyToggle" type="checkbox">
+                <span>Matches</span>
+              </label>
+              <label class="filter-wrap short has-tooltip" data-tooltip="Minimum number of direct links required for visible nodes." title="Minimum number of direct links required for visible nodes.">
+                <span>Links</span>
+                <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
+              </label>
+            </div>
+            <div id="autopilotFlyout" class="floating-tool-panel autopilot-flyout" hidden aria-label="Autopilot controls">
+              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous autopilot stop" data-tooltip="Go to previous autopilot stop." title="Go to previous autopilot stop.">‹</button>
+              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next autopilot stop" data-tooltip="Go to next autopilot stop." title="Go to next autopilot stop.">›</button>
+              <label class="timeline-days-wrap has-tooltip" data-tooltip="Filter graph to nodes updated within the last N days. 0 means all time." title="Filter graph to nodes updated within the last N days. 0 means all time.">
+                <input id="timelineDaysInput" type="number" min="0" max="7" step="1" value="0" aria-label="Autopilot timeline days, zero means all time">
+                <span id="timelineValue">days</span>
+              </label>
+              <button id="tourButton" class="autopilot-start-button icon-button has-tooltip" type="button" aria-pressed="false" aria-label="Start Autopilot" data-tooltip="Start or stop autopilot through important nodes." title="Start or stop autopilot through important nodes.">
+                <svg class="autopilot-launch-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 19 5"></path><path d="M9 5h10v10"></path><path d="M14 5v5h5"></path></svg>
+              </button>
+            </div>
+            <div id="settingsFlyout" class="floating-tool-panel settings-flyout" hidden aria-label="Graph source controls">
+              <ul id="sourceWarnings" class="warning-list"></ul>
+              <div class="source-control-stack">
+                <button id="refreshButton" class="ghost-button has-tooltip" type="button" data-tooltip="Reload graph data from gbrain." title="Reload graph data from gbrain.">Refresh Graph</button>
+                <label class="top-toggle has-tooltip" data-tooltip="Automatically refresh graph data on a timer." title="Automatically refresh graph data on a timer.">
+                  <input id="autoRefreshToggle" type="checkbox">
+                  <span>Auto</span>
+                </label>
+                <label class="top-interval has-tooltip" data-tooltip="Auto-refresh interval in minutes." title="Auto-refresh interval in minutes.">
+                  <input id="autoRefreshInterval" type="number" min="1" max="120" step="1" value="10">
+                  <span>min</span>
+                </label>
+                <div id="sourceBadge" class="source-badge" hidden></div>
+                <div class="refresh-meta">
+                  <div id="lastRefresh" class="source-badge subtle">Last refresh: —</div>
+                </div>
+                <label class="cache-limit-control">
+                  <span>Cache MB</span>
+                  <input id="cacheLimitInput" type="number" min="0" max="20" step="1" value="2" aria-label="Node content and media cache limit in megabytes">
+                </label>
+                <div id="cacheUsageValue" class="source-badge subtle">0 B used of 2.0 MB</div>
+                <p class="cache-help">0 disables cache.</p>
               </div>
-              <div class="metric-card">
-                <span class="metric-label">Hub</span>
-                <strong id="metricDegree">0</strong>
+            </div>
+            <div class="radar-widget" id="metrics" aria-label="Graph statistics">
+              <i aria-hidden="true"></i>
+              <div class="radar-stats">
+                <span>Nodes <strong id="metricNodes">0</strong></span>
+                <span>Edges <strong id="metricEdges">0</strong></span>
+                <span>Hub <strong id="metricDegree">0</strong></span>
+                <span id="metricMode">Manual</span>
               </div>
             </div>
             <div class="graph-floating-controls" aria-label="Graph view controls">
@@ -105,6 +139,12 @@
             </div>
             <div id="graphTooltip" class="graph-tooltip" hidden></div>
           </div>
+          <div class="graph-brand-row">
+            <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
+              <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
+            </a>
+            <a id="uiVersion" class="ui-version" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.79</a>
+          </div>
         </section>
 
         <aside class="detail-panel">
@@ -123,6 +163,20 @@
             </div>
             <p id="detailType" class="detail-type"></p>
             <p id="detailSummary" class="detail-summary"></p>
+            <div class="selection-blueprint" aria-hidden="true">
+              <div id="selectionMediaPreview" class="selection-media-preview" hidden></div>
+              <svg viewBox="0 0 360 150">
+                <path d="M26 88 154 35l143 24 38 30-43 29-134 7z" />
+                <path d="M142 37 114 14l70 16" />
+                <path d="M182 126l-38 20 92-15" />
+                <path d="M104 58 38 31l45 48" />
+                <path d="M247 62 306 28l-24 49" />
+                <path d="M62 88h238M100 70h162M127 52l46 72M185 43l-20 82M229 55l-73 68" />
+                <circle cx="154" cy="82" r="18" />
+                <circle cx="235" cy="84" r="12" />
+              </svg>
+              <span id="selectionMediaSlug">Loading...</span>
+            </div>
           </div>
 
           <div class="panel-section">
@@ -152,27 +206,6 @@
             <div id="hiddenList" class="hidden-list"></div>
           </div>
 
-          <div class="panel-section">
-            <p class="panel-label">Graph source</p>
-            <p id="sourceMessage" class="source-message"></p>
-            <ul id="sourceWarnings" class="warning-list"></ul>
-            <div class="source-control-stack">
-              <button id="refreshButton" class="ghost-button has-tooltip" type="button" data-tooltip="Reload graph data from gbrain." title="Reload graph data from gbrain.">Refresh Graph</button>
-              <label class="top-toggle has-tooltip" data-tooltip="Automatically refresh graph data on a timer." title="Automatically refresh graph data on a timer.">
-                <input id="autoRefreshToggle" type="checkbox">
-                <span>Auto</span>
-              </label>
-              <label class="top-interval has-tooltip" data-tooltip="Auto-refresh interval in minutes." title="Auto-refresh interval in minutes.">
-                <input id="autoRefreshInterval" type="number" min="1" max="120" step="1" value="10">
-                <span>min</span>
-              </label>
-              <div id="sourceBadge" class="source-badge">Loading…</div>
-              <div class="refresh-meta">
-                <div id="lastRefresh" class="source-badge subtle">Last refresh: —</div>
-                <a id="uiVersion" class="ui-version" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.76</a>
-              </div>
-            </div>
-          </div>
         </aside>
       </main>
     </div>
@@ -181,9 +214,11 @@
       <button type="button" data-action="view">View</button>
       <button type="button" data-action="timeline-view">Timeline</button>
       <button type="button" data-action="ask">Ask GBrain</button>
+      <button type="button" data-action="ask-yoda">Ask Yoda</button>
       <button type="button" data-action="media">View media</button>
       <button type="button" data-action="graph-query">Graph query from here</button>
       <button type="button" data-action="history">View history</button>
+      <button type="button" data-action="view-relationships">View relationship</button>
       <button type="button" data-action="add-link">Add relationship</button>
       <button type="button" data-action="remove-link">Remove relationship</button>
       <button type="button" data-action="backlinks">Show backlinks</button>
@@ -231,6 +266,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.76"></script>
+    <script src="/app.js?v=1.0.79"></script>
   </body>
   </html>
