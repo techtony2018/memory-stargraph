@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.85";
+const UI_VERSION = "V1.0.86";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -852,6 +852,9 @@ function setFlyoutOpen(panel, button, open) {
 function hideFloatingPanels(exceptPanel = null) {
   flyoutPairs.forEach(({ panel, button }) => {
     if (panel && panel !== exceptPanel) {
+      if (panel === autopilotFlyout && state.tour.active) {
+        return;
+      }
       setFlyoutOpen(panel, button, false);
     }
   });
@@ -871,8 +874,8 @@ function positionFloatingPanel(panel, button) {
   const buttonRect = button.getBoundingClientRect();
   const top = Math.max(12, Math.min(wrapRect.height - 80, buttonRect.top - wrapRect.top));
   if (panel === settingsFlyout) {
-    panel.style.left = "auto";
-    panel.style.right = "22px";
+    panel.style.left = "22px";
+    panel.style.right = "auto";
     panel.style.top = "52px";
     panel.style.transform = "";
     return;
@@ -2353,6 +2356,11 @@ async function reopenRelationshipsView(slug) {
   await openNodeModal("view-relationships", slug);
 }
 
+async function openSelectedRelationshipModal(slug) {
+  state.relationshipReturnView = { action: "view-relationships", slug };
+  await openNodeModal("add-link", slug);
+}
+
 async function refreshSelectedNodeAfterRelationshipMutation(slug, target, action) {
   invalidateRelationshipEndpointCache(slug, target);
   const returnView = state.relationshipReturnView;
@@ -2491,6 +2499,23 @@ function renderRelationshipWikiList(items, selectedSlug, options = {}) {
       renderRelationshipWikiList(items, selectedSlug, options);
     }));
   }
+}
+
+function renderRelationshipsMessage(slug) {
+  modalMessage.textContent = "";
+  const text = document.createElement("span");
+  text.textContent = "Outgoing direct relationships for this node.";
+  modalMessage.appendChild(text);
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "ghost-button compact-button inline-action-button relationship-add-selected";
+  addButton.textContent = "+";
+  addButton.title = "Add relationship";
+  addButton.setAttribute("aria-label", "Add relationship");
+  addButton.addEventListener("click", () => {
+    void openSelectedRelationshipModal(slug);
+  });
+  modalMessage.appendChild(addButton);
 }
 
 function renderBacklinksView(rawOutput, selectedSlug) {
@@ -3175,7 +3200,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "graph-query") {
-    modalKicker.textContent = "Graph query from here";
+    modalKicker.textContent = "Query";
     modalPrimaryButton.textContent = "Run graph query";
     modalMessage.textContent = "Choose traversal settings. Leave relationship type blank to include all types.";
     modalEditor.hidden = true;
@@ -3187,12 +3212,12 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "view-relationships") {
-    modalKicker.textContent = "View Relationships";
+    modalKicker.textContent = "Relationships";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
-    modalMessage.textContent = "Outgoing direct relationships for this node.";
+    renderRelationshipsMessage(slug);
     operationModal.hidden = false;
     state.modalAction = { action: "result", slug, label };
     renderMarkdownView("Loading outgoing relationships...");
@@ -3215,7 +3240,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "history") {
-    modalKicker.textContent = "View history";
+    modalKicker.textContent = "History";
     modalPrimaryButton.textContent = "Load history";
     modalMessage.textContent = "Loads gbrain page version history for this node.";
     modalEditor.value = `slug: ${slug}`;

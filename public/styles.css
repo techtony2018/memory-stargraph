@@ -2889,7 +2889,8 @@ body::after {
 }
 
 .settings-flyout {
-  right: 22px;
+  left: 22px;
+  right: auto;
   top: 52px;
   width: min(380px, calc(100% - 44px));
   max-height: calc(100% - 70px);
@@ -3127,7 +3128,9 @@ body::after {
   bottom: 26px;
   z-index: 30;
   display: grid;
-  gap: 10px;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 8px;
   width: 138px;
   max-height: calc(100% - 132px);
   overflow: auto;

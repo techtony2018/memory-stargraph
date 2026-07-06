@@ -61,6 +61,14 @@ These are the highest-value features for understanding, maintaining, and extendi
 9. **Settings and graph controls** - Configure display effects, cache limits, Yoda depth, refresh behavior, clustering, filters, zoom, and history navigation.
 10. **Remote and dashboard operation** - Run locally, behind All Things Codex Dashboard, or on remote hosts with health/version checks and host-specific config.
 
+## How Ask Yoda Works
+
+Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, and configured Yoda depth to the local Memory Stargraph server. The server builds a compact context pack from live `gbrain` data instead of relying only on what is already rendered in the canvas.
+
+Under the hood, the server gathers the selected page with `gbrain get`, nearby relationships with graph/backlink queries, and relevant search snippets when available. It keeps the prompt focused on the selected node, relationship labels, summaries, media hints, and nearby slugs so the answer can cite concrete graph context without dumping raw command output. If the configured agent path is available, Memory Stargraph asks that local agent to produce the response. If the agent is unavailable or times out, the endpoint falls back to a concise GBrain-context response so the UI still gives an actionable answer.
+
+The chat panel stores the visible conversation in browser state for the current session. It does not create durable GBrain notes by itself; durable changes still go through explicit actions such as modifying markdown, adding relationships, tags, timeline events, or attachments.
+
 ## GBrain Integration
 
 Default backend path:
@@ -195,15 +203,17 @@ Verification commands:
 
 Supported node operations to preserve:
 1. View
-2. Timeline
-3. Ask Yoda
-4. View media
-5. Graph query from here
-6. Add relationship
-7. Remove relationship
-8. Show backlinks
-9. Attach file
-10. Delete from gbrain
+2. Ask Yoda
+3. View media
+4. Relationships
+5. Backlinks
+6. Edit tags
+7. Attach file
+8. Query
+9. Timeline
+10. History
+11. Refresh embedding
+12. Hide
 
 Behavior requirements:
 - Root `index` should always load eagerly.

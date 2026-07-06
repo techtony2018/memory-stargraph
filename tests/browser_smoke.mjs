@@ -376,6 +376,12 @@ try {
     await page.evaluate(() => window.__pendingExpansionProbe);
   }
 
+  await page.evaluate(() => {
+    const panel = document.querySelector("#mapFilterPanel");
+    if (panel && !panel.classList.contains("is-hidden")) {
+      document.querySelector("#mapFilterToggleButton")?.click();
+    }
+  });
   const clickPoint = await page.evaluate(() => {
     const state = window.__MEMORY_STARGRAPH__.getState();
     const rect = document.querySelector("#graphCanvas").getBoundingClientRect();
@@ -648,17 +654,21 @@ try {
   const gbrainOperationTemplates = [];
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
-  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 13).map((button) => button.dataset.action));
-  const expectedMenuPrefix = ["view", "ask-yoda", "timeline-view", "media", "graph-query", "history", "view-relationships", "add-link", "remove-link", "backlinks", "tags", "attach-file", "embed"];
+  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 12).map((button) => button.dataset.action));
+  const expectedMenuPrefix = ["view", "ask-yoda", "media", "view-relationships", "backlinks", "tags", "attach-file", "graph-query", "timeline-view", "history", "embed", "hide"];
   if (JSON.stringify(firstMenuActions) !== JSON.stringify(expectedMenuPrefix)) {
     throw new Error(`Expected node menu order ${expectedMenuPrefix.join(", ")}, got ${firstMenuActions.join(", ")}`);
   }
-  const hasCopySlug = await page.evaluate(() => Boolean(document.querySelector('#contextMenu button[data-action="copy"]')));
-  if (hasCopySlug) {
-    throw new Error("Expected Copy slug to be removed from the node menu");
+  const removedMenuActions = await page.evaluate(() => ({
+    copy: Boolean(document.querySelector('#contextMenu button[data-action="copy"]')),
+    addLink: Boolean(document.querySelector('#contextMenu button[data-action="add-link"]')),
+    removeLink: Boolean(document.querySelector('#contextMenu button[data-action="remove-link"]')),
+  }));
+  if (removedMenuActions.copy || removedMenuActions.addLink || removedMenuActions.removeLink) {
+    throw new Error(`Expected Copy/Add/Remove relationship to be removed from the node menu: ${JSON.stringify(removedMenuActions)}`);
   }
   await page.click("body", { position: { x: 6, y: 6 } });
-  for (const action of ["ask-yoda", "media", "backlinks", "graph-query", "history", "timeline-view", "add-link", "remove-link", "tags", "attach-file", "embed"]) {
+  for (const action of ["ask-yoda", "media", "view-relationships", "backlinks", "tags", "attach-file", "graph-query", "history", "timeline-view", "embed"]) {
     await page.click("#nodeMenuButton");
     await page.waitForSelector("#contextMenu:not([hidden])");
     const menuText = await page.evaluate((value) => document.querySelector(`#contextMenu button[data-action="${value}"]`)?.textContent, action);
@@ -689,8 +699,14 @@ try {
   if (!timelineTemplate || timelineTemplate.menuText !== "Timeline" || timelineTemplate.modal.primary !== "Add timeline event" || !timelineTemplate.modal.editorHidden) {
     throw new Error(`Expected Timeline to open a read-only rendered view with an add-event button: ${JSON.stringify(timelineTemplate)}`);
   }
+  const relationshipsTemplate = gbrainOperationTemplates.find((item) => item.action === "view-relationships");
+  if (!relationshipsTemplate || relationshipsTemplate.menuText !== "Relationships" || relationshipsTemplate.modal.kicker !== "Relationships" || relationshipsTemplate.modal.primary !== "Close") {
+    throw new Error(`Expected Relationships menu to open the Relationships view: ${JSON.stringify(relationshipsTemplate)}`);
+  }
   const graphQueryTemplate = gbrainOperationTemplates.find((item) => item.action === "graph-query");
   if (
+    graphQueryTemplate?.menuText !== "Query" ||
+    graphQueryTemplate?.modal.kicker !== "Query" ||
     !graphQueryTemplate?.modal.graphControls.linkType ||
     graphQueryTemplate.modal.graphControls.direction.join(",") !== "both,outgoing,incoming" ||
     graphQueryTemplate.modal.graphControls.depth.join(",") !== "1,2,3" ||
@@ -698,6 +714,10 @@ try {
     !graphQueryTemplate.modal.editorHidden
   ) {
     throw new Error(`Expected Graph query to use guided controls: ${JSON.stringify(graphQueryTemplate)}`);
+  }
+  const historyTemplate = gbrainOperationTemplates.find((item) => item.action === "history");
+  if (!historyTemplate || historyTemplate.menuText !== "History" || historyTemplate.modal.kicker !== "History") {
+    throw new Error(`Expected History menu label and modal kicker: ${JSON.stringify(historyTemplate)}`);
   }
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
@@ -826,11 +846,17 @@ try {
   }
 
   const rotationBefore = await page.evaluate(() => ({ ...window.__MEMORY_STARGRAPH__.getState().rotation }));
-  await page.mouse.move(clickPoint.x, clickPoint.y);
-  await page.mouse.down();
-  await page.mouse.move(clickPoint.x + 140, clickPoint.y + 30, { steps: 8 });
-  await page.mouse.up();
-  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    const canvas = document.querySelector("#graphCanvas");
+    const rect = canvas.getBoundingClientRect();
+    const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const end = { x: start.x + 140, y: start.y + 30 };
+    const eventBase = { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: 1, pointerType: "mouse" };
+    canvas.dispatchEvent(new PointerEvent("pointerdown", { ...eventBase, clientX: start.x, clientY: start.y }));
+    canvas.dispatchEvent(new PointerEvent("pointermove", { ...eventBase, clientX: end.x, clientY: end.y }));
+    canvas.dispatchEvent(new PointerEvent("pointerup", { ...eventBase, buttons: 0, clientX: end.x, clientY: end.y }));
+  });
+  await page.waitForTimeout(100);
   const rotationAfter = await page.evaluate(() => ({ ...window.__MEMORY_STARGRAPH__.getState().rotation }));
 
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
@@ -935,10 +961,11 @@ try {
     firstSlug: document.querySelector(".relationship-source-link")?.getAttribute("data-entity-query") || "",
     relation: document.querySelector(".relationship-type")?.textContent || "",
     addButton: document.querySelector(".relationship-add-backlink")?.textContent || "",
+    addSelectedButton: document.querySelector(".relationship-add-selected")?.textContent || "",
     removeButton: document.querySelector(".relationship-remove")?.textContent || "",
     hasAuthoredBy: [...document.querySelectorAll(".relationship-type")].some((item) => /authored_by/i.test(item.textContent || "")),
   }));
-  if (relationshipView.title !== "View Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
+  if (relationshipView.title !== "Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addSelectedButton !== "+" || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
     throw new Error(`Expected Relationships to render compact outgoing wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
   }
   if (relationshipView.hasAuthoredBy) {
