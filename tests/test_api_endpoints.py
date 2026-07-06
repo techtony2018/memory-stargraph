@@ -180,6 +180,32 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn(("timeline", "people/tony-guan"), fake_store.calls)
         self.assertNotIn("add_timeline_event", [call[0] for call in fake_store.calls])
 
+    def test_ask_yoda_endpoint_returns_conversational_answer_without_raw_context(self):
+        fake_store = FakeStore()
+
+        def raw_fallback(slug, question, history=None):
+            fake_store.calls.append(("ask_yoda", slug, question, tuple(history or [])))
+            return {
+                "output": "OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.\n\nQuestion-specific gbrain retrieval:\nRAW QUERY DUMP",
+                "source": "fallback",
+                "prompt": "Direct relationship context:\nRAW PROMPT",
+            }
+
+        fake_store.ask_yoda = raw_fallback
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn("output", data)
+        self.assertNotIn("Question-specific gbrain retrieval", data["output"])
+        self.assertNotIn("Direct relationship context", data["output"])
+        self.assertNotIn("RAW QUERY DUMP", data["output"])
+        self.assertNotIn("prompt", data)
+
     def test_graph_query_rejects_invalid_direction_and_depth(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

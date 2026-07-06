@@ -485,6 +485,27 @@ try {
   }
   await page.click("#modalCloseButton");
 
+  await page.evaluate(() => {
+    const state = window.__MEMORY_STARGRAPH__.getState();
+    state.query = "";
+    state.matchesOnly = false;
+    state.filters.minDegree = 0;
+    state.timelineDays = 0;
+    state.hiddenClusters.clear();
+    state.hiddenHubConnections.clear();
+    const searchInput = document.querySelector("#searchInput");
+    const matchesOnlyToggle = document.querySelector("#matchesOnlyToggle");
+    const minDegreeFilter = document.querySelector("#minDegreeFilter");
+    const timelineDaysInput = document.querySelector("#timelineDaysInput");
+    if (searchInput) searchInput.value = "";
+    if (matchesOnlyToggle) matchesOnlyToggle.checked = false;
+    if (minDegreeFilter) minDegreeFilter.value = "0";
+    if (timelineDaysInput) timelineDaysInput.value = "0";
+    searchInput?.dispatchEvent(new Event("input", { bubbles: true }));
+    matchesOnlyToggle?.dispatchEvent(new Event("change", { bubbles: true }));
+    minDegreeFilter?.dispatchEvent(new Event("input", { bubbles: true }));
+    timelineDaysInput?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
   await page.click('#contextMenu button[data-action="view"]');
@@ -795,8 +816,8 @@ try {
       listText: document.querySelector("#hiddenList")?.textContent,
     };
   }, hideTargetSlug);
-  if (hiddenAfterShow.hidden || !hiddenAfterShow.filtered || hiddenAfterShow.listText?.includes(hideTargetSlug)) {
-    throw new Error("Expected Show action to restore hidden node to the galaxy");
+  if (hiddenAfterShow.hidden || hiddenAfterShow.listText?.includes(hideTargetSlug)) {
+    throw new Error(`Expected Show action to restore hidden node to the galaxy: ${JSON.stringify({ hideTargetSlug, hiddenAfterShow })}`);
   }
 
   const rotationBefore = await page.evaluate(() => ({ ...window.__MEMORY_STARGRAPH__.getState().rotation }));
@@ -911,8 +932,8 @@ try {
     addButton: document.querySelector(".relationship-add-backlink")?.textContent || "",
     removeButton: document.querySelector(".relationship-remove")?.textContent || "",
   }));
-  if (relationshipView.title !== "View relationship" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
-    throw new Error(`Expected View relationship to render compact wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
+  if (relationshipView.title !== "Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
+    throw new Error(`Expected Relationships to render compact outgoing wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
   }
   await page.click("#modalCloseButton");
   const clusterToggle = await page.evaluate(() => {

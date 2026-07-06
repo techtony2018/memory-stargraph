@@ -765,9 +765,11 @@ cover_image: companies/example-inc/logo.jpg
             result = store.ask_yoda("people/tony-guan", "What changed?", [{"role": "user", "content": "Earlier question"}])
 
         self.assertEqual(result["source"], "fallback")
-        self.assertIn("OpenClaw agent unavailable", result["output"])
+        self.assertIn("Question: What changed?", result["output"])
         self.assertIn("Selected node: people/tony-guan", result["output"])
-        self.assertIn("Earlier question", result["prompt"])
+        self.assertNotIn("OpenClaw agent unavailable", result["output"])
+        self.assertNotIn("retrieved context", result["output"])
+        self.assertNotIn("prompt", result)
 
     def test_graph_store_uses_cache_for_fast_startup(self):
         store = GraphStore()

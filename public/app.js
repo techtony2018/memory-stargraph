@@ -18,6 +18,7 @@ const state = {
   isRefreshing: false,
   lastRefreshAt: null,
   autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
+  pendingSettings: null,
   cloudMode: true,
   hiddenClusters: new Set(),
   hiddenHubConnections: new Set(),
@@ -42,8 +43,8 @@ const state = {
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
 };
 
-const UI_VERSION = "V1.0.79";
-const NODE_CACHE_DEFAULT_BYTES = 2 * 1024 * 1024;
+const UI_VERSION = "V1.0.80";
+const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
 const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
@@ -77,6 +78,9 @@ const timelineValue = document.getElementById("timelineValue");
 const tourButton = document.getElementById("tourButton");
 const tourPrevButton = document.getElementById("tourPrevButton");
 const tourNextButton = document.getElementById("tourNextButton");
+const tourCounter = document.getElementById("tourCounter");
+const settingsOkButton = document.getElementById("settingsOkButton");
+const settingsCancelButton = document.getElementById("settingsCancelButton");
 const historyBackButton = document.getElementById("historyBackButton");
 const historyForwardButton = document.getElementById("historyForwardButton");
 const floatingHistoryBackButton = document.getElementById("floatingHistoryBackButton");
@@ -86,6 +90,7 @@ const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
+const selectionSlugAlways = document.getElementById("selectionSlugAlways");
 const selectionMediaPreview = document.getElementById("selectionMediaPreview");
 const selectionMediaSlug = document.getElementById("selectionMediaSlug");
 const detailLinks = document.getElementById("detailLinks") || document.createElement("div");
@@ -351,6 +356,38 @@ function updateCacheSettingsView() {
   if (usage) usage.textContent = `${formatBytes(cacheUsedBytes())} used of ${formatBytes(cacheLimitBytes())}`;
 }
 
+function snapshotSettings() {
+  return {
+    cacheLimitBytes: cacheLimitBytes(),
+    autoRefresh: Boolean(state.autoRefresh.enabled),
+    autoRefreshInterval: state.autoRefresh.intervalMinutes,
+  };
+}
+
+function applySettingsFromControls() {
+  const cacheInput = document.getElementById("cacheLimitInput");
+  const mb = Math.max(0, Math.min(20, Number.parseInt(cacheInput?.value || "0", 10) || 0));
+  window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(mb * 1024 * 1024));
+  state.autoRefresh.enabled = Boolean(autoRefreshToggle?.checked);
+  state.autoRefresh.intervalMinutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval?.value || "10", 10) || 10));
+  enforceCacheLimit();
+  scheduleAutoRefresh();
+  updateCacheSettingsView();
+  hideFloatingPanels();
+}
+
+function cancelSettingsChanges() {
+  const snapshot = state.pendingSettings || snapshotSettings();
+  window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(snapshot.cacheLimitBytes));
+  state.autoRefresh.enabled = Boolean(snapshot.autoRefresh);
+  state.autoRefresh.intervalMinutes = snapshot.autoRefreshInterval;
+  if (autoRefreshToggle) autoRefreshToggle.checked = state.autoRefresh.enabled;
+  if (autoRefreshInterval) autoRefreshInterval.value = String(state.autoRefresh.intervalMinutes);
+  scheduleAutoRefresh();
+  updateCacheSettingsView();
+  hideFloatingPanels();
+}
+
 function updateLastRefresh(source) {
   state.lastRefreshAt = source?.updated_at || new Date().toISOString();
   lastRefresh.textContent = formatRefreshTime(state.lastRefreshAt);
@@ -475,9 +512,11 @@ async function showTourStop(index) {
   state.tour.pending = true;
   state.tour.index = (index + state.tour.slugs.length) % state.tour.slugs.length;
   const slug = state.tour.slugs[state.tour.index];
+  const recoveryTimer = window.setTimeout(() => clearTourPending(slug), 15000);
   const node = state.nodeMap.get(slug);
   if (!node) {
-    state.tour.pending = false;
+    window.clearTimeout(recoveryTimer);
+    clearTourPending(slug);
     return;
   }
   hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
@@ -486,9 +525,15 @@ async function showTourStop(index) {
     await loadEntity(slug, { source: "system" });
     await waitForTourSelectionLoad(slug);
   } finally {
-    state.tour.pending = false;
+    window.clearTimeout(recoveryTimer);
+    clearTourPending(slug);
   }
   if (state.tour.active) scheduleNextTourStop();
+}
+
+function clearTourPending(slug = state.focusSlug) {
+  state.tour.pending = false;
+  updateTourCounter(slug);
 }
 
 function selectionIsLoadedForTour(slug) {
@@ -565,14 +610,25 @@ function updateTourControls() {
   tourButton.title = tooltip;
   if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
   tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-active", state.tour.active);
+  updateTourCounter();
   updateNavModeState();
+}
+
+function updateTourCounter(_slug = state.focusSlug) {
+  if (!tourCounter) return;
+  const total = state.tour.slugs.length;
+  const current = total ? state.tour.index + 1 : 0;
+  tourCounter.textContent = state.tour.active ? `${current}/${total}` : "0/0";
+  tourCounter.hidden = !state.tour.active;
 }
 
 function setSearchLoading(active) {
   state.lazySearch.loading = active;
   searchInput.disabled = active;
   searchButton.disabled = active;
-  searchButton.textContent = active ? "Searching..." : "Search";
+  searchButton.setAttribute("aria-label", active ? "Searching" : "Run search");
+  searchButton.dataset.tooltip = active ? "Searching memory nodes." : "Run search and load the best matching entity.";
+  searchButton.title = searchButton.dataset.tooltip;
 }
 
 async function runLazySearch(query) {
@@ -634,6 +690,9 @@ function setFlyoutOpen(panel, button, open) {
   panel.hidden = !open;
   button.setAttribute("aria-expanded", open ? "true" : "false");
   button.classList.toggle("is-open", open);
+  if (panel === settingsFlyout && open) {
+    state.pendingSettings = snapshotSettings();
+  }
   updateNavModeState();
 }
 
@@ -2062,6 +2121,10 @@ async function openRemoveRelationshipModal(sourceSlug, targetSlug, linkType) {
   }
 }
 
+async function reopenRelationshipsView(slug) {
+  await openNodeModal("view-relationships", slug);
+}
+
 function labelForSlug(slug) {
   const node = state.nodeMap.get(slug);
   return node?.label || slug;
@@ -2177,7 +2240,7 @@ function renderBacklinksView(rawOutput, selectedSlug) {
 }
 
 function renderOutgoingRelationshipsView(slug) {
-  const items = existingRelationshipOptions(slug).map((option) => ({
+  const items = outgoingRelationshipOptions(slug).map((option) => ({
     source_slug: option.targetSlug,
     link_type: option.type || "related to",
   }));
@@ -2528,6 +2591,23 @@ function existingRelationshipOptions(slug) {
   return options.sort((left, right) => left.label.localeCompare(right.label));
 }
 
+function outgoingRelationshipOptions(slug) {
+  const options = [];
+  const seen = new Set();
+  state.edges.filter((edge) => edge.source.slug === slug).forEach((edge) => {
+    const targetSlug = edge.target.slug;
+    const target = state.nodeMap.get(targetSlug);
+    const types = edge.link_types?.length ? edge.link_types : relationshipTypes(slug, targetSlug);
+    (types.length ? types : [""]).forEach((type) => {
+      const key = `${targetSlug} | ${type}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push({ targetSlug, type, label: `${target?.label || targetSlug} · ${type || "all relationship types"}` });
+    });
+  });
+  return options.sort((left, right) => left.label.localeCompare(right.label));
+}
+
 function renderRemoveRelationshipForm(slug) {
   modalForm.innerHTML = "";
   const input = document.createElement("input");
@@ -2778,7 +2858,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "view-relationships") {
-    modalKicker.textContent = "View relationship";
+    modalKicker.textContent = "Relationships";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
     modalEditor.hidden = true;
@@ -3075,9 +3155,9 @@ async function runModalPrimaryAction() {
         link_type: linkType,
       });
       if (!response.ok) throw new Error(response.data?.error || `Remove relationship failed with ${response.status}`);
-      closeModal();
       applyGraphPayload(response.data.graph, slug);
       await loadEntity(slug, { source: "system" });
+      await reopenRelationshipsView(slug);
       return;
     }
     if (action === "tags") {
@@ -3256,6 +3336,7 @@ async function loadEntity(slug, options = {}) {
     state.focusSlug = slug;
     if (requestedNode) {
       detailTitle.textContent = requestedNode.label || slug;
+      if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
       setTimelineBadge(slug, false);
       detailType.textContent = `${requestedNode.category || requestedNode.type || "entity"} · ${shouldExpand ? "loading direct links" : "loading details"}`;
       detailSummary.textContent = shouldExpand
@@ -3283,6 +3364,7 @@ async function loadEntity(slug, options = {}) {
       updateSelectionHistoryControls();
     }
     detailTitle.textContent = entity.label;
+    if (selectionSlugAlways) selectionSlugAlways.textContent = entity.slug;
     setTimelineBadge(entity.slug, false);
     const partText = entity.parts_count ? ` · ${entity.parts_count} collapsed parts` : "";
     const reportText = entity.report_count ? ` · ${entity.report_count} collapsed reports` : "";
@@ -3500,12 +3582,8 @@ function bindEvents() {
     showFloatingPanel(settingsFlyout, navSettingsButton);
   });
 
-  document.getElementById("cacheLimitInput")?.addEventListener("input", (event) => {
-    const mb = Math.max(0, Math.min(20, Number.parseInt(event.target.value, 10) || 0));
-    window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(mb * 1024 * 1024));
-    enforceCacheLimit();
-    updateCacheSettingsView();
-  });
+  settingsOkButton?.addEventListener("click", applySettingsFromControls);
+  settingsCancelButton?.addEventListener("click", cancelSettingsChanges);
 
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -3585,15 +3663,6 @@ function bindEvents() {
     await fetchGraph("/api/refresh", { preserveFocus: true });
   });
 
-  autoRefreshToggle.addEventListener("change", (event) => {
-    state.autoRefresh.enabled = event.target.checked;
-    scheduleAutoRefresh();
-  });
-
-  autoRefreshInterval.addEventListener("change", () => {
-    scheduleAutoRefresh();
-  });
-
   zoomOutButton.addEventListener("click", () => {
     zoomBy(-1);
   });
@@ -3645,7 +3714,13 @@ function bindEvents() {
   });
 
   modalCloseButton.addEventListener("click", closeModal);
-  modalCancelButton.addEventListener("click", closeModal);
+  modalCancelButton.addEventListener("click", () => {
+    if (state.modalAction?.action === "remove-link") {
+      void reopenRelationshipsView(state.modalAction.slug);
+      return;
+    }
+    closeModal();
+  });
   modalPrimaryButton.addEventListener("click", () => {
     void runModalPrimaryAction();
   });

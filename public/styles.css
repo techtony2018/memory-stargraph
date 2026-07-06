@@ -414,8 +414,25 @@ h2 {
 .search-button {
   flex: 0 0 auto;
   height: 34px;
-  min-width: 64px;
-  padding-inline: 11px;
+  min-width: 34px;
+  width: 34px;
+  padding: 0;
+}
+
+.search-icon-button {
+  display: inline-grid;
+  place-items: center;
+}
+
+.search-icon,
+.autopilot-launch-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .toggle-wrap {
@@ -841,9 +858,21 @@ h2 {
 }
 
 #tourButton {
-  width: clamp(106px, 11vw, 126px);
-  min-width: 106px;
+  width: 34px;
+  min-width: 34px;
   white-space: nowrap;
+}
+
+.tour-counter {
+  min-width: 38px;
+  color: #ffc66f;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.tour-counter[hidden] {
+  display: none;
 }
 
 .timeline-days-wrap {
@@ -915,14 +944,25 @@ h2 {
   background: rgba(255, 198, 111, 0.22);
 }
 
+.selection-slug-always {
+  margin: 8px 0 0;
+  min-width: 0;
+  overflow: hidden;
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ui-version {
   display: inline-flex;
-  min-height: 34px;
+  min-height: 20px;
   align-items: center;
-  padding: 0 10px;
-  border: 1px solid rgba(143, 168, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -931,7 +971,12 @@ h2 {
 
 .ui-version:hover {
   color: var(--accent);
-  border-color: rgba(136, 246, 255, 0.32);
+  text-decoration: underline;
+}
+
+.ui-version-link {
+  border: 0;
+  background: transparent;
 }
 
 .icon-button {
@@ -960,9 +1005,8 @@ h2 {
 }
 
 .source-control-stack {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  align-items: stretch;
   gap: 7px;
   margin-top: 12px;
 }
@@ -986,6 +1030,28 @@ h2 {
 .source-control-stack #sourceBadge {
   flex: 1 1 100%;
   justify-content: center;
+}
+
+.settings-section {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid rgba(136, 246, 255, 0.14);
+  background: rgba(2, 8, 22, 0.42);
+}
+
+.settings-section h3 {
+  margin: 0;
+  color: #dffcff;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .panel-section + .panel-section {
@@ -2485,7 +2551,8 @@ body::after {
 
 .relationship-wiki-row,
 .backlink-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   min-height: 32px;
@@ -2498,6 +2565,7 @@ body::after {
 .relationship-source-link,
 .backlink-from-link {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: #67e8f9;
   font-size: 12px;
@@ -2512,6 +2580,11 @@ body::after {
   font-size: 11px;
   font-weight: 850;
   white-space: nowrap;
+}
+
+.backlink-meta,
+.backlink-target {
+  grid-column: 1 / -1;
 }
 
 .relationship-icon-button,
@@ -2718,7 +2791,7 @@ body::after {
 
 .graph-brand-row {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   gap: 12px;
   width: 100%;

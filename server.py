@@ -112,7 +112,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.79"
+UI_VERSION = "V1.0.80"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -380,6 +380,29 @@ def run_openclaw_agent(prompt, timeout=45):
         return None
     output = decode_process_output(result.stdout).strip()
     return output or None
+
+
+def sanitize_yoda_result(result):
+    payload = dict(result or {})
+    output = str(payload.get("output") or "").strip()
+    raw_markers = [
+        "Question-specific gbrain retrieval:",
+        "Direct relationship context:",
+        "Selected node content:",
+        "OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.",
+    ]
+    if any(marker in output for marker in raw_markers):
+        output = re.split(
+            r"(?:Question-specific gbrain retrieval:|Direct relationship context:|Selected node content:)",
+            output,
+            maxsplit=1,
+        )[0]
+        output = output.replace("OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.", "").strip()
+        if not output:
+            output = "I found graph context for this node, but the answer model is unavailable right now. Try again after the Ask Yoda agent is reachable."
+    payload["output"] = output
+    payload.pop("prompt", None)
+    return payload
 
 
 def parse_slugs(raw_text):
@@ -2219,12 +2242,18 @@ class GraphStore:
         prompt = self.build_yoda_prompt(slug, question, history)
         agent_output = run_openclaw_agent(prompt)
         if agent_output:
-            return {"output": agent_output, "source": "openclaw-agent", "prompt": prompt}
+            return {"output": agent_output, "source": "openclaw-agent"}
         fallback = self.ask_gbrain(slug, question)
+        fallback_text = str(fallback or "").strip()
+        if fallback_text:
+            fallback_text = re.split(
+                r"(?:Question-specific gbrain retrieval:|Direct relationship context:|Selected node content:)",
+                fallback_text,
+                maxsplit=1,
+            )[0].strip() or fallback_text[:900].strip()
         return {
-            "output": f"OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.\n\n{fallback}",
+            "output": fallback_text or "I found no concise answer in the graph context for this question yet.",
             "source": "fallback",
-            "prompt": prompt,
         }
 
     def backlinks(self, slug):
@@ -2608,7 +2637,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 history = payload.get("history") if isinstance(payload.get("history"), list) else []
                 if not question:
                     return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
-                result = STORE.ask_yoda(slug, question, history)
+                result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history))
                 return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
