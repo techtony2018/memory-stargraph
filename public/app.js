@@ -1,4 +1,6 @@
-const UI_VERSION = "V1.0.82";
+const UI_VERSION = "V1.0.83";
+const RELATIONSHIP_PAGE_SIZE = 10;
+const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
@@ -22,6 +24,7 @@ const state = {
   nodeMap: new Map(),
   visibleLabelSlugs: [],
   animationHandle: null,
+  renderDirty: true,
   isRefreshing: false,
   lastRefreshAt: null,
   autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
@@ -33,20 +36,22 @@ const state = {
   categoryLimit: 5,
   clusterLimit: 5,
   timelineDays: 0,
-  tour: { active: false, slugs: [], index: 0, timer: null, pending: false },
+  tour: { active: false, slugs: [], index: 0, timer: null, pending: false, timeoutTimer: null },
   selectionHistory: { slugs: [], index: -1, navigating: false },
   lazySearch: { timer: null, query: "", loading: false },
   menuSlug: null,
   modalAction: null,
-  askChats: new Map(),
   askYodaChats: new Map(),
+  relationshipPages: new Map(),
+  backlinkPages: new Map(),
+  relationshipReturnView: null,
   busyOperations: new Map(),
   busyOperationId: 0,
   animationTick: 0,
   entityLoadId: 0,
   selectionVersion: 0,
   zoom: 1,
-  rotation: { x: -0.34, y: 0.58, vx: 0.0012, vy: 0.0022 },
+  rotation: { x: -0.34, y: 0.58, vx: 0, vy: 0 },
   drag: { active: false, moved: false, lastX: 0, lastY: 0, pointerId: null },
   mobileTooltipTimer: null,
   viewport: { width: 1200, height: 760, dpr: Math.max(1, window.devicePixelRatio || 1) },
@@ -71,6 +76,7 @@ const autoRefreshToggle = document.getElementById("autoRefreshToggle");
 const autoRefreshInterval = document.getElementById("autoRefreshInterval");
 const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
 const lastRefresh = document.getElementById("lastRefresh");
+const flushCacheButton = document.getElementById("flushCacheButton");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const newNodeButton = document.getElementById("newNodeButton");
 const zoomOutButton = document.getElementById("zoomOutButton");
@@ -93,6 +99,7 @@ const floatingHistoryForwardButton = document.getElementById("floatingHistoryFor
 
 const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
+const selectionAskYodaButton = document.getElementById("selectionAskYodaButton");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
 const selectionSlugAlways = document.getElementById("selectionSlugAlways");
@@ -181,6 +188,7 @@ function resizeCanvas() {
   canvas.width = Math.round(rect.width * state.viewport.dpr);
   canvas.height = Math.round(rect.height * state.viewport.dpr);
   ctx.setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
+  requestRender();
 }
 
 function safeJsonParse(value, fallback) {
@@ -214,6 +222,38 @@ function saveCacheStore(store) {
 
 function cacheableGetUrl(url) {
   return /^\/api\/entity(?:-raw|-media)?\/[^?]+$/.test(String(url || ""));
+}
+
+function cacheUrlsForSlug(slug) {
+  const encoded = encodeURIComponent(slug || "");
+  return [
+    `/api/entity/${encoded}`,
+    `/api/entity-raw/${encoded}`,
+    `/api/entity-media/${encoded}`,
+  ];
+}
+
+function invalidateNodeCacheForSlug(slug) {
+  if (!slug) return;
+  const store = cacheStore();
+  const entries = store.entries || {};
+  cacheUrlsForSlug(slug).forEach((url) => {
+    delete entries[url];
+  });
+  store.entries = entries;
+  saveCacheStore(store);
+  updateCacheSettingsView();
+}
+
+function invalidateRelationshipEndpointCache(leftSlug, rightSlug) {
+  invalidateNodeCacheForSlug(leftSlug);
+  invalidateNodeCacheForSlug(rightSlug);
+}
+
+function flushNodeCache() {
+  saveCacheStore({ entries: {} });
+  updateCacheSettingsView();
+  hoverLabel.textContent = "Local node/media cache flushed.";
 }
 
 function cacheUsedBytes(store = cacheStore()) {
@@ -414,7 +454,28 @@ function cancelSettingsChanges() {
 
 function updateLastRefresh(source) {
   state.lastRefreshAt = source?.updated_at || new Date().toISOString();
-  lastRefresh.textContent = formatRefreshTime(state.lastRefreshAt);
+  if (lastRefresh) lastRefresh.textContent = formatRefreshTime(state.lastRefreshAt);
+}
+
+function shouldAnimateContinuously() {
+  return Boolean(
+    state.drag.active
+    || state.tour.active
+    || state.flowingEdges
+    || state.expandingSlugs.size
+    || Math.abs(state.rotation.vx) > 0.00002
+    || Math.abs(state.rotation.vy) > 0.00002,
+  );
+}
+
+function ensureRenderLoop() {
+  if (state.animationHandle) return;
+  state.animationHandle = requestAnimationFrame(render);
+}
+
+function requestRender() {
+  state.renderDirty = true;
+  ensureRenderLoop();
 }
 
 function scheduleAutoRefresh() {
@@ -438,6 +499,7 @@ function setZoom(value) {
   state.zoom = clampZoom(value);
   if (zoomLevel) zoomLevel.textContent = `${Math.round(state.zoom * 100)}%`;
   projectAll();
+  requestRender();
 }
 
 function updateCloudModeControl() {
@@ -545,19 +607,40 @@ async function showTourStop(index) {
   }
   hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
   updateTourControls();
+  let timedOut = false;
   try {
-    await loadEntity(slug, { source: "system" });
-    await waitForTourSelectionLoad(slug);
+    const loadStep = (async () => {
+      await loadEntity(slug, { source: "system" });
+      await waitForTourSelectionLoad(slug);
+      return "loaded";
+    })();
+    const timeoutStep = new Promise((resolve) => {
+      state.tour.timeoutTimer = window.setTimeout(() => handleTourNodeTimeout(slug), TOUR_NODE_LOAD_TIMEOUT_MS);
+      window.setTimeout(() => resolve("timeout"), TOUR_NODE_LOAD_TIMEOUT_MS);
+    });
+    timedOut = (await Promise.race([loadStep, timeoutStep])) === "timeout";
   } finally {
     window.clearTimeout(recoveryTimer);
+    if (state.tour.timeoutTimer) {
+      window.clearTimeout(state.tour.timeoutTimer);
+      state.tour.timeoutTimer = null;
+    }
     clearTourPending(slug);
   }
-  if (state.tour.active) scheduleNextTourStop();
+  if (state.tour.active && !timedOut) scheduleNextTourStop();
 }
 
 function clearTourPending(slug = state.focusSlug) {
   state.tour.pending = false;
   updateTourCounter(slug);
+}
+
+function handleTourNodeTimeout(slug) {
+  const node = state.nodeMap.get(slug);
+  hoverLabel.textContent = `Autopilot timeout: skipped ${node?.label || slug}.`;
+  clearTourPending(slug);
+  if (state.tour.active) scheduleNextTourStop();
+  return "timeout";
 }
 
 function selectionIsLoadedForTour(slug) {
@@ -569,9 +652,8 @@ function selectionIsLoadedForTour(slug) {
 
 function waitForTourSelectionLoad(slug) {
   return new Promise((resolve) => {
-    const startedAt = Date.now();
     const check = () => {
-      if (selectionIsLoadedForTour(slug) || Date.now() - startedAt > 12000) {
+      if (selectionIsLoadedForTour(slug)) {
         resolve();
         return;
       }
@@ -594,6 +676,10 @@ function stopTour() {
   if (state.tour.timer) {
     window.clearTimeout(state.tour.timer);
     state.tour.timer = null;
+  }
+  if (state.tour.timeoutTimer) {
+    window.clearTimeout(state.tour.timeoutTimer);
+    state.tour.timeoutTimer = null;
   }
   state.tour.pending = false;
   updateTourControls();
@@ -805,9 +891,7 @@ async function tryExactSlugSearch(slug) {
   const response = await apiPost(`/api/entity-expand/${encodeURIComponent(slug)}`);
   if (!response.ok || !response.data?.graph) return false;
   applyGraphPayload(response.data.graph, slug);
-  if (!state.animationHandle) {
-    render();
-  }
+  requestRender();
   await loadEntity(slug, { source: "search" });
   return true;
 }
@@ -1165,6 +1249,7 @@ function applyFilter() {
   }
   if (state.graph) updateMetrics(state.graph);
   updateHubClusterLegend();
+  requestRender();
 }
 
 function getNodeColor(node) {
@@ -1321,8 +1406,8 @@ function degreeIntensity(node) {
 function drawClusterClouds() {
   if (!state.cloudMode || !state.filteredSlugs.size) return;
   const groups = new Map();
-  state.nodes.forEach((node) => {
-    if (!state.filteredSlugs.has(node.slug) || isHidden(node.slug) || isClusterHidden(node) || isHiddenByHubConnection(node)) return;
+  drawableNodes().forEach((node) => {
+    if (isClusterHidden(node) || isHiddenByHubConnection(node)) return;
     const alpha = nodeAlpha(node);
     if (alpha <= 0) return;
     const key = node.category || node.type || "entity";
@@ -1351,9 +1436,39 @@ function drawClusterClouds() {
   ctx.restore();
 }
 
+function nodeIsDrawable(node) {
+  if (!node || isHidden(node.slug) || isClusterHidden(node) || isHiddenByHubConnection(node)) return false;
+  if (!state.filteredSlugs.size || state.filteredSlugs.has(node.slug)) return true;
+  if (node.slug === state.focusSlug || node.slug === state.hoverSlug) return true;
+  if (isLinkedToFocus(node)) return true;
+  if (state.query && state.matchSlugs.has(node.slug)) return true;
+  return visibleTopHubs(8).includes(node.slug);
+}
+
+const drawableNodes = () => state.nodes.filter(nodeIsDrawable);
+const drawableEdges = () => state.edges.filter((edge) => nodeIsDrawable(edge.source) && nodeIsDrawable(edge.target));
+
+function isImportantNodeForLod(node, topHubs = new Set()) {
+  return node.slug === state.focusSlug
+    || node.slug === state.hoverSlug
+    || isLinkedToFocus(node)
+    || topHubs.has(node.slug)
+    || (node.degree || 0) >= Math.max(8, (state.graph?.stats?.max_degree || 1) * 0.18);
+}
+
+function flowingEdgeIsAnimated(edge) {
+  if (!state.flowingEdges) return false;
+  return edge.source.slug === state.focusSlug
+    || edge.target.slug === state.focusSlug
+    || edge.source.slug === state.hoverSlug
+    || edge.target.slug === state.hoverSlug
+    || isLinkedToFocus(edge.source)
+    || isLinkedToFocus(edge.target);
+}
+
 function drawEdges() {
   const now = performance.now();
-  [...state.edges].sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
+  drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
     const alpha = edgeAlpha(edge);
     if (alpha <= 0) return;
     const layer = edgeLayer(edge);
@@ -1382,7 +1497,7 @@ function drawEdges() {
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
     ctx.stroke();
 
-    if (state.flowingEdges) {
+    if (flowingEdgeIsAnimated(edge)) {
       ctx.save();
       ctx.setLineDash([6, 14]);
       ctx.lineDashOffset = -state.animationTick;
@@ -1398,7 +1513,7 @@ function drawEdges() {
       ctx.restore();
     }
 
-    if (state.flowingEdges && (layer > 0 || isHoveredFocusEdge)) {
+    if (flowingEdgeIsAnimated(edge) && (layer > 0 || isHoveredFocusEdge)) {
       const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
       const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
       const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
@@ -1528,11 +1643,10 @@ function drawNodes() {
   const now = performance.now();
   const topMatches = new Set(visibleSearchMatches());
   const topHubs = new Set(visibleTopHubs());
-  const ordered = [...state.nodes].sort((left, right) => left.depth - right.depth);
+  const ordered = drawableNodes().sort((left, right) => left.depth - right.depth);
   const visibleLabelSlugs = [];
   const labelRects = [];
   ordered.forEach((node) => {
-    if (isHidden(node.slug)) return;
     const alpha = nodeAlpha(node);
     if (alpha <= 0) return;
     const pulse = 1 + Math.sin(now / 700 + node.pulseOffset) * 0.06;
@@ -1540,22 +1654,25 @@ function drawNodes() {
     const color = getNodeColor(node);
     const hubIntensity = degreeIntensity(node);
     const hubGlow = state.cloudMode ? hubIntensity : hubIntensity * 0.65;
+    const important = isImportantNodeForLod(node, topHubs);
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    const glow = ctx.createRadialGradient(node.screenX, node.screenY, 0, node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8));
-    glow.addColorStop(0, hexToRgba(color, 0.28 + hubGlow * 0.32));
-    glow.addColorStop(0.42, hexToRgba(color, 0.12 + hubGlow * 0.16));
-    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8), 0, Math.PI * 2);
-    ctx.fill();
+    if (important) {
+      const glow = ctx.createRadialGradient(node.screenX, node.screenY, 0, node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8));
+      glow.addColorStop(0, hexToRgba(color, 0.28 + hubGlow * 0.32));
+      glow.addColorStop(0.42, hexToRgba(color, 0.12 + hubGlow * 0.16));
+      glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(node.screenX, node.screenY, radius * (3.1 + hubGlow * 2.8), 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.fillStyle = color;
-    ctx.shadowColor = hexToRgba(color, 0.5 + hubGlow * 0.35);
-    ctx.shadowBlur = 4 + hubGlow * 18;
+    ctx.shadowColor = important ? hexToRgba(color, 0.5 + hubGlow * 0.35) : "transparent";
+    ctx.shadowBlur = important ? 4 + hubGlow * 18 : 0;
     ctx.beginPath();
     ctx.arc(node.screenX, node.screenY, radius * (1 + hubGlow * 0.1), 0, Math.PI * 2);
     ctx.fill();
@@ -1630,17 +1747,27 @@ function drawNodes() {
 }
 
 function render() {
+  state.animationHandle = null;
+  if (!state.renderDirty && !shouldAnimateContinuously()) {
+    return;
+  }
+  state.renderDirty = false;
   state.animationTick = (state.animationTick + 0.7) % 1000;
   drawBackground();
   tick();
   drawClusterClouds();
   drawEdges();
   drawNodes();
+  if (!shouldAnimateContinuously()) {
+    state.animationHandle = null;
+    return;
+  }
   state.animationHandle = requestAnimationFrame(render);
 }
 
 function setHover(slug) {
   state.hoverSlug = slug;
+  requestRender();
   const node = slug ? state.nodeMap.get(slug) : null;
   const hasDesktopPointer = window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches;
   const idleHint = hasDesktopPointer
@@ -2168,6 +2295,29 @@ async function reopenRelationshipsView(slug) {
   await openNodeModal("view-relationships", slug);
 }
 
+async function refreshSelectedNodeAfterRelationshipMutation(slug, target, action) {
+  invalidateRelationshipEndpointCache(slug, target);
+  const returnView = state.relationshipReturnView;
+  state.relationshipReturnView = null;
+  await loadEntity(slug, { source: "system", recordHistory: false });
+  if (action === "remove-link") {
+    await reopenRelationshipsView(slug);
+  } else if (returnView?.action && returnView.slug) {
+    await openNodeModal(returnView.action, returnView.slug);
+  }
+}
+
+function currentRelationshipPage(slug) {
+  return state.relationshipPages.get(slug) || 0;
+}
+
+function clampRelationshipPage(slug, itemCount) {
+  const maxPage = Math.max(0, Math.ceil(itemCount / RELATIONSHIP_PAGE_SIZE) - 1);
+  const page = Math.max(0, Math.min(maxPage, currentRelationshipPage(slug)));
+  state.relationshipPages.set(slug, page);
+  return page;
+}
+
 function labelForSlug(slug) {
   const node = state.nodeMap.get(slug);
   return node?.label || slug;
@@ -2194,6 +2344,7 @@ function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
   addButton.title = options.addTitle || "Add backlink";
   addButton.setAttribute("aria-label", "Add backlink");
   addButton.addEventListener("click", () => {
+    state.relationshipReturnView = { action: "backlinks", slug: selectedSlug };
     void openReverseRelationshipModal(sourceSlug, selectedSlug);
   });
   row.appendChild(addButton);
@@ -2215,9 +2366,12 @@ function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
 
 function renderRelationshipWikiList(items, selectedSlug, options = {}) {
   modalMarkdown.innerHTML = "";
+  const page = clampRelationshipPage(selectedSlug, items.length);
+  const start = page * RELATIONSHIP_PAGE_SIZE;
+  const visibleItems = items.slice(start, start + RELATIONSHIP_PAGE_SIZE);
   const list = document.createElement("div");
   list.className = "relationship-wiki-list backlink-list";
-  items.forEach((item) => {
+  visibleItems.forEach((item) => {
     list.appendChild(relationshipRow(item.source_slug, item.link_type, selectedSlug, options));
   });
   if (!items.length) {
@@ -2226,10 +2380,39 @@ function renderRelationshipWikiList(items, selectedSlug, options = {}) {
     list.appendChild(empty);
   }
   modalMarkdown.appendChild(list);
+  if (items.length > RELATIONSHIP_PAGE_SIZE) {
+    const pager = document.createElement("div");
+    pager.className = "relationship-pagination";
+    const previous = document.createElement("button");
+    previous.id = "relationshipPrevPage";
+    previous.className = "ghost-button";
+    previous.type = "button";
+    previous.textContent = "Previous";
+    previous.disabled = page <= 0;
+    previous.addEventListener("click", () => {
+      state.relationshipPages.set(selectedSlug, page - 1);
+      renderRelationshipWikiList(items, selectedSlug, options);
+    });
+    const count = document.createElement("span");
+    count.textContent = `Page ${page + 1} of ${Math.ceil(items.length / RELATIONSHIP_PAGE_SIZE)}`;
+    const next = document.createElement("button");
+    next.id = "relationshipNextPage";
+    next.className = "ghost-button";
+    next.type = "button";
+    next.textContent = "Next";
+    next.disabled = start + RELATIONSHIP_PAGE_SIZE >= items.length;
+    next.addEventListener("click", () => {
+      state.relationshipPages.set(selectedSlug, page + 1);
+      renderRelationshipWikiList(items, selectedSlug, options);
+    });
+    pager.append(previous, count, next);
+    modalMarkdown.appendChild(pager);
+  }
 }
 
 function renderBacklinksView(rawOutput, selectedSlug) {
   const items = parseBacklinkItems(rawOutput, selectedSlug);
+  state.backlinkPages.set(selectedSlug, state.backlinkPages.get(selectedSlug) || 0);
   if (!items.length) {
     renderMarkdownView(rawOutput || "(No backlinks)");
     return;
@@ -2274,6 +2457,7 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     linkBack.title = "Add relationship";
     linkBack.setAttribute("aria-label", "Add relationship");
     linkBack.addEventListener("click", () => {
+      state.relationshipReturnView = { action: "backlinks", slug: selectedSlug };
       void openReverseRelationshipModal(selectedSlug, item.from_slug);
     });
     row.appendChild(linkBack);
@@ -2346,18 +2530,30 @@ function renderMediaItems(items) {
 }
 
 function chatHistoryFor(slug, label, options = {}) {
-  const store = options.mode === "yoda" ? state.askYodaChats : state.askChats;
+  const store = state.askYodaChats;
   if (!store.has(slug)) {
     store.set(slug, [
       {
         role: "system",
-        content: options.mode === "yoda"
-          ? `Ask Yoda about ${label}. Answers use an agent when available and fall back to GBrain context.`
-          : `Ask GBrain about ${label}. Each question runs against the current node context.`,
+        content: `Ask Yoda about ${label}. Answers use an agent when available and fall back to GBrain context.`,
+        timestamp: chatTimestamp(),
       },
     ]);
   }
   return store.get(slug);
+}
+
+function chatTimestamp() {
+  return new Date().toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderMarkdownInline(text, parent) {
+  appendInlineMarkdown(parent, text);
 }
 
 function renderAskChat(slug, label, options = {}) {
@@ -2376,12 +2572,17 @@ function renderAskChat(slug, label, options = {}) {
 
     const speaker = document.createElement("span");
     speaker.className = "chat-speaker";
-    speaker.textContent = message.role === "user" ? "You" : message.role === "assistant" ? (options.mode === "yoda" ? "Yoda" : "GBrain") : "Context";
+    speaker.textContent = message.role === "user" ? "You" : message.role === "assistant" ? "Yoda" : "Context";
     row.appendChild(speaker);
+
+    const timestamp = document.createElement("time");
+    timestamp.className = "chat-timestamp";
+    timestamp.textContent = message.timestamp || chatTimestamp();
+    row.appendChild(timestamp);
 
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
-    bubble.textContent = message.content;
+    renderMarkdownInline(message.content, bubble);
     row.appendChild(bubble);
 
     modalChatLog.appendChild(row);
@@ -2637,7 +2838,7 @@ function existingRelationshipOptions(slug) {
 function outgoingRelationshipOptions(slug) {
   const options = [];
   const seen = new Set();
-  state.edges.filter((edge) => edge.source.slug === slug).forEach((edge) => {
+  state.edges.filter((edge) => edge.source.slug === slug && edge.target.slug !== slug).forEach((edge) => {
     const targetSlug = edge.target.slug;
     const target = state.nodeMap.get(targetSlug);
     const types = edge.link_types?.length ? edge.link_types : relationshipTypes(slug, targetSlug);
@@ -2839,23 +3040,14 @@ async function openNodeModal(action, slug = state.focusSlug) {
     return;
   }
 
-  if (action === "ask" || action === "ask-yoda") {
-    const isYoda = action === "ask-yoda";
-    if (isYoda) {
-      modalKicker.textContent = "Ask Yoda";
-    } else {
-      modalKicker.textContent = "Ask GBrain";
-    }
+  if (action === "ask-yoda") {
+    modalKicker.textContent = "Ask Yoda";
     modalPrimaryButton.textContent = "Send";
-    modalMessage.textContent = isYoda ? "Chat with an agent using this node as context." : "Chat with GBrain using this node as context.";
+    modalMessage.textContent = "Chat with an agent using this node as context.";
     modalEditor.hidden = true;
     modalChat.hidden = false;
     modalChatInput.value = "";
-    if (isYoda) {
-      renderAskChat(slug, label, { mode: "yoda" });
-    } else {
-      renderAskChat(slug, label);
-    }
+    renderAskChat(slug, label, { mode: "yoda" });
     operationModal.hidden = false;
     modalChatInput.focus();
     return;
@@ -2901,7 +3093,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 
   if (action === "view-relationships") {
-    modalKicker.textContent = "Relationships";
+    modalKicker.textContent = "View Relationships";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
     modalEditor.hidden = true;
@@ -3179,7 +3371,8 @@ async function runModalPrimaryAction() {
       if (!response.ok) throw new Error(response.data?.error || `Add relationship failed with ${response.status}`);
       closeModal();
       applyGraphPayload(response.data.graph, slug);
-      await loadEntity(slug, { source: "system" });
+      invalidateRelationshipEndpointCache(slug, target);
+      await refreshSelectedNodeAfterRelationshipMutation(slug, target, "add-link");
       return;
     }
     if (action === "remove-link") {
@@ -3199,8 +3392,8 @@ async function runModalPrimaryAction() {
       });
       if (!response.ok) throw new Error(response.data?.error || `Remove relationship failed with ${response.status}`);
       applyGraphPayload(response.data.graph, slug);
-      await loadEntity(slug, { source: "system" });
-      await reopenRelationshipsView(slug);
+      invalidateRelationshipEndpointCache(slug, target);
+      await refreshSelectedNodeAfterRelationshipMutation(slug, target, "remove-link");
       return;
     }
     if (action === "tags") {
@@ -3237,29 +3430,26 @@ async function runModalPrimaryAction() {
       await openNodeModal("timeline-view", slug);
       return;
     }
-    if (action === "ask" || action === "ask-yoda") {
-      const isYoda = action === "ask-yoda";
+    if (action === "ask-yoda") {
       const question = modalChatInput.value.trim();
       if (!question) {
-        modalMessage.textContent = isYoda ? "Type a question for Yoda first." : "Type a question for GBrain first.";
+        modalMessage.textContent = "Type a question for Yoda first.";
         modalChatInput.focus();
         return;
       }
-      const history = chatHistoryFor(slug, label, isYoda ? { mode: "yoda" } : {});
+      const history = chatHistoryFor(slug, label, { mode: "yoda" });
       pendingAskHistory = history;
-      history.push({ role: "user", content: question });
-      history.push({ role: "assistant", content: "Thinking..." });
-      renderAskChat(slug, label, isYoda ? { mode: "yoda" } : {});
+      history.push({ role: "user", content: question, timestamp: chatTimestamp() });
+      history.push({ role: "assistant", content: "Thinking...", timestamp: chatTimestamp() });
+      renderAskChat(slug, label, { mode: "yoda" });
       modalChatInput.value = "";
       modalChatInput.disabled = true;
-      modalMessage.textContent = isYoda ? "Asking Yoda..." : "Asking GBrain...";
+      modalMessage.textContent = "Asking Yoda...";
       const historyPayload = history.filter((message) => message.role !== "system" && message.content !== "Thinking...").slice(-8);
-      const response = isYoda
-        ? await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload })
-        : await apiPost(`/api/entity-ask/${encodeURIComponent(slug)}`, { question });
-      if (!response.ok) throw new Error(response.data?.error || `${isYoda ? "Ask Yoda" : "Ask GBrain"} failed with ${response.status}`);
-      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)" };
-      renderAskChat(slug, label, isYoda ? { mode: "yoda" } : {});
+      const response = await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload });
+      if (!response.ok) throw new Error(response.data?.error || `Ask Yoda failed with ${response.status}`);
+      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
+      renderAskChat(slug, label, { mode: "yoda" });
       modalMessage.textContent = "Ask another question or close the chat.";
       modalChatInput.disabled = false;
       modalChatInput.focus();
@@ -3338,10 +3528,11 @@ async function runModalPrimaryAction() {
       await loadEntity(slug, { source: "system" });
     }
   } catch (error) {
-    if ((action === "ask" || action === "ask-yoda") && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
+    if (action === "ask-yoda" && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
       pendingAskHistory[pendingAskHistory.length - 1] = {
         role: "assistant",
-        content: `${action === "ask-yoda" ? "Ask Yoda" : "Ask GBrain"} failed: ${error.message || String(error)}`,
+        content: `Ask Yoda failed: ${error.message || String(error)}`,
+        timestamp: chatTimestamp(),
       };
       renderAskChat(slug, label, action === "ask-yoda" ? { mode: "yoda" } : {});
     }
@@ -3540,6 +3731,7 @@ function startCanvasDrag(clientX, clientY, pointerId = null) {
   state.rotation.vy = 0;
   hideGraphTooltip();
   canvas.style.cursor = "grabbing";
+  requestRender();
 }
 
 function moveCanvasDrag(clientX, clientY) {
@@ -3555,6 +3747,7 @@ function moveCanvasDrag(clientX, clientY) {
   state.rotation.vx = dy * 0.0007;
   state.drag.lastX = clientX;
   state.drag.lastY = clientY;
+  requestRender();
 }
 
 function finishCanvasDrag(clientX, clientY, options = {}) {
@@ -3566,12 +3759,14 @@ function finishCanvasDrag(clientX, clientY, options = {}) {
     void loadEntity(node.slug);
   }
   canvas.style.cursor = node ? "pointer" : "default";
+  requestRender();
 }
 
 function cancelCanvasDrag() {
   state.drag.active = false;
   state.drag.pointerId = null;
   canvas.style.cursor = "default";
+  requestRender();
 }
 
 function firstTouch(event) {
@@ -3627,6 +3822,10 @@ function bindEvents() {
 
   settingsOkButton?.addEventListener("click", applySettingsFromControls);
   settingsCancelButton?.addEventListener("click", cancelSettingsChanges);
+  flushCacheButton?.addEventListener("click", flushNodeCache);
+  selectionAskYodaButton?.addEventListener("click", () => {
+    if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
+  });
 
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -3643,6 +3842,13 @@ function bindEvents() {
   searchButton.addEventListener("click", () => {
     hideFloatingPanels();
     void submitSearch();
+  });
+
+  modalChatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void runModalPrimaryAction();
+    }
   });
 
   modalMarkdown.addEventListener("click", (event) => {
@@ -4066,9 +4272,7 @@ async function fetchGraph(endpoint = "/api/graph", options = {}) {
       throw new Error(graph?.error || `Graph request failed with ${response.status}`);
     }
     applyGraphPayload(graph, previousFocus);
-    if (!state.animationHandle) {
-      render();
-    }
+    requestRender();
     if (state.focusSlug) {
       await loadEntity(state.focusSlug, { source: "system", recordHistory: false });
     }
@@ -4099,7 +4303,7 @@ async function init() {
   await fetchHidden();
   await fetchGraph();
   if (!state.animationHandle) {
-    render();
+    requestRender();
   }
 }
 

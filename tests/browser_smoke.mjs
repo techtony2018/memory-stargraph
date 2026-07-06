@@ -153,6 +153,11 @@ try {
       hiddenListText: document.querySelector("#hiddenList")?.textContent,
       metricsColumns: getComputedStyle(document.querySelector("#metrics")).gridTemplateColumns.split(" ").length,
       sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #refreshButton") && document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #cacheLimitInput")),
+      settingsSections: [...document.querySelectorAll("#settingsFlyout .settings-section h3")].map((item) => item.textContent.trim()),
+      flushCachePresent: Boolean(document.querySelector("#flushCacheButton")),
+      lastRefreshPresent: Boolean(document.querySelector("#lastRefresh")),
+      refreshInlineControls: Boolean(document.querySelector(".refresh-inline-controls #autoRefreshToggle") && document.querySelector(".refresh-inline-controls #autoRefreshInterval")),
+      selectionYodaPresent: Boolean(document.querySelector("#selectionAskYodaButton")),
       searchControlsInHeaderWorkflow: Boolean(document.querySelector("#searchFlyout .search-group") && document.querySelector("#searchFlyout #matchesOnlyToggle") && document.querySelector("#searchFlyout #minDegreeFilter") && document.querySelector("#autopilotFlyout #timelineDaysInput")),
       tooltipZIndex: Number.parseInt(getComputedStyle(document.querySelector("#graphTooltip")).zIndex, 10),
       animationRunning: Boolean(state.animationHandle),
@@ -203,8 +208,8 @@ try {
   if (!initial.pointerHint?.includes("Hover for full names. Click to select") || initial.pointerHint.includes("Long-press")) {
     throw new Error(`Expected desktop pointer hint to use hover/click wording: ${initial.pointerHint}`);
   }
-  if (!initial.lastRefreshText?.includes("Last refresh:")) {
-    throw new Error("Expected latest refresh time to render");
+  if (initial.lastRefreshPresent || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Cache", "Refresh"]) || !initial.flushCachePresent || !initial.refreshInlineControls || !initial.selectionYodaPresent) {
+    throw new Error(`Expected Settings Display/Cache/Refresh with Flush, inline refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
   }
   if (!initial.autoRefreshPresent) {
     throw new Error("Expected auto refresh controls to render");
@@ -644,7 +649,7 @@ try {
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
   const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 13).map((button) => button.dataset.action));
-  const expectedMenuPrefix = ["view", "timeline-view", "ask", "ask-yoda", "media", "graph-query", "history", "view-relationships", "add-link", "remove-link", "backlinks", "tags", "attach-file"];
+  const expectedMenuPrefix = ["view", "ask-yoda", "timeline-view", "media", "graph-query", "history", "view-relationships", "add-link", "remove-link", "backlinks", "tags", "attach-file", "embed"];
   if (JSON.stringify(firstMenuActions) !== JSON.stringify(expectedMenuPrefix)) {
     throw new Error(`Expected node menu order ${expectedMenuPrefix.join(", ")}, got ${firstMenuActions.join(", ")}`);
   }
@@ -653,7 +658,7 @@ try {
     throw new Error("Expected Copy slug to be removed from the node menu");
   }
   await page.click("body", { position: { x: 6, y: 6 } });
-  for (const action of ["ask", "media", "backlinks", "graph-query", "history", "timeline-view", "add-link", "remove-link", "tags", "attach-file", "embed"]) {
+  for (const action of ["ask-yoda", "media", "backlinks", "graph-query", "history", "timeline-view", "add-link", "remove-link", "tags", "attach-file", "embed"]) {
     await page.click("#nodeMenuButton");
     await page.waitForSelector("#contextMenu:not([hidden])");
     const menuText = await page.evaluate((value) => document.querySelector(`#contextMenu button[data-action="${value}"]`)?.textContent, action);
@@ -932,7 +937,7 @@ try {
     addButton: document.querySelector(".relationship-add-backlink")?.textContent || "",
     removeButton: document.querySelector(".relationship-remove")?.textContent || "",
   }));
-  if (relationshipView.title !== "Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
+  if (relationshipView.title !== "View Relationships" || relationshipView.rows < 1 || !relationshipView.firstSlug || !relationshipView.relation || relationshipView.addButton !== "+" || relationshipView.removeButton !== "×") {
     throw new Error(`Expected Relationships to render compact outgoing wiki rows with add/remove controls: ${JSON.stringify(relationshipView)}`);
   }
   await page.click("#modalCloseButton");

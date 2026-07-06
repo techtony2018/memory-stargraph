@@ -944,6 +944,24 @@ h2 {
   background: rgba(255, 198, 111, 0.22);
 }
 
+.selection-yoda-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(136, 246, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(136, 246, 255, 0.1);
+  color: #dffcff;
+  font-size: 11px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.selection-yoda-button:hover {
+  background: rgba(136, 246, 255, 0.2);
+}
+
 .selection-slug-always {
   margin: 8px 0 0;
   min-width: 0;
@@ -1017,19 +1035,34 @@ h2 {
 
 .source-control-stack .top-toggle,
 .source-control-stack .top-interval,
-.source-control-stack .source-badge,
-.source-control-stack .refresh-meta {
+.source-control-stack .source-badge {
   min-height: 30px;
-}
-
-.source-control-stack .refresh-meta {
-  flex: 1 1 100%;
-  min-width: 0;
 }
 
 .source-control-stack #sourceBadge {
   flex: 1 1 100%;
   justify-content: center;
+}
+
+.cache-action-row,
+.refresh-inline-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cache-action-row .source-badge {
+  flex: 1 1 auto;
+}
+
+.cache-action-row .ghost-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+}
+
+.refresh-inline-controls .top-toggle,
+.refresh-inline-controls .top-interval {
+  flex: 1 1 0;
 }
 
 .settings-section {
@@ -1471,6 +1504,11 @@ h2 {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.chat-timestamp {
+  color: rgba(151, 166, 206, 0.82);
+  font-size: 11px;
 }
 
 .chat-bubble {
@@ -2620,6 +2658,17 @@ body::after {
   background: rgba(34, 211, 238, 0.16);
 }
 
+.relationship-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 @media (max-width: 1080px) {
   .workspace {
     grid-template-columns: 72px minmax(0, 1fr);
@@ -2823,14 +2872,21 @@ body::after {
   justify-content: center;
   align-items: center;
   padding: 10px 0 0;
+  grid-column: 2;
+  justify-self: center;
 }
 
 .graph-brand-row {
-  display: flex;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   width: 100%;
+}
+
+.graph-brand-row .ui-version {
+  grid-column: 3;
+  justify-self: end;
 }
 
 .graph-wordmark {

@@ -127,7 +127,6 @@ class ApiEndpointTests(unittest.TestCase):
                 ("/api/entity-tags/people%2Ftony-guan", {"add": ["founder"], "remove": ["old"]}),
                 ("/api/entity-timeline/people%2Ftony-guan", {"date": "2026-06-29", "summary": "Updated node ops", "detail": "Details", "source": "test"}),
                 ("/api/entity-create", {"name": "New Person", "description": "A new test node", "category": "people"}),
-                ("/api/entity-ask/people%2Ftony-guan", {"question": "What should I know?"}),
                 ("/api/entity-ask-yoda/people%2Ftony-guan", {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}]}),
                 ("/api/entity-backlinks/people%2Ftony-guan", {}),
                 ("/api/entity-graph-query/people%2Ftony-guan", {"link_type": "employed by", "direction": "both", "depth": "1"}),
@@ -150,7 +149,6 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("update_tags", call_names)
         self.assertIn("add_timeline_event", call_names)
         self.assertIn("create_entity", call_names)
-        self.assertIn("ask_gbrain", call_names)
         self.assertIn("ask_yoda", call_names)
         self.assertIn("backlinks", call_names)
         self.assertIn("graph_query", call_names)
@@ -233,7 +231,6 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(
             endpoints,
             {
-                "/api/entity-ask/<slug>",
                 "/api/entity-ask-yoda/<slug>",
                 "/api/entity-create",
                 "/api/entity-media/<slug>",

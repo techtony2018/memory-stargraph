@@ -112,7 +112,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.82"
+UI_VERSION = "V1.0.83"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -129,7 +129,6 @@ BLOCKED_LABELS = {
 }
 NODE_OPERATION_ENDPOINTS = [
     {"action": "create", "method": "POST", "endpoint": "/api/entity-create", "mutates_gbrain": True},
-    {"action": "ask", "method": "POST", "endpoint": "/api/entity-ask/<slug>", "mutates_gbrain": False},
     {"action": "ask-yoda", "method": "POST", "endpoint": "/api/entity-ask-yoda/<slug>", "mutates_gbrain": False},
     {"action": "media", "method": "GET", "endpoint": "/api/entity-media/<slug>", "mutates_gbrain": False},
     {"action": "backlinks", "method": "POST", "endpoint": "/api/entity-backlinks/<slug>", "mutates_gbrain": False},
@@ -2690,17 +2689,6 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
                 result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history))
                 return self.end_json({"ok": True, "slug": slug, **result})
-            except Exception as exc:  # noqa: BLE001
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
-        if parsed.path.startswith("/api/entity-ask/"):
-            slug = unquote(parsed.path.split("/api/entity-ask/", 1)[1]).strip("/")
-            try:
-                payload = self.read_json_body()
-                question = str(payload.get("question") or "").strip()
-                if not question:
-                    return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
-                output = STORE.ask_gbrain(slug, question)
-                return self.end_json({"ok": True, "slug": slug, "output": output})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-backlinks/"):
