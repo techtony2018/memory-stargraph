@@ -925,7 +925,8 @@ h2 {
 .selection-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
+  padding: 1px;
 }
 
 .timeline-badge {
@@ -949,6 +950,8 @@ h2 {
   place-items: center;
   width: 24px;
   height: 24px;
+  overflow: hidden;
+  padding: 0;
   border: 1px solid rgba(136, 246, 255, 0.34);
   border-radius: 999px;
   background: rgba(136, 246, 255, 0.1);
@@ -1025,8 +1028,8 @@ h2 {
 .source-control-stack {
   display: grid;
   align-items: stretch;
-  gap: 7px;
-  margin-top: 12px;
+  gap: 5px;
+  margin-top: 8px;
 }
 
 .source-control-stack .ghost-button {
@@ -1067,8 +1070,8 @@ h2 {
 
 .settings-section {
   display: grid;
-  gap: 8px;
-  padding: 9px;
+  gap: 6px;
+  padding: 7px;
   border: 1px solid rgba(136, 246, 255, 0.14);
   background: rgba(2, 8, 22, 0.42);
 }
@@ -2870,20 +2873,30 @@ body::after {
 }
 
 .autopilot-flyout.tour-active {
-  left: 70px;
+  left: 50%;
   top: 18px;
   min-height: 36px;
   padding: 2px 6px;
   gap: 4px;
+  transform: translateX(-50%);
+  opacity: 0.34;
+  transition: opacity 0.18s ease;
+}
+
+.autopilot-flyout.tour-active:hover,
+.autopilot-flyout.tour-active:focus-within {
+  opacity: 1;
 }
 
 .settings-flyout {
   right: 22px;
-  top: 76px;
+  top: 52px;
   width: min(380px, calc(100% - 44px));
+  max-height: calc(100% - 70px);
+  overflow: auto;
   display: grid;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
 }
 
 .settings-flyout .source-control-stack {
@@ -3106,15 +3119,17 @@ body::after {
   box-shadow: 0 0 18px rgba(34, 211, 238, 0.28);
 }
 
+.graph-canvas-wrap > .map-filter-panel,
 .map-filter-panel {
   position: absolute;
-  right: 4px;
-  top: 70px;
+  right: 18px;
+  top: 106px;
+  bottom: 26px;
   z-index: 30;
   display: grid;
   gap: 10px;
   width: 138px;
-  max-height: calc(100% - 230px);
+  max-height: calc(100% - 132px);
   overflow: auto;
   padding: 10px;
   border: 1px solid rgba(56, 189, 248, 0.24);
@@ -3171,6 +3186,7 @@ body::after {
 .selection-yoda-button .yoda-avatar {
   width: 22px;
   height: 22px;
+  object-fit: contain;
   fill: rgba(190, 242, 100, 0.18);
   stroke: #bef264;
   stroke-width: 1.8;

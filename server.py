@@ -78,6 +78,8 @@ GRAPH_DEPTH = int(CONFIG["graph_depth"])
 GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
 GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
 GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
+BACKLINK_SUPPLEMENT_MAX_EDGES = 200
+BACKLINK_SUPPLEMENT_GRAPH_EDGE_THRESHOLD = 10
 MEDIA_ROOTS = [
     resolve_project_path(root)
     for root in str(os.environ.get("MEMORY_STARGRAPH_MEDIA_ROOTS", "")).split(",")
@@ -112,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.84"
+UI_VERSION = "V1.0.85"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -366,6 +368,21 @@ def extract_json_object(text):
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def extract_json_list(text):
+    source = str(text or "")
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(source):
+        if char != "[":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(source[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, list):
             return payload
     return None
 
@@ -1087,10 +1104,7 @@ def parse_media_references(markdown):
 
 
 def parse_neighbors(raw_text, center_slug):
-    try:
-        graph_nodes = json.loads(raw_text)
-    except json.JSONDecodeError:
-        graph_nodes = None
+    graph_nodes = extract_json_list(raw_text)
     if isinstance(graph_nodes, list):
         edges = set()
         for graph_node in graph_nodes:
@@ -1103,7 +1117,9 @@ def parse_neighbors(raw_text, center_slug):
                 if not isinstance(link, dict):
                     continue
                 target = str(link.get("to_slug") or "")
-                if target and target != source:
+                if not target or target == source:
+                    continue
+                if source == center_slug or target == center_slug:
                     edges.add(tuple(sorted((source, target))))
         return edges
 
@@ -1128,10 +1144,7 @@ def edge_key(left, right):
 
 def parse_link_types(raw_text, center_slug):
     edge_types = defaultdict(set)
-    try:
-        graph_nodes = json.loads(raw_text)
-    except json.JSONDecodeError:
-        graph_nodes = None
+    graph_nodes = extract_json_list(raw_text)
     if not isinstance(graph_nodes, list):
         return edge_types
 
@@ -1146,17 +1159,14 @@ def parse_link_types(raw_text, center_slug):
                 continue
             target = str(link.get("to_slug") or "").strip()
             link_type = str(link.get("link_type") or "").strip()
-            if source and target and source != target and link_type:
+            if source and target and source != target and link_type and (source == center_slug or target == center_slug):
                 edge_types[edge_key(source, target)].add(link_type)
     return edge_types
 
 
 def parse_backlinks(raw_text, center_slug):
     edges = set()
-    try:
-        backlinks = json.loads(raw_text)
-    except json.JSONDecodeError:
-        backlinks = None
+    backlinks = extract_json_list(raw_text)
 
     if isinstance(backlinks, list):
         for backlink in backlinks:
@@ -1176,10 +1186,7 @@ def parse_backlinks(raw_text, center_slug):
 
 def parse_backlink_types(raw_text, center_slug):
     edge_types = defaultdict(set)
-    try:
-        backlinks = json.loads(raw_text)
-    except json.JSONDecodeError:
-        backlinks = None
+    backlinks = extract_json_list(raw_text)
     if not isinstance(backlinks, list):
         return edge_types
 
@@ -1205,6 +1212,20 @@ def edge_types_payload(edge_types):
         for (left, right), types in sorted(edge_types.items())
         if types
     ]
+
+
+def choose_backlink_supplement_edges(graph_edges, backlink_edges, backlink_types):
+    explicit_neighbor_edges = {
+        edge for edge in backlink_edges
+        if any(str(value).strip().lower() == "neighbor" for value in backlink_types.get(edge, set()))
+    }
+    if len(graph_edges) < BACKLINK_SUPPLEMENT_GRAPH_EDGE_THRESHOLD or len(backlink_edges) <= BACKLINK_SUPPLEMENT_MAX_EDGES:
+        return set(backlink_edges)
+    return explicit_neighbor_edges
+
+
+def filter_edge_types(edge_types, allowed_edges):
+    return {key: values for key, values in edge_types.items() if key in allowed_edges}
 
 
 def is_wechat_category(slug):
@@ -1592,11 +1613,15 @@ def expand_raw_graph(raw_graph, center_slug):
         }
 
     graph_output = run_gbrain("graph", center_slug, "--depth", str(GRAPH_DEPTH))
-    discovered_edges = parse_neighbors(graph_output, center_slug)
+    graph_edges = parse_neighbors(graph_output, center_slug)
+    discovered_edges = set(graph_edges)
     merge_edge_types(edge_types, parse_link_types(graph_output, center_slug))
     backlinks_output = run_gbrain("backlinks", center_slug)
-    discovered_edges.update(parse_backlinks(backlinks_output, center_slug))
-    merge_edge_types(edge_types, parse_backlink_types(backlinks_output, center_slug))
+    backlink_edges = parse_backlinks(backlinks_output, center_slug)
+    backlink_types = parse_backlink_types(backlinks_output, center_slug)
+    supplement_edges = choose_backlink_supplement_edges(graph_edges, backlink_edges, backlink_types)
+    discovered_edges.update(supplement_edges)
+    merge_edge_types(edge_types, filter_edge_types(backlink_types, supplement_edges))
     edge_set.update(discovered_edges)
     for left, right in discovered_edges:
         for slug in (left, right):
@@ -2129,6 +2154,19 @@ class GraphStore:
             merged = set(edge_types.get(key) or [])
             merged.update(types)
             edge_types[key] = sorted(merged)
+        direct_slugs = set(node.get("links") or [])
+        for edge in graph.get("edges", []):
+            if not edge.get("types"):
+                continue
+            source_slug = edge.get("source")
+            target_slug = edge.get("target")
+            if source_slug == slug and target_slug:
+                direct_slugs.add(target_slug)
+            elif target_slug == slug and source_slug:
+                direct_slugs.add(source_slug)
+        direct_slugs = {item for item in direct_slugs if item in node_map and item != slug}
+        node["links"] = sorted(direct_slugs)
+        node["degree"] = len(direct_slugs)
         neighbors = []
         for item in node["links"]:
             if item not in node_map:

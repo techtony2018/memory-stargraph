@@ -24,6 +24,7 @@ from server import (
     parse_multipart_form,
     parse_media_references,
     parse_page_list,
+    parse_neighbors,
     parse_search_results,
     remote_media_url_for_relative_path,
     resolve_media_file_path,
@@ -112,6 +113,23 @@ class GraphParsingTests(unittest.TestCase):
         edge_types = parse_link_types(output, "people/tony-guan")
 
         self.assertEqual(edge_types[("people/tony-guan", "universities/changan-university")], {"studied in"})
+
+    def test_parse_neighbors_ignores_unrelated_neighbor_edges_in_depth_one_json(self):
+        output = """  Schema version 1 → 119 (114 migration(s) pending)
+[
+  {"slug": "people/tony-guan", "links": [{"to_slug": "companies/linkedin", "link_type": "employed_by"}]},
+  {"slug": "companies/linkedin", "links": [
+    {"to_slug": "people/tony-guan", "link_type": "employs"},
+    {"to_slug": "products/unrelated", "link_type": "owns"}
+  ]}
+]"""
+
+        edges = parse_neighbors(output, "people/tony-guan")
+        edge_types = parse_link_types(output, "people/tony-guan")
+
+        self.assertEqual(edges, {("companies/linkedin", "people/tony-guan")})
+        self.assertEqual(edge_types[("companies/linkedin", "people/tony-guan")], {"employed_by", "employs"})
+        self.assertNotIn(("companies/linkedin", "products/unrelated"), edge_types)
 
     def test_parse_backlink_types_reads_inbound_relationships(self):
         output = """[
@@ -809,6 +827,67 @@ cover_image: companies/example-inc/logo.jpg
 
         self.assertIs(graph, cached)
         collect.assert_not_called()
+
+    def test_get_entity_returns_all_direct_relationships_discovered_after_expand(self):
+        store = GraphStore()
+        graph = {
+            "title": "Memory Stargraph",
+            "source": {"mode": "test", "status": "ok"},
+            "nodes": [
+                {
+                    "slug": "people/tony-guan",
+                    "label": "Tony Guan",
+                    "type": "person",
+                    "category": "people",
+                    "summary": "Person",
+                    "links": ["companies/azul-systems"],
+                    "degree": 1,
+                    "expanded": True,
+                },
+                {
+                    "slug": "companies/azul-systems",
+                    "label": "Azul Systems",
+                    "type": "company",
+                    "category": "companies",
+                    "summary": "Company",
+                    "links": ["people/tony-guan"],
+                    "degree": 1,
+                },
+                {
+                    "slug": "projects/jtuner",
+                    "label": "JTuner",
+                    "type": "project",
+                    "category": "projects",
+                    "summary": "Project",
+                    "links": ["people/tony-guan"],
+                    "degree": 1,
+                },
+                {
+                    "slug": "organizations/erfa",
+                    "label": "ERFA",
+                    "type": "organization",
+                    "category": "organizations",
+                    "summary": "Organization",
+                    "links": ["people/tony-guan"],
+                    "degree": 1,
+                },
+            ],
+            "edges": [
+                {"source": "people/tony-guan", "target": "companies/azul-systems", "types": ["employed by"]},
+                {"source": "people/tony-guan", "target": "projects/jtuner", "types": ["built"]},
+                {"source": "organizations/erfa", "target": "people/tony-guan", "types": ["led by"]},
+            ],
+            "stats": {"max_degree": 3},
+        }
+        with mock.patch.object(store, "get_seed_graph", return_value=graph):
+            payload = store.get_entity("people/tony-guan")
+
+        neighbor_slugs = {item["slug"] for item in payload["neighbors"]}
+        self.assertEqual(
+            neighbor_slugs,
+            {"companies/azul-systems", "projects/jtuner", "organizations/erfa"},
+        )
+        self.assertEqual(payload["entity"]["degree"], 3)
 
     def test_graph_query_falls_back_to_loaded_graph_when_database_url_is_missing(self):
         store = GraphStore()

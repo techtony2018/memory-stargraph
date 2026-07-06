@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.84";
+const UI_VERSION = "V1.0.85";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -409,6 +409,12 @@ function beginBusyOperation(label) {
   return token;
 }
 
+function setBusyOperationLabel(token, label) {
+  if (!token || !state.busyOperations.has(token)) return;
+  state.busyOperations.set(token, label || "Working");
+  setBusyIndicator(label);
+}
+
 function endBusyOperation(token) {
   if (token) state.busyOperations.delete(token);
   setBusyIndicator();
@@ -746,6 +752,14 @@ function updateTourControls() {
   tourButton.title = tooltip;
   if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
   tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-active", state.tour.active);
+  if (autopilotFlyout && state.tour.active) {
+    autopilotFlyout.style.left = "50%";
+    autopilotFlyout.style.right = "auto";
+    autopilotFlyout.style.top = "18px";
+    autopilotFlyout.style.transform = "translateX(-50%)";
+  } else if (autopilotFlyout) {
+    autopilotFlyout.style.transform = "";
+  }
   updateTourCounter();
   updateNavModeState();
 }
@@ -755,7 +769,7 @@ function updateTourCounter(_slug = state.focusSlug) {
   const total = state.tour.slugs.length;
   const current = total ? state.tour.index + 1 : 0;
   tourCounter.textContent = state.tour.active ? `${current}/${total}` : "0/0";
-  tourCounter.hidden = !state.tour.active;
+  tourCounter.hidden = false;
 }
 
 function setSearchLoading(active) {
@@ -856,9 +870,24 @@ function positionFloatingPanel(panel, button) {
   const wrapRect = wrap.getBoundingClientRect();
   const buttonRect = button.getBoundingClientRect();
   const top = Math.max(12, Math.min(wrapRect.height - 80, buttonRect.top - wrapRect.top));
+  if (panel === settingsFlyout) {
+    panel.style.left = "auto";
+    panel.style.right = "22px";
+    panel.style.top = "52px";
+    panel.style.transform = "";
+    return;
+  }
+  if (panel === autopilotFlyout && state.tour.active) {
+    panel.style.left = "50%";
+    panel.style.right = "auto";
+    panel.style.top = "18px";
+    panel.style.transform = "translateX(-50%)";
+    return;
+  }
   panel.style.left = "12px";
   panel.style.right = "auto";
   panel.style.top = `${Math.round(top)}px`;
+  panel.style.transform = "";
 }
 
 function showFloatingPanel(panel, button) {
@@ -1090,7 +1119,9 @@ function updateCategoryLegend(graph) {
       item.type = "button";
       item.dataset.cluster = category;
       item.className = state.hiddenClusters.has(category) ? "is-dimmed" : "is-active";
-      item.title = state.hiddenClusters.has(category) ? "Click to show this cluster" : "Click to hide this cluster";
+      item.title = state.hiddenClusters.has(category)
+        ? `Click to show ${category} cluster`
+        : `Click to hide ${category} cluster`;
       const label = document.createElement("span");
       label.className = "cluster-label";
       const swatch = document.createElement("i");
@@ -1127,8 +1158,8 @@ function updateHubClusterLegend() {
     item.dataset.hub = node.slug;
     item.className = state.hiddenHubConnections.has(node.slug) ? "is-dimmed" : "is-active";
     item.title = state.hiddenHubConnections.has(node.slug)
-      ? "Click to show this hub's direct connections"
-      : "Click to hide this hub's direct connections";
+      ? `Click to show direct connections of ${node.label || node.slug}`
+      : `Click to hide direct connections of ${node.label || node.slug}`;
     const label = document.createElement("span");
     label.className = "cluster-label";
     const swatch = document.createElement("i");
@@ -3637,6 +3668,7 @@ modalConfirmInput.addEventListener("input", () => {
 async function loadEntity(slug, options = {}) {
   if (isHidden(slug)) return;
   const busyToken = beginBusyOperation("Loading view");
+  let directBusyToken = null;
   if (options.source !== "search" && options.source !== "system") {
     state.selectionVersion += 1;
   }
@@ -3647,6 +3679,12 @@ async function loadEntity(slug, options = {}) {
     const shouldExpand = requestedNode && !requestedNode.expanded;
     state.focusSlug = slug;
     if (requestedNode) {
+      const directBusyLabel = `Loading direct neighbors for ${requestedNode.label || slug}`;
+      setBusyOperationLabel(busyToken, directBusyLabel);
+      if (shouldExpand) {
+        directBusyToken = beginBusyOperation(directBusyLabel);
+        setBusyOperationLabel(directBusyToken, directBusyLabel);
+      }
       detailTitle.textContent = requestedNode.label || slug;
       if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
       setTimelineBadge(slug, false);
@@ -3749,6 +3787,7 @@ async function loadEntity(slug, options = {}) {
   }
     setHover(slug);
   } finally {
+    endBusyOperation(directBusyToken);
     endBusyOperation(busyToken);
   }
 }
