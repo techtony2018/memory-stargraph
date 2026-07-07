@@ -58,9 +58,9 @@ class FakeStore:
         self.calls.append(("ask_gbrain", slug, question))
         return "answer"
 
-    def ask_yoda(self, slug, question, history=None, depth="4"):
+    def ask_yoda(self, slug, question, history=None, depth=4):
         self.calls.append(("ask_yoda", slug, question, tuple(history or []), depth))
-        return {"output": "yoda answer", "source": "fallback"}
+        return {"output": "yoda answer", "source": "fallback", "timings": {"total_ms": 12}}
 
     def backlinks(self, slug):
         self.calls.append(("backlinks", slug))
@@ -127,7 +127,7 @@ class ApiEndpointTests(unittest.TestCase):
                 ("/api/entity-tags/people%2Ftony-guan", {"add": ["founder"], "remove": ["old"]}),
                 ("/api/entity-timeline/people%2Ftony-guan", {"date": "2026-06-29", "summary": "Updated node ops", "detail": "Details", "source": "test"}),
                 ("/api/entity-create", {"name": "New Person", "description": "A new test node", "category": "people"}),
-                ("/api/entity-ask-yoda/people%2Ftony-guan", {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}], "depth": "4"}),
+                ("/api/entity-ask-yoda/people%2Ftony-guan", {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}], "depth": 4}),
                 ("/api/entity-backlinks/people%2Ftony-guan", {}),
                 ("/api/entity-graph-query/people%2Ftony-guan", {"link_type": "employed by", "direction": "both", "depth": "1"}),
                 ("/api/entity-attach-file/people%2Ftony-guan", {"file_path": "/tmp/example.pdf", "description": "Example file"}),
@@ -181,19 +181,20 @@ class ApiEndpointTests(unittest.TestCase):
     def test_ask_yoda_endpoint_returns_conversational_answer_without_raw_context(self):
         fake_store = FakeStore()
 
-        def raw_fallback(slug, question, history=None, depth="4"):
+        def raw_fallback(slug, question, history=None, depth=4):
             fake_store.calls.append(("ask_yoda", slug, question, tuple(history or []), depth))
             return {
                 "output": "OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.\n\nQuestion-specific gbrain retrieval:\nRAW QUERY DUMP",
                 "source": "fallback",
                 "prompt": "Direct relationship context:\nRAW PROMPT",
+                "timings": {"total_ms": 42},
             }
 
         fake_store.ask_yoda = raw_fallback
         with mock.patch("server.STORE", fake_store):
             status, data = self.dispatch_post(
                 "/api/entity-ask-yoda/people%2Ftony-guan",
-                {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}], "depth": "4"},
+                {"question": "What should I know?", "history": [{"role": "user", "content": "Hi"}], "depth": 6},
             )
 
         self.assertEqual(status, 200)
@@ -203,7 +204,20 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("Direct relationship context", data["output"])
         self.assertNotIn("RAW QUERY DUMP", data["output"])
         self.assertNotIn("prompt", data)
-        self.assertIn(("ask_yoda", "people/tony-guan", "What should I know?", ({"role": "user", "content": "Hi"},), "4"), fake_store.calls)
+        self.assertEqual(data["timings"]["total_ms"], 42)
+        self.assertIn(("ask_yoda", "people/tony-guan", "What should I know?", ({"role": "user", "content": "Hi"},), 6), fake_store.calls)
+
+    def test_ask_yoda_endpoint_clamps_depth(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "What should I know?", "depth": 99},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn(("ask_yoda", "people/tony-guan", "What should I know?", (), 6), fake_store.calls)
 
     def test_graph_query_rejects_invalid_direction_and_depth(self):
         fake_store = FakeStore()

@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.86"
+UI_VERSION = "V1.0.87"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -470,6 +470,14 @@ def sanitize_yoda_result(result):
     payload["output"] = output
     payload.pop("prompt", None)
     return payload
+
+
+def clamp_yoda_depth(value):
+    try:
+        depth = int(value)
+    except (TypeError, ValueError):
+        depth = 4
+    return max(1, min(6, depth))
 
 
 def parse_slugs(raw_text):
@@ -2301,16 +2309,15 @@ class GraphStore:
 
     def build_yoda_prompt(self, slug, question, history=None, depth="4"):
         history = history or []
-        depth = str(depth or "4").strip()
-        if depth not in {"1", "2", "3", "4", "5", "6"}:
-            depth = "4"
+        yoda_depth = clamp_yoda_depth(depth)
         lines = [
             "You are Ask Yoda inside Memory Stargraph.",
-            f"Answer using the selected GBrain node, graph context up to depth {depth}, and recent chat only.",
-            "Be concise, cite relevant slugs, and say when the graph does not contain enough evidence.",
+            "Answer from GBrain evidence. Start with the selected node when useful, then use graph expansion, backlinks, targeted search, and direct source-node reads.",
+            "Be concise, cite relevant slugs or source node names, and say when the graph does not contain enough evidence.",
             "",
             f"Selected node: {slug}",
             f"Question: {question}",
+            f"Retrieval depth: {yoda_depth}",
         ]
         if history:
             lines.extend(["", "Recent chat:"])
@@ -2323,28 +2330,64 @@ class GraphStore:
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
         try:
-            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", depth)
+            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", str(yoda_depth))
         except Exception as exc:  # noqa: BLE001
             graph_output = f"Direct relationship context unavailable: {exc}"
-        lines.extend(["", f"Graph context depth {depth}:", str(graph_output or "")[:6000]])
+        lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
+        try:
+            backlink_output = run_gbrain("backlinks", slug)
+        except Exception as exc:  # noqa: BLE001
+            backlink_output = f"Backlink context unavailable: {exc}"
+        lines.extend(["", "Backlink context:", str(backlink_output or "")[:4000]])
+        try:
+            search_output = run_gbrain(
+                "query",
+                f"{question} {slug}",
+                "--adaptive-return",
+                "true",
+                "--limit",
+                "10",
+                "--relational",
+                "true",
+            )
+        except Exception as exc:  # noqa: BLE001
+            search_output = f"Broader retrieval unavailable: {exc}"
+        lines.extend(["", "Broader retrieval context:", str(search_output or "")[:6000]])
+        search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
+        if not search_slugs:
+            search_slugs = parse_slugs(str(search_output or ""))
+        likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
+        if likely_slugs:
+            lines.append("")
+            lines.append("Direct reads from likely source nodes:")
+            for candidate in likely_slugs:
+                try:
+                    candidate_raw = run_gbrain("get", candidate)
+                except Exception as exc:  # noqa: BLE001
+                    candidate_raw = f"Unable to read {candidate}: {exc}"
+                lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
         return "\n".join(lines)
 
     def ask_yoda(self, slug, question, history=None, depth="4"):
+        started_at = time.perf_counter()
+        prompt_started_at = time.perf_counter()
         prompt = self.build_yoda_prompt(slug, question, history, depth)
+        prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
+        model_started_at = time.perf_counter()
         agent_output = run_openclaw_agent(prompt)
+        model_ms = int((time.perf_counter() - model_started_at) * 1000)
+        timings = {
+            "prompt_ms": prompt_ms,
+            "model_ms": model_ms,
+            "total_ms": int((time.perf_counter() - started_at) * 1000),
+        }
         if agent_output:
-            return {"output": agent_output, "source": "openclaw-agent"}
-        fallback = self.ask_gbrain(slug, question)
-        fallback_text = str(fallback or "").strip()
-        if fallback_text:
-            fallback_text = re.split(
-                r"(?:Question-specific gbrain retrieval:|Direct relationship context:|Selected node content:)",
-                fallback_text,
-                maxsplit=1,
-            )[0].strip() or fallback_text[:900].strip()
+            return {"output": agent_output, "source": "openclaw-agent", "timings": timings}
+        fallback_text = f"Question: {question}\nSelected node: {slug}\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now."
         return {
             "output": fallback_text or "I found no concise answer in the graph context for this question yet.",
             "source": "fallback",
+            "timings": timings,
         }
 
     def backlinks(self, slug):
@@ -2726,7 +2769,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 payload = self.read_json_body()
                 question = str(payload.get("question") or "").strip()
                 history = payload.get("history") if isinstance(payload.get("history"), list) else []
-                depth = str(payload.get("depth") or "4").strip()
+                depth = clamp_yoda_depth(payload.get("depth"))
                 if not question:
                     return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
                 result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history, depth))

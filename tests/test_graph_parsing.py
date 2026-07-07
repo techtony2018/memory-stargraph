@@ -771,6 +771,8 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("get", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4"),
                 mock.call("backlinks", "people/tony-guan"),
+                mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
+                mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
                 mock.call("files", "upload", "/tmp/example.pdf", "--page", "people/tony-guan"),
@@ -789,9 +791,39 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(result["source"], "fallback")
         self.assertIn("Question: What changed?", result["output"])
         self.assertIn("Selected node: people/tony-guan", result["output"])
+        self.assertIn("timings", result)
         self.assertNotIn("OpenClaw agent unavailable", result["output"])
         self.assertNotIn("retrieved context", result["output"])
         self.assertNotIn("prompt", result)
+
+    def test_ask_yoda_prompt_uses_broader_retrieval_at_requested_depth(self):
+        store = GraphStore()
+        search_output = "[0.92] notes/tai-chi/white-swan -- White Swan notes\n[0.73] people/tony-guan -- Tony"
+        with (
+            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_openclaw_agent", return_value="agent answer"),
+        ):
+            run.side_effect = [
+                "# Tony Guan\n\nEngineer",
+                "expanded graph",
+                "backlinks",
+                search_output,
+                "# White Swan\n\nTai Chi source note",
+            ]
+            result = store.ask_yoda("people/tony-guan", "What does White Swan connect to?", depth=5)
+
+        self.assertEqual(result["source"], "openclaw-agent")
+        self.assertEqual(result["output"], "agent answer")
+        self.assertIn("timings", result)
+        run.assert_has_calls(
+            [
+                mock.call("get", "people/tony-guan"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5"),
+                mock.call("backlinks", "people/tony-guan"),
+                mock.call("query", "What does White Swan connect to? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
+                mock.call("get", "notes/tai-chi/white-swan"),
+            ]
+        )
 
     def test_extract_openclaw_answer_ignores_cli_warnings(self):
         output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'

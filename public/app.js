@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.86";
+const UI_VERSION = "V1.0.87";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -33,7 +33,7 @@ const state = {
   cloudMode: true,
   flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, true),
   yodaDepth: readNumberSetting(YODA_CONTEXT_DEPTH_KEY, 4, 1, 6),
-  mapFiltersVisible: true,
+  mapFiltersVisible: false,
   hiddenClusters: new Set(),
   hiddenHubConnections: new Set(),
   categoryLimit: 5,
@@ -83,6 +83,7 @@ const lastRefresh = document.getElementById("lastRefresh");
 const flushCacheButton = document.getElementById("flushCacheButton");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const newNodeButton = document.getElementById("newNodeButton");
+const filterDrawerHandle = document.getElementById("filterDrawerHandle");
 const mapFilterToggleButton = document.getElementById("mapFilterToggleButton");
 const mapFilterPanel = document.getElementById("mapFilterPanel");
 const zoomOutButton = document.getElementById("zoomOutButton");
@@ -140,6 +141,8 @@ const modalMedia = document.getElementById("modalMedia");
 const modalChat = document.getElementById("modalChat");
 const modalChatLog = document.getElementById("modalChatLog");
 const modalChatInput = document.getElementById("modalChatInput");
+const modalYodaDepth = document.getElementById("modalYodaDepth");
+const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -216,6 +219,17 @@ function readNumberSetting(key, fallback, min, max) {
   const value = Number.parseInt(window.localStorage?.getItem(key) || "", 10);
   if (!Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, value));
+}
+
+function setYodaDepth(value) {
+  state.yodaDepth = Math.max(1, Math.min(6, Number.parseInt(value, 10) || 4));
+  window.localStorage?.setItem(YODA_CONTEXT_DEPTH_KEY, String(state.yodaDepth));
+  syncYodaDepthControl();
+}
+
+function syncYodaDepthControl() {
+  if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
+  if (modalYodaDepth) modalYodaDepth.value = String(state.yodaDepth);
 }
 
 function cacheLimitBytes() {
@@ -450,9 +464,8 @@ function applySettingsFromControls() {
   state.autoRefresh.enabled = Boolean(autoRefreshToggle?.checked);
   state.autoRefresh.intervalMinutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval?.value || "10", 10) || 10));
   state.flowingEdges = Boolean(flowingEdgesToggle?.checked);
-  state.yodaDepth = Math.max(1, Math.min(6, Number.parseInt(yodaDepthInput?.value || "4", 10) || 4));
+  setYodaDepth(yodaDepthInput?.value || state.yodaDepth);
   window.localStorage?.setItem(FLOWING_EDGE_EFFECT_KEY, state.flowingEdges ? "true" : "false");
-  window.localStorage?.setItem(YODA_CONTEXT_DEPTH_KEY, String(state.yodaDepth));
   enforceCacheLimit();
   scheduleAutoRefresh();
   updateCacheSettingsView();
@@ -469,7 +482,8 @@ function cancelSettingsChanges() {
   if (autoRefreshToggle) autoRefreshToggle.checked = state.autoRefresh.enabled;
   if (autoRefreshInterval) autoRefreshInterval.value = String(state.autoRefresh.intervalMinutes);
   if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
-  if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
+  window.localStorage?.setItem(YODA_CONTEXT_DEPTH_KEY, String(state.yodaDepth));
+  syncYodaDepthControl();
   scheduleAutoRefresh();
   updateCacheSettingsView();
   hideFloatingPanels();
@@ -541,6 +555,18 @@ function updateMapFilterPanel() {
   mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
   mapFilterToggleButton?.classList.toggle("is-on", state.mapFiltersVisible);
   mapFilterToggleButton?.setAttribute("aria-pressed", state.mapFiltersVisible ? "true" : "false");
+}
+
+function showFilterSidebar() {
+  const activationZone = "middle third";
+  state.mapFiltersVisible = true;
+  updateMapFilterPanel();
+  return activationZone;
+}
+
+function hideFilterSidebar() {
+  state.mapFiltersVisible = false;
+  updateMapFilterPanel();
 }
 
 function zoomBy(direction) {
@@ -843,7 +869,7 @@ function setFlyoutOpen(panel, button, open) {
   if (panel === settingsFlyout && open) {
     state.pendingSettings = snapshotSettings();
     if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
-    if (yodaDepthInput) yodaDepthInput.value = String(state.yodaDepth);
+    syncYodaDepthControl();
     updateCacheSettingsView();
   }
   updateNavModeState();
@@ -2367,7 +2393,7 @@ async function refreshSelectedNodeAfterRelationshipMutation(slug, target, action
   state.relationshipReturnView = null;
   await loadEntity(slug, { source: "system", recordHistory: false });
   if (action === "remove-link") {
-    await reopenRelationshipsView(slug);
+    return;
   } else if (returnView?.action && returnView.slug) {
     await openNodeModal(returnView.action, returnView.slug);
   }
@@ -2672,7 +2698,19 @@ function chatTimestamp() {
 }
 
 function renderMarkdownInline(text, parent) {
-  appendInlineMarkdown(parent, text);
+  const value = String(text || "");
+  const slugPattern = /\b[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+\b/g;
+  let cursor = 0;
+  value.replace(slugPattern, (match, offset) => {
+    if (offset > cursor) appendInlineMarkdown(parent, value.slice(cursor, offset));
+    const link = createEntityMarkdownLink(match, match);
+    link.className = "chat-slug-link";
+    link.title = `Open ${match}`;
+    parent.appendChild(link);
+    cursor = offset + match.length;
+    return match;
+  });
+  if (cursor < value.length) appendInlineMarkdown(parent, value.slice(cursor));
 }
 
 function renderAskChat(slug, label, options = {}) {
@@ -2702,6 +2740,13 @@ function renderAskChat(slug, label, options = {}) {
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
     renderMarkdownInline(message.content, bubble);
+    if (message.pending) {
+      const dots = document.createElement("span");
+      dots.className = "thinking-dots";
+      dots.setAttribute("aria-hidden", "true");
+      dots.textContent = "...";
+      bubble.appendChild(dots);
+    }
     row.appendChild(bubble);
 
     modalChatLog.appendChild(row);
@@ -3020,6 +3065,7 @@ function closeModal() {
   modalChatLog.innerHTML = "";
   modalChatInput.value = "";
   modalChatInput.disabled = false;
+  modalYodaDepthWrap.hidden = true;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -3058,6 +3104,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalChatLog.innerHTML = "";
   modalChatInput.value = "";
   modalChatInput.disabled = false;
+  modalYodaDepthWrap.hidden = true;
 
   if (action === "new-node") {
     state.modalAction = { action, slug: "", label: "New Node" };
@@ -3097,7 +3144,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
       const content = response.ok ? response.data.content : `Unable to load page: ${response.data?.error || response.status}`;
       if (action === "view") {
         const viewTitle = markdownTitleFromContent(content, label);
-        document.title = viewTitle;
+        document.title = "Memory Stargraph";
         modalTitle.textContent = viewTitle;
         renderMarkdownView(content);
       } else {
@@ -3165,6 +3212,8 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Chat with an agent using this node as context.";
     modalEditor.hidden = true;
     modalChat.hidden = false;
+    modalYodaDepthWrap.hidden = false;
+    syncYodaDepthControl();
     modalChatInput.value = "";
     renderAskChat(slug, label, { mode: "yoda" });
     operationModal.hidden = false;
@@ -3574,17 +3623,18 @@ async function runModalPrimaryAction() {
       const history = chatHistoryFor(slug, label, { mode: "yoda" });
       pendingAskHistory = history;
       history.push({ role: "user", content: question, timestamp: chatTimestamp() });
-      history.push({ role: "assistant", content: "Thinking...", timestamp: chatTimestamp() });
+      history.push({ role: "assistant", content: "Thinking", pending: true, timestamp: chatTimestamp() });
       renderAskChat(slug, label, { mode: "yoda" });
       modalChatInput.value = "";
       modalChatInput.disabled = true;
       modalMessage.textContent = "Asking Yoda...";
-      const historyPayload = history.filter((message) => message.role !== "system" && message.content !== "Thinking...").slice(-8);
+      const historyPayload = history.filter((message) => message.role !== "system" && !message.pending).slice(-8);
       const response = await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload, depth: state.yodaDepth });
       if (!response.ok) throw new Error(response.data?.error || `Ask Yoda failed with ${response.status}`);
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
-      modalMessage.textContent = "Ask another question or close the chat.";
+      const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
+      modalMessage.textContent = `Ask another question or close the chat.${timing}`;
       modalChatInput.disabled = false;
       modalChatInput.focus();
       return;
@@ -3662,7 +3712,7 @@ async function runModalPrimaryAction() {
       await loadEntity(slug, { source: "system" });
     }
   } catch (error) {
-    if (action === "ask-yoda" && pendingAskHistory && pendingAskHistory.at(-1)?.content === "Thinking...") {
+    if (action === "ask-yoda" && pendingAskHistory && pendingAskHistory.at(-1)?.pending) {
       pendingAskHistory[pendingAskHistory.length - 1] = {
         role: "assistant",
         content: `Ask Yoda failed: ${error.message || String(error)}`,
@@ -3965,14 +4015,33 @@ function bindEvents() {
   settingsOkButton?.addEventListener("click", applySettingsFromControls);
   settingsCancelButton?.addEventListener("click", cancelSettingsChanges);
   flushCacheButton?.addEventListener("click", flushNodeCache);
+  yodaDepthInput?.addEventListener("input", (event) => {
+    setYodaDepth(event.target.value);
+  });
+  modalYodaDepth?.addEventListener("input", (event) => {
+    setYodaDepth(event.target.value);
+  });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
+  });
+  detailTitle?.addEventListener("dblclick", () => {
+    if (state.focusSlug) void openNodeModal("view", state.focusSlug);
   });
   mapFilterToggleButton?.addEventListener("click", () => {
     state.mapFiltersVisible = !state.mapFiltersVisible;
     mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
     updateMapFilterPanel();
   });
+  filterDrawerHandle?.addEventListener("pointerenter", showFilterSidebar);
+  filterDrawerHandle?.addEventListener("pointerleave", (event) => {
+    if (!mapFilterPanel?.contains(event.relatedTarget)) hideFilterSidebar();
+  });
+  filterDrawerHandle?.addEventListener("focus", showFilterSidebar);
+  mapFilterPanel?.addEventListener("pointerenter", showFilterSidebar);
+  mapFilterPanel?.addEventListener("pointerleave", hideFilterSidebar);
+  mapFilterPanel?.addEventListener("blur", (event) => {
+    if (!mapFilterPanel.contains(event.relatedTarget)) hideFilterSidebar();
+  }, true);
 
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -4002,6 +4071,14 @@ function bindEvents() {
     const link = event.target.closest("a[data-entity-query]");
     if (!link) return;
     event.preventDefault();
+    void searchEntityLink(link.dataset.entityQuery);
+  });
+
+  modalChat.addEventListener("click", (event) => {
+    const link = event.target.closest("a[data-entity-query]");
+    if (!link) return;
+    event.preventDefault();
+    closeModal();
     void searchEntityLink(link.dataset.entityQuery);
   });
 

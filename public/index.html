@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.86">
+    <link rel="stylesheet" href="/styles.css?v=1.0.87">
   </head>
   <body>
     <div class="app-shell">
@@ -165,7 +165,8 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
               </button>
             </div>
-            <div id="mapFilterPanel" class="map-filter-panel" aria-label="Graph filters">
+            <div id="filterDrawerHandle" class="filter-sidebar-drawer" role="button" tabindex="0" aria-label="Show graph filters"></div>
+            <div id="mapFilterPanel" class="map-filter-panel is-hidden" aria-label="Graph filters">
               <section>
                 <div class="panel-label-row">
                   <p class="panel-label">Clusters</p>
@@ -200,7 +201,7 @@
             <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
             </a>
-            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.86</a>
+            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.87</a>
           </div>
         </section>
 
@@ -289,6 +290,10 @@
         <div id="modalMarkdown" class="markdown-view" hidden></div>
         <div id="modalMedia" class="media-grid" hidden></div>
         <div id="modalChat" class="chat-panel" hidden>
+          <label id="modalYodaDepthWrap" class="chat-depth-control" hidden>
+            <span>Yoda depth</span>
+            <input id="modalYodaDepth" type="number" min="1" max="6" step="1" value="4">
+          </label>
           <div id="modalChatLog" class="chat-log" aria-live="polite"></div>
           <label class="chat-input-wrap">
             <span>Ask a follow-up</span>
@@ -302,6 +307,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.86"></script>
+    <script src="/app.js?v=1.0.87"></script>
   </body>
   </html>

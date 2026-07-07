@@ -537,8 +537,8 @@ try {
   if (!operationModal.markdownVisible || !operationModal.editorHidden || !operationModal.cancelHidden || operationModal.primary !== "Close" || !operationModal.slugLine.startsWith("slug: ") || operationModal.modifyButton !== "Modify markdown" || operationModal.messageText.includes("Rendered from gbrain markdown")) {
     throw new Error("Expected View to render markdown with no Cancel button and a Close action");
   }
-  if (operationModal.documentTitle !== operationModal.title) {
-    throw new Error(`Expected View to update browser title to entity title: ${JSON.stringify(operationModal)}`);
+  if (operationModal.documentTitle !== "Memory Stargraph" || !operationModal.title) {
+    throw new Error(`Expected View to keep browser title as Memory Stargraph and update modal title: ${JSON.stringify(operationModal)}`);
   }
   const markdownFormatting = await page.evaluate(() => {
     window.__MEMORY_STARGRAPH__.renderMarkdownView([
@@ -623,7 +623,7 @@ try {
     sourceLink: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.getAttribute("href"),
     sourceTarget: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.target,
   }));
-  if (exactMsnView.documentTitle !== "老夫的性格被分类了" || exactMsnView.modalTitle !== "老夫的性格被分类了" || exactMsnView.sourceLink !== "file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html" || exactMsnView.sourceTarget !== "_blank") {
+  if (exactMsnView.documentTitle !== "Memory Stargraph" || exactMsnView.modalTitle !== "老夫的性格被分类了" || exactMsnView.sourceLink !== "file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html" || exactMsnView.sourceTarget !== "_blank") {
     throw new Error(`Expected exact MSN blog View title and source file link: ${JSON.stringify(exactMsnView)}`);
   }
   await page.click("#modalCloseButton");
