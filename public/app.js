@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.87";
+const UI_VERSION = "V1.0.91";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -1958,7 +1958,8 @@ function mediaDisplayUrl(url) {
   let value = String(url || "").trim();
   if (!value) return "";
   if (value.startsWith("gbrain:files/")) {
-    value = decodeURIComponent(value.slice("gbrain:files/".length));
+    const relativePath = decodeURIComponent(value.slice("gbrain:files/".length));
+    return `/media/${relativePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`;
   }
   if (/^https?:\/\//i.test(value)) return value;
   if (value.startsWith("/")) return encodeURI(value);
