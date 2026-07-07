@@ -687,15 +687,15 @@ h2 {
 
 .filter-sidebar-drawer {
   position: absolute;
-  left: 0;
+  right: 0;
   top: 33.333%;
   width: 12px;
   height: 33.333%;
   min-height: 168px;
   z-index: 28;
   border: 1px solid rgba(136, 246, 255, 0.3);
-  border-left: 0;
-  border-radius: 0 8px 8px 0;
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
   background: linear-gradient(180deg, rgba(136, 246, 255, 0.28), rgba(143, 124, 255, 0.18));
   box-shadow: 0 0 22px rgba(34, 211, 238, 0.18);
   cursor: pointer;
@@ -709,7 +709,7 @@ h2 {
   z-index: 29;
   display: grid;
   gap: 10px;
-  width: min(292px, calc(100% - 34px));
+  width: min(240px, calc(100% - 28px));
   max-height: min(76%, 560px);
   overflow: auto;
   padding: 12px;
@@ -3209,8 +3209,8 @@ body::after {
 .graph-canvas-wrap > .map-filter-panel,
 .map-filter-panel {
   position: absolute;
-  left: 18px;
-  right: auto;
+  left: auto;
+  right: 18px;
   top: 50%;
   bottom: auto;
   transform: translateY(-50%);
@@ -3227,6 +3227,20 @@ body::after {
   background: rgba(2, 8, 22, 0.76);
   clip-path: var(--chamfer);
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.24), inset 0 0 18px rgba(34, 211, 238, 0.08);
+}
+
+.yoda-log-window {
+  display: grid;
+  gap: 10px;
+  max-height: 58vh;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  background: rgba(2, 8, 22, 0.62);
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
 }
 
 .map-filter-panel.is-hidden {

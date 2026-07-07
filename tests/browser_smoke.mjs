@@ -74,9 +74,6 @@ try {
       categoryLimit: document.querySelector("#categoryLimitInput")?.value,
       clusterLimit: document.querySelector("#clusterLimitInput")?.value,
       viewOptionsPanelPresent: [...document.querySelectorAll(".panel-label")].some((item) => item.textContent === "View Options"),
-      lastRefreshText: document.querySelector("#lastRefresh")?.textContent,
-      autoRefreshPresent: Boolean(document.querySelector("#autoRefreshToggle") && document.querySelector("#autoRefreshInterval")),
-      autoRefreshInGraphSource: Boolean(document.querySelector(".source-control-stack #autoRefreshToggle") && document.querySelector(".source-control-stack #autoRefreshInterval")),
       filtersPresent: Boolean(!document.querySelector("#categoryFilter") && !document.querySelector("#tagFilter") && document.querySelector("#minDegreeFilter") && !document.querySelector("#clearFiltersButton")),
       compactTopControls: {
         noSearchLabel: !document.body.textContent.includes("Search entities"),
@@ -152,7 +149,7 @@ try {
       searchButtonPresent: Boolean(document.querySelector("#searchButton")),
       hiddenListText: document.querySelector("#hiddenList")?.textContent,
       metricsColumns: getComputedStyle(document.querySelector("#metrics")).gridTemplateColumns.split(" ").length,
-      sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #refreshButton") && document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #cacheLimitInput")),
+      sourceControlsInGraphSource: Boolean(document.querySelector(".source-control-stack #sourceBadge") && document.querySelector(".source-control-stack #cacheLimitInput") && document.querySelector(".source-control-stack #flushCacheButton")),
       settingsSections: [...document.querySelectorAll("#settingsFlyout .settings-section h3")].map((item) => item.textContent.trim()),
       flushCachePresent: Boolean(document.querySelector("#flushCacheButton")),
       lastRefreshPresent: Boolean(document.querySelector("#lastRefresh")),
@@ -208,11 +205,8 @@ try {
   if (!initial.pointerHint?.includes("Hover for full names. Click to select") || initial.pointerHint.includes("Long-press")) {
     throw new Error(`Expected desktop pointer hint to use hover/click wording: ${initial.pointerHint}`);
   }
-  if (initial.lastRefreshPresent || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Yoda", "Cache", "Refresh"]) || !initial.flushCachePresent || !initial.refreshInlineControls || !initial.selectionYodaPresent) {
-    throw new Error(`Expected Settings Display/Yoda/Cache/Refresh with Flush, inline refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
-  }
-  if (!initial.autoRefreshPresent) {
-    throw new Error("Expected auto refresh controls to render");
+  if (initial.lastRefreshPresent || initial.refreshInlineControls || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Yoda", "Cache"]) || !initial.flushCachePresent || !initial.selectionYodaPresent) {
+    throw new Error(`Expected Settings Display/Yoda/Cache with Flush, no refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
   }
   if (!/^V1\.0\.\d+$/.test(initial.uiVersion || "")) {
     throw new Error(`Expected UI version like V1.0.x to render, got ${initial.uiVersion}`);
@@ -223,8 +217,8 @@ try {
   if (!initial.source?.coverage?.root_index_loaded || !initial.source?.coverage?.expanded_slugs?.includes("index")) {
     throw new Error("Expected root index to be loaded eagerly in the seed graph");
   }
-  if (!initial.autoRefreshInGraphSource) {
-    throw new Error("Expected auto refresh controls to render in the Graph source panel");
+  if (!initial.sourceControlsInGraphSource) {
+    throw new Error("Expected source/cache controls to render in Settings");
   }
   if (!initial.filtersPresent) {
     throw new Error("Expected only the min-link filter to render");

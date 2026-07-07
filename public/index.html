@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.91">
+    <link rel="stylesheet" href="/styles.css?v=1.0.92">
   </head>
   <body>
     <div class="app-shell">
@@ -80,36 +80,20 @@
                 </section>
                 <section class="settings-section">
                   <h3>Yoda</h3>
-                  <label class="cache-limit-control">
+                  <label class="cache-limit-control has-tooltip" data-tooltip="Graph hops for Ask Yoda context." title="Graph hops for Ask Yoda context.">
                     <span>Depth</span>
                     <input id="yodaDepthInput" type="number" min="1" max="6" step="1" value="4" aria-label="Ask Yoda graph context depth">
                   </label>
-                  <p class="cache-help">Graph hops for Ask Yoda context.</p>
                 </section>
                 <section class="settings-section">
                   <h3>Cache</h3>
-                  <label class="cache-limit-control">
-                    <span>Cache MB</span>
-                    <input id="cacheLimitInput" type="number" min="0" max="20" step="1" value="10" aria-label="Node content and media cache limit in megabytes">
-                  </label>
                   <div class="cache-action-row">
-                    <div id="cacheUsageValue" class="source-badge subtle">0 B used of 10.0 MB</div>
+                    <label class="cache-limit-control">
+                      <span>Cache MB</span>
+                      <input id="cacheLimitInput" type="number" min="0" max="20" step="1" value="10" aria-label="Node content and media cache limit in megabytes">
+                    </label>
+                    <div id="cacheUsageValue" class="source-badge subtle">Used 0 B</div>
                     <button id="flushCacheButton" class="ghost-button" type="button">Flush</button>
-                  </div>
-                  <p class="cache-help">0 disables cache.</p>
-                </section>
-                <section class="settings-section">
-                  <h3>Refresh</h3>
-                  <button id="refreshButton" class="ghost-button has-tooltip" type="button" data-tooltip="Reload graph data from gbrain." title="Reload graph data from gbrain.">Refresh Graph</button>
-                  <div class="refresh-inline-controls">
-                    <label class="top-toggle has-tooltip" data-tooltip="Automatically refresh graph data on a timer." title="Automatically refresh graph data on a timer.">
-                      <input id="autoRefreshToggle" type="checkbox">
-                      <span>Auto</span>
-                    </label>
-                    <label class="top-interval has-tooltip" data-tooltip="Auto-refresh interval in minutes." title="Auto-refresh interval in minutes.">
-                      <input id="autoRefreshInterval" type="number" min="1" max="120" step="1" value="10">
-                      <span>min</span>
-                    </label>
                   </div>
                   <div id="sourceBadge" class="source-badge" hidden></div>
                 </section>
@@ -201,7 +185,7 @@
             <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
             </a>
-            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.91</a>
+            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.92</a>
           </div>
         </section>
 
@@ -293,6 +277,7 @@
           <label id="modalYodaDepthWrap" class="chat-depth-control" hidden>
             <span>Yoda depth</span>
             <input id="modalYodaDepth" type="number" min="1" max="6" step="1" value="4">
+            <button id="modalYodaLogButton" class="ghost-button compact-button" type="button" hidden>View Log</button>
           </label>
           <div id="modalChatLog" class="chat-log" aria-live="polite"></div>
           <label class="chat-input-wrap">
@@ -307,6 +292,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.91"></script>
+    <script src="/app.js?v=1.0.92"></script>
   </body>
   </html>

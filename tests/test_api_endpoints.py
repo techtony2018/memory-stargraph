@@ -207,6 +207,45 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["timings"]["total_ms"], 42)
         self.assertIn(("ask_yoda", "people/tony-guan", "What should I know?", ({"role": "user", "content": "Hi"},), 6), fake_store.calls)
 
+    def test_ask_yoda_endpoint_returns_safe_diagnostics_for_view_log(self):
+        fake_store = FakeStore()
+
+        def diagnostic_answer(slug, question, history=None, depth=4):
+            fake_store.calls.append(("ask_yoda", slug, question, tuple(history or []), depth))
+            return {
+                "output": "diagnostic answer",
+                "source": "fallback",
+                "timings": {"prompt_ms": 5, "model_ms": 45, "total_ms": 50},
+                "diagnostics": {
+                    "request_id": "yoda-test-1",
+                    "selected_slug": slug,
+                    "depth": depth,
+                    "source": "fallback",
+                    "fallback_used": True,
+                    "model_status": "unavailable",
+                    "openclaw_status": "not_configured",
+                    "error_summary": "OpenClaw agent unavailable",
+                    "stdout_preview": "safe stdout",
+                    "stderr_preview": "safe stderr",
+                },
+            }
+
+        fake_store.ask_yoda = diagnostic_answer
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "What should I know?", "depth": 4},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["request_id"], "yoda-test-1")
+        self.assertTrue(data["diagnostics"]["fallback_used"])
+        self.assertEqual(data["diagnostics"]["selected_slug"], "people/tony-guan")
+        self.assertEqual(data["diagnostics"]["model_status"], "unavailable")
+        self.assertIn("prompt_ms", data["diagnostics"]["timings"])
+        self.assertNotIn("prompt", data)
+
     def test_ask_yoda_endpoint_clamps_depth(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

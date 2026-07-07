@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.91";
+const UI_VERSION = "V1.0.92";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -28,8 +28,8 @@ const state = {
   renderDirty: true,
   isRefreshing: false,
   lastRefreshAt: null,
-  autoRefresh: { enabled: false, intervalMinutes: 10, timer: null },
   pendingSettings: null,
+  mediaSlugs: new Set(),
   cloudMode: true,
   flowingEdges: readBooleanSetting(FLOWING_EDGE_EFFECT_KEY, true),
   yodaDepth: readNumberSetting(YODA_CONTEXT_DEPTH_KEY, 4, 1, 6),
@@ -45,6 +45,8 @@ const state = {
   menuSlug: null,
   modalAction: null,
   askYodaChats: new Map(),
+  askYodaLogs: new Map(),
+  relationshipTargetSearch: { loading: false, liveOptions: [] },
   relationshipPages: new Map(),
   backlinkPages: new Map(),
   relationshipReturnView: null,
@@ -75,8 +77,6 @@ const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
 const matchesOnlyToggle = document.getElementById("matchesOnlyToggle");
 const refreshButton = document.getElementById("refreshButton");
-const autoRefreshToggle = document.getElementById("autoRefreshToggle");
-const autoRefreshInterval = document.getElementById("autoRefreshInterval");
 const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
 const yodaDepthInput = document.getElementById("yodaDepthInput");
 const lastRefresh = document.getElementById("lastRefresh");
@@ -143,6 +143,7 @@ const modalChatLog = document.getElementById("modalChatLog");
 const modalChatInput = document.getElementById("modalChatInput");
 const modalYodaDepth = document.getElementById("modalYodaDepth");
 const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
+const modalYodaLogButton = document.getElementById("modalYodaLogButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -402,8 +403,10 @@ function formatRefreshTime(value) {
 
 function setRefreshing(active) {
   state.isRefreshing = active;
-  refreshButton.disabled = active;
-  refreshButton.textContent = active ? "Refreshing..." : "Refresh Graph";
+  if (refreshButton) {
+    refreshButton.disabled = active;
+    refreshButton.textContent = active ? "Refreshing..." : "Refresh Graph";
+  }
 }
 
 function setBusyIndicator(label = "") {
@@ -438,7 +441,7 @@ function updateCacheSettingsView() {
   const input = document.getElementById("cacheLimitInput");
   const usage = document.getElementById("cacheUsageValue");
   if (input) input.value = String(Math.round(cacheLimitBytes() / (1024 * 1024)));
-  if (usage) usage.textContent = `${formatBytes(cacheUsedBytes())} used of ${formatBytes(cacheLimitBytes())}`;
+  if (usage) usage.textContent = `Used ${formatBytes(cacheUsedBytes())}`;
   updateRadarCacheUsage();
 }
 
@@ -450,8 +453,6 @@ function updateRadarCacheUsage() {
 function snapshotSettings() {
   return {
     cacheLimitBytes: cacheLimitBytes(),
-    autoRefresh: Boolean(state.autoRefresh.enabled),
-    autoRefreshInterval: state.autoRefresh.intervalMinutes,
     flowingEdges: state.flowingEdges,
     yodaDepth: state.yodaDepth,
   };
@@ -461,13 +462,10 @@ function applySettingsFromControls() {
   const cacheInput = document.getElementById("cacheLimitInput");
   const mb = Math.max(0, Math.min(20, Number.parseInt(cacheInput?.value || "0", 10) || 0));
   window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(mb * 1024 * 1024));
-  state.autoRefresh.enabled = Boolean(autoRefreshToggle?.checked);
-  state.autoRefresh.intervalMinutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval?.value || "10", 10) || 10));
   state.flowingEdges = Boolean(flowingEdgesToggle?.checked);
   setYodaDepth(yodaDepthInput?.value || state.yodaDepth);
   window.localStorage?.setItem(FLOWING_EDGE_EFFECT_KEY, state.flowingEdges ? "true" : "false");
   enforceCacheLimit();
-  scheduleAutoRefresh();
   updateCacheSettingsView();
   hideFloatingPanels();
 }
@@ -475,16 +473,11 @@ function applySettingsFromControls() {
 function cancelSettingsChanges() {
   const snapshot = state.pendingSettings || snapshotSettings();
   window.localStorage?.setItem(NODE_CACHE_LIMIT_KEY, String(snapshot.cacheLimitBytes));
-  state.autoRefresh.enabled = Boolean(snapshot.autoRefresh);
-  state.autoRefresh.intervalMinutes = snapshot.autoRefreshInterval;
   state.flowingEdges = Boolean(snapshot.flowingEdges);
   state.yodaDepth = Math.max(1, Math.min(6, Number.parseInt(snapshot.yodaDepth || "4", 10) || 4));
-  if (autoRefreshToggle) autoRefreshToggle.checked = state.autoRefresh.enabled;
-  if (autoRefreshInterval) autoRefreshInterval.value = String(state.autoRefresh.intervalMinutes);
   if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
   window.localStorage?.setItem(YODA_CONTEXT_DEPTH_KEY, String(state.yodaDepth));
   syncYodaDepthControl();
-  scheduleAutoRefresh();
   updateCacheSettingsView();
   hideFloatingPanels();
 }
@@ -513,19 +506,6 @@ function ensureRenderLoop() {
 function requestRender() {
   state.renderDirty = true;
   ensureRenderLoop();
-}
-
-function scheduleAutoRefresh() {
-  if (state.autoRefresh.timer) {
-    window.clearInterval(state.autoRefresh.timer);
-    state.autoRefresh.timer = null;
-  }
-  if (!state.autoRefresh.enabled) return;
-  const minutes = Math.max(1, Math.min(120, Number.parseInt(autoRefreshInterval.value, 10) || 10));
-  state.autoRefresh.intervalMinutes = minutes;
-  state.autoRefresh.timer = window.setInterval(() => {
-    void fetchGraph("/api/refresh", { preserveFocus: true });
-  }, minutes * 60 * 1000);
 }
 
 function clampZoom(value) {
@@ -558,7 +538,7 @@ function updateMapFilterPanel() {
 }
 
 function showFilterSidebar() {
-  const activationZone = "middle third";
+  const activationZone = "right side middle third";
   state.mapFiltersVisible = true;
   updateMapFilterPanel();
   return activationZone;
@@ -567,6 +547,18 @@ function showFilterSidebar() {
 function hideFilterSidebar() {
   state.mapFiltersVisible = false;
   updateMapFilterPanel();
+}
+
+function pointerStayedInsideFilterSidebar(target) {
+  return Boolean(
+    target
+    && (
+      mapFilterPanel?.contains(target)
+      || filterDrawerHandle?.contains(target)
+      || target === mapFilterPanel
+      || target === filterDrawerHandle
+    ),
+  );
 }
 
 function zoomBy(direction) {
@@ -1012,6 +1004,11 @@ function updateUiVersion(graph) {
 function buildRuntimeGraph(graph) {
   const width = state.viewport.width || 1200;
   const height = state.viewport.height || 760;
+  (graph.nodes || []).forEach((node) => {
+    if (node.has_media || node.media_count > 0 || node.media?.length || node.attachments?.length) {
+      state.mediaSlugs.add(node.slug);
+    }
+  });
   const categories = [...new Set(graph.nodes.map((node) => node.category || node.type || "entity"))];
   const categoryIndex = new Map(categories.map((category, index) => [category, index]));
   const categorySlots = new Map();
@@ -1535,6 +1532,22 @@ function nodeIsDrawable(node) {
 const drawableNodes = () => state.nodes.filter(nodeIsDrawable);
 const drawableEdges = () => state.edges.filter((edge) => nodeIsDrawable(edge.source) && nodeIsDrawable(edge.target));
 
+function nodeHasMediaMarker(node) {
+  return Boolean(node && (state.mediaSlugs.has(node.slug) || node.has_media || node.media_count > 0 || node.media?.length || node.attachments?.length));
+}
+
+function rememberNodeMediaStatus(slug, items = []) {
+  if (!slug) return;
+  if (items.length) {
+    state.mediaSlugs.add(slug);
+  } else {
+    state.mediaSlugs.delete(slug);
+  }
+  const node = state.nodeMap.get(slug);
+  if (node) node.has_media = items.length > 0;
+  requestRender();
+}
+
 function isImportantNodeForLod(node, topHubs = new Set()) {
   return node.slug === state.focusSlug
     || node.slug === state.hoverSlug
@@ -1764,6 +1777,13 @@ function drawNodes() {
     ctx.arc(node.screenX, node.screenY, radius * (1 + hubGlow * 0.1), 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
+
+    if (nodeHasMediaMarker(node)) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.beginPath();
+      ctx.arc(node.screenX, node.screenY, Math.max(1.8, Math.min(4.5, radius * 0.34)), 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     if (hubIntensity > 0.22) {
       ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.52, 0.12 + hubIntensity * 0.42)})`;
@@ -2022,9 +2042,12 @@ async function loadSelectionMediaPreview(slug, loadId) {
   try {
     const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
     if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
-    renderSelectionMediaPreview(response.ok ? response.data.media || [] : [], slug);
+    const media = response.ok ? response.data.media || [] : [];
+    rememberNodeMediaStatus(slug, media);
+    renderSelectionMediaPreview(media, slug);
   } catch (_error) {
     if (loadId === state.entityLoadId && state.focusSlug === slug) {
+      rememberNodeMediaStatus(slug, []);
       renderSelectionMediaPreview([], slug);
     }
   }
@@ -2037,11 +2060,31 @@ function cleanMarkdownDestination(value) {
 }
 
 function localFileHrefForValue(value) {
-  const path = String(value || "").trim();
+  const path = String(value || "").trim().replace(/^`+|`+$/g, "");
   if (!path || !path.startsWith("/") || path.startsWith("//")) return "";
   if (/[\0\r\n]/.test(path) || /^[a-z][a-z0-9+.-]*:/i.test(path)) return "";
-  const encodedPath = path.split("/").map((part, index) => (index === 0 ? "" : encodeURIComponent(part))).join("/");
+  const encodePathPart = (part) => encodeURIComponent(part).replace(/[!'()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  const encodedPath = path.split("/").map((part, index) => (index === 0 ? "" : encodePathPart(part))).join("/");
   return `file://${encodedPath}`;
+}
+
+function appendLocalSourcePathLinks(parent, text) {
+  const value = String(text || "");
+  const match = value.match(/^(.*?\bLocal source path:\s*)(\/Users\/.+)$/i);
+  if (!match) return false;
+  appendInlineMarkdown(parent, match[1]);
+  const fileHref = localFileHrefForValue(match[2]);
+  if (!fileHref) {
+    appendInlineMarkdown(parent, match[2]);
+    return true;
+  }
+  const link = document.createElement("a");
+  link.setAttribute("href", fileHref);
+  link.textContent = match[2].replace(/^`+|`+$/g, "");
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  parent.appendChild(link);
+  return true;
 }
 
 function appendTextWithBreaks(parent, text) {
@@ -2056,10 +2099,9 @@ function localFileLinksAllowed() {
 }
 
 function localFileUrlFromPath(path) {
-  const cleaned = String(path || "").trim().replace(/[),.;:]+$/, "");
+  const cleaned = String(path || "").trim().replace(/[.;:]+$/, "");
   if (!/^\/(?:Users|Volumes|private|tmp|var\/folders)\//.test(cleaned)) return "";
-  const encoded = cleaned.split("/").map((part) => encodeURIComponent(part)).join("/");
-  return `file://${encoded}`;
+  return localFileHrefForValue(cleaned);
 }
 
 function appendLocalFileLink(parent, path) {
@@ -2067,17 +2109,17 @@ function appendLocalFileLink(parent, path) {
   if (!href) return false;
   parent.appendChild(document.createTextNode(" "));
   const link = document.createElement("a");
-  link.href = href;
+  link.setAttribute("href", href);
   link.target = "_blank";
   link.rel = "noopener noreferrer";
-  link.textContent = href;
+  link.textContent = path;
   parent.appendChild(link);
   return true;
 }
 
 function appendLocalFileLinks(parent, text) {
   const value = String(text || "");
-  const pattern = /\/(?:Users|Volumes|private|tmp|var\/folders)\/[^\r\n<>"'`]+/g;
+  const pattern = /\/(?:Users|Volumes|private|tmp|var\/folders)\/[^\r\n<>"`]+/g;
   let cursor = 0;
   value.replace(pattern, (match, offset) => {
     if (offset > cursor) parent.appendChild(document.createTextNode(value.slice(cursor, offset)));
@@ -2167,7 +2209,7 @@ function appendFieldValueMarkdown(parent, fieldName, value) {
     const fileHref = localFileHrefForValue(value);
     if (fileHref) {
       const link = document.createElement("a");
-      link.href = fileHref;
+      link.setAttribute("href", fileHref);
       link.textContent = value;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
@@ -2291,7 +2333,9 @@ function renderMarkdownView(markdown) {
         modalMarkdown.appendChild(list);
       }
       const item = document.createElement("li");
-      appendInlineMarkdown(item, bullet[1]);
+      if (!appendLocalSourcePathLinks(item, bullet[1])) {
+        appendInlineMarkdown(item, bullet[1]);
+      }
       list.appendChild(item);
       return;
     }
@@ -2303,13 +2347,17 @@ function renderMarkdownView(markdown) {
         modalMarkdown.appendChild(list);
       }
       const item = document.createElement("li");
-      appendInlineMarkdown(item, ordered[1]);
+      if (!appendLocalSourcePathLinks(item, ordered[1])) {
+        appendInlineMarkdown(item, ordered[1]);
+      }
       list.appendChild(item);
       return;
     }
     closeList();
     const paragraph = document.createElement("p");
-    appendInlineMarkdown(paragraph, line);
+    if (!appendLocalSourcePathLinks(paragraph, line)) {
+      appendInlineMarkdown(paragraph, line);
+    }
     modalMarkdown.appendChild(paragraph);
   });
   flushTable();
@@ -2620,6 +2668,23 @@ function renderOutgoingRelationshipsView(slug, rawOutput = "") {
   renderRelationshipWikiList(items, slug, { removable: true, emptyText: "No outgoing relationships" });
 }
 
+async function loadHistoryForSlug(slug) {
+  renderMarkdownView(`Slug: ${slug}\n\nLoading history...`);
+  const busyToken = beginBusyOperation(`Loading history for ${slug}`);
+  try {
+    const response = await apiPost(`/api/entity-history/${encodeURIComponent(slug)}`, {});
+    if (!response.ok) {
+      modalMessage.textContent = `Unable to load history: ${response.data?.error || response.status}`;
+      renderMarkdownView(`Slug: ${slug}\n\n${modalMessage.textContent}`);
+      return;
+    }
+    modalMessage.textContent = "Page history for the selected node.";
+    renderMarkdownView(`Slug: ${slug}\n\n${response.data.output || "(No history)"}`);
+  } finally {
+    endBusyOperation(busyToken);
+  }
+}
+
 function timelineOutputHasEntries(output) {
   const text = String(output || "").trim();
   if (!text || text === "(No timeline entries)") return false;
@@ -2755,6 +2820,45 @@ function renderAskChat(slug, label, options = {}) {
   modalChatLog.scrollTop = modalChatLog.scrollHeight;
 }
 
+function formatYodaDiagnosticLog(slug) {
+  const log = state.askYodaLogs.get(slug) || {};
+  const diagnostics = log.diagnostics || {};
+  const timings = diagnostics.timings || log.timings || {};
+  const rows = [
+    "Ask Yoda diagnostic log",
+    `request_id: ${log.request_id || diagnostics.request_id || "unknown"}`,
+    `selected_slug: ${diagnostics.selected_slug || slug}`,
+    `depth: ${diagnostics.depth || state.yodaDepth}`,
+    `source: ${diagnostics.source || log.source || "unknown"}`,
+    `fallback_used: ${Boolean(diagnostics.fallback_used || log.source === "fallback")}`,
+    `model_status: ${diagnostics.model_status || "unknown"}`,
+    `openclaw_status: ${diagnostics.openclaw_status || "unknown"}`,
+    "timing phases:",
+    `  prompt_ms: ${timings.prompt_ms ?? "unknown"}`,
+    `  model_ms: ${timings.model_ms ?? "unknown"}`,
+    `  total_ms: ${timings.total_ms ?? "unknown"}`,
+  ];
+  if (diagnostics.error_summary) rows.push(`error_summary: ${diagnostics.error_summary}`);
+  if (diagnostics.stdout_preview) rows.push(`stdout_preview: ${diagnostics.stdout_preview}`);
+  if (diagnostics.stderr_preview) rows.push(`stderr_preview: ${diagnostics.stderr_preview}`);
+  return rows.join("\n");
+}
+
+function openYodaLogWindow(slug = state.modalAction?.slug) {
+  modalKicker.textContent = "Ask Yoda Log";
+  modalPrimaryButton.textContent = "Close";
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  const pre = document.createElement("pre");
+  pre.className = "yoda-log-window";
+  pre.textContent = formatYodaDiagnosticLog(slug);
+  modalMarkdown.appendChild(pre);
+  state.modalAction = { action: "result", slug, label: "Ask Yoda Log" };
+}
+
 function allKnownTags() {
   const tags = new Set();
   state.nodes.forEach((node) => (node.tags || []).forEach((tag) => {
@@ -2777,6 +2881,65 @@ function nodeOptionsExcept(slug) {
   return state.nodes
     .filter((node) => node.slug !== slug && !isHidden(node.slug))
     .sort((left, right) => (left.label || left.slug).localeCompare(right.label || right.slug));
+}
+
+function cachedEntitySearchResults(query, sourceSlug) {
+  const normalized = normalizeSearchText(query);
+  const terms = normalized.split(/\s+/).filter(Boolean);
+  return nodeOptionsExcept(sourceSlug)
+    .map((node) => {
+      const haystack = normalizeSearchText([node.slug, node.label, node.category, node.type, node.summary].join(" "));
+      const exact = node.slug === query || (node.label || "").toLowerCase() === String(query || "").toLowerCase();
+      const termMatch = !terms.length || terms.every((term) => haystack.includes(term));
+      return { node, score: (exact ? 100 : 0) + (termMatch ? 30 : 0) + (node.degree || 0), source: "cached" };
+    })
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 30);
+}
+
+function mergeRelationshipTargetOptions(cachedOptions = [], liveOptions = []) {
+  const merged = new Map();
+  [...cachedOptions, ...liveOptions].forEach((item) => {
+    const node = item?.node || item;
+    if (!node?.slug || merged.has(node.slug)) return;
+    merged.set(node.slug, { node, source: item.source || "live" });
+  });
+  return [...merged.values()];
+}
+
+function renderRelationshipTargetOptions(sourceSlug, query = "", liveOptions = state.relationshipTargetSearch.liveOptions) {
+  const list = modalForm.querySelector("#operationTargetOptions");
+  if (!list) return;
+  const options = mergeRelationshipTargetOptions(cachedEntitySearchResults(query, sourceSlug), liveOptions);
+  list.innerHTML = "";
+  options.forEach(({ node, source }) => {
+    const item = document.createElement("option");
+    item.value = node.slug;
+    item.label = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
+    list.appendChild(item);
+  });
+}
+
+async function runLiveRelationshipTargetSearch(sourceSlug, operationTarget) {
+  const query = operationTarget.value.trim();
+  if (!query || state.relationshipTargetSearch.loading) return;
+  state.relationshipTargetSearch.loading = true;
+  modalPrimaryButton.disabled = true;
+  const busyToken = beginBusyOperation(`Searching targets for ${query}`);
+  try {
+    const response = await apiGet(`/api/search?q=${encodeURIComponent(query)}`);
+    const nodes = response.ok ? response.data.graph?.nodes || [] : [];
+    state.relationshipTargetSearch.liveOptions = nodes
+      .filter((node) => node.slug && node.slug !== sourceSlug)
+      .map((node) => ({ node, source: "live" }));
+    renderRelationshipTargetOptions(sourceSlug, query, state.relationshipTargetSearch.liveOptions);
+    modalMessage.textContent = nodes.length ? "Live GBrain search results merged into target list." : "No live GBrain matches found.";
+  } finally {
+    endBusyOperation(busyToken);
+    state.relationshipTargetSearch.loading = false;
+    modalPrimaryButton.disabled = false;
+  }
 }
 
 function makeDatalist(id, options, valueFor, labelFor) {
@@ -2928,17 +3091,25 @@ function renderTagOperationForm(slug) {
 
 function renderAddRelationshipForm(slug) {
   modalForm.innerHTML = "";
-  const targetInput = document.createElement("input");
-  targetInput.id = "operationTarget";
-  targetInput.setAttribute("list", "operationTargetOptions");
-  targetInput.placeholder = "Search by node name or slug";
-  appendField(modalForm, "Target entity", targetInput);
-  modalForm.appendChild(makeDatalist(
-    "operationTargetOptions",
-    nodeOptionsExcept(slug),
-    (node) => node.slug,
-    (node) => `${node.label || node.slug} · ${node.category || node.type || "entity"}`,
-  ));
+  state.relationshipTargetSearch = { loading: false, liveOptions: [] };
+  const operationTarget = document.createElement("input");
+  operationTarget.id = "operationTarget";
+  operationTarget.setAttribute("list", "operationTargetOptions");
+  operationTarget.placeholder = "Type to filter cached nodes; press Return for live search";
+  appendField(modalForm, "Target entity", operationTarget);
+  const targetOptions = document.createElement("datalist");
+  targetOptions.id = "operationTargetOptions";
+  modalForm.appendChild(targetOptions);
+  renderRelationshipTargetOptions(slug, "");
+  operationTarget.addEventListener("input", () => {
+    renderRelationshipTargetOptions(slug, operationTarget.value);
+  });
+  operationTarget.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void runLiveRelationshipTargetSearch(slug, operationTarget);
+    }
+  });
 
   const typeInput = document.createElement("input");
   typeInput.id = "operationLinkType";
@@ -3067,6 +3238,7 @@ function closeModal() {
   modalChatInput.value = "";
   modalChatInput.disabled = false;
   modalYodaDepthWrap.hidden = true;
+  if (modalYodaLogButton) modalYodaLogButton.hidden = true;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -3173,6 +3345,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
         modalMessage.textContent = `Unable to load media: ${response.data?.error || response.status}`;
         return;
       }
+      rememberNodeMediaStatus(slug, response.data.media || []);
       renderMediaItems(response.data.media || []);
     } finally {
       endBusyOperation(busyToken);
@@ -3214,6 +3387,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalChat.hidden = false;
     modalYodaDepthWrap.hidden = false;
+    if (modalYodaLogButton) modalYodaLogButton.hidden = !state.askYodaLogs.has(slug);
     syncYodaDepthControl();
     modalChatInput.value = "";
     renderAskChat(slug, label, { mode: "yoda" });
@@ -3291,11 +3465,14 @@ async function openNodeModal(action, slug = state.focusSlug) {
 
   if (action === "history") {
     modalKicker.textContent = "History";
-    modalPrimaryButton.textContent = "Load history";
-    modalMessage.textContent = "Loads gbrain page version history for this node.";
-    modalEditor.value = `slug: ${slug}`;
-    modalEditor.readOnly = true;
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalMessage.textContent = "Loading page history for this node.";
+    modalEditor.hidden = true;
+    modalMarkdown.hidden = false;
     operationModal.hidden = false;
+    state.modalAction = { action: "result", slug, label };
+    await loadHistoryForSlug(slug);
     return;
   }
 
@@ -3632,6 +3809,13 @@ async function runModalPrimaryAction() {
       const historyPayload = history.filter((message) => message.role !== "system" && !message.pending).slice(-8);
       const response = await apiPost(`/api/entity-ask-yoda/${encodeURIComponent(slug)}`, { question, history: historyPayload, depth: state.yodaDepth });
       if (!response.ok) throw new Error(response.data?.error || `Ask Yoda failed with ${response.status}`);
+      state.askYodaLogs.set(slug, {
+        request_id: response.data.request_id,
+        source: response.data.source,
+        timings: response.data.timings,
+        diagnostics: response.data.diagnostics,
+      });
+      if (modalYodaLogButton) modalYodaLogButton.hidden = false;
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
       const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
@@ -4022,6 +4206,9 @@ function bindEvents() {
   modalYodaDepth?.addEventListener("input", (event) => {
     setYodaDepth(event.target.value);
   });
+  modalYodaLogButton?.addEventListener("click", () => {
+    openYodaLogWindow(state.modalAction?.slug);
+  });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
   });
@@ -4035,13 +4222,16 @@ function bindEvents() {
   });
   filterDrawerHandle?.addEventListener("pointerenter", showFilterSidebar);
   filterDrawerHandle?.addEventListener("pointerleave", (event) => {
-    if (!mapFilterPanel?.contains(event.relatedTarget)) hideFilterSidebar();
+    if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   });
   filterDrawerHandle?.addEventListener("focus", showFilterSidebar);
   mapFilterPanel?.addEventListener("pointerenter", showFilterSidebar);
-  mapFilterPanel?.addEventListener("pointerleave", hideFilterSidebar);
+  mapFilterPanel?.addEventListener("click", showFilterSidebar);
+  mapFilterPanel?.addEventListener("pointerleave", (event) => {
+    if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
+  });
   mapFilterPanel?.addEventListener("blur", (event) => {
-    if (!mapFilterPanel.contains(event.relatedTarget)) hideFilterSidebar();
+    if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   }, true);
 
   searchInput.addEventListener("input", (event) => {
@@ -4133,7 +4323,7 @@ function bindEvents() {
   tourPrevButton?.addEventListener("click", () => moveTour(-1));
   tourNextButton?.addEventListener("click", () => moveTour(1));
 
-  refreshButton.addEventListener("click", async () => {
+  refreshButton?.addEventListener("click", async () => {
     await fetchGraph("/api/refresh", { preserveFocus: true });
   });
 

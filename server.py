@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.91"
+UI_VERSION = "V1.0.92"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -406,7 +406,13 @@ def extract_openclaw_answer(output):
     return ""
 
 
-def run_openclaw_agent(prompt, timeout=45):
+def safe_preview(value, limit=600):
+    text = decode_process_output(value).strip()
+    text = re.sub(r"(?i)(api[_-]?key|token|authorization|password)\s*[:=]\s*\S+", r"\1=[redacted]", text)
+    return text[:limit]
+
+
+def run_openclaw_agent(prompt, timeout=45, return_details=False):
     agent_ref = str(CONFIG.get("yoda_agent") or os.environ.get("MEMORY_STARGRAPH_YODA_AGENT") or "").strip()
     command = [
         "openclaw",
@@ -425,6 +431,14 @@ def run_openclaw_agent(prompt, timeout=45):
     env = os.environ.copy()
     bun_bin = Path.home() / ".bun" / "bin"
     env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
+    details = {
+        "openclaw_status": "unknown",
+        "model_status": "unknown",
+        "fallback_used": False,
+        "stdout_preview": "",
+        "stderr_preview": "",
+        "error_summary": "",
+    }
     try:
         result = subprocess.run(
             command,
@@ -434,10 +448,27 @@ def run_openclaw_agent(prompt, timeout=45):
             check=False,
             env=env,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+    except FileNotFoundError as exc:
+        details.update({"openclaw_status": "unavailable", "model_status": "unavailable", "error_summary": str(exc)})
+        return {"output": None, **details} if return_details else None
+    except subprocess.TimeoutExpired as exc:
+        details.update({
+            "openclaw_status": "timeout",
+            "model_status": "timeout",
+            "error_summary": f"OpenClaw agent timed out after {timeout}s",
+            "stdout_preview": safe_preview(exc.stdout),
+            "stderr_preview": safe_preview(exc.stderr),
+        })
+        return {"output": None, **details} if return_details else None
+    details["stdout_preview"] = safe_preview(result.stdout)
+    details["stderr_preview"] = safe_preview(result.stderr)
     if result.returncode != 0:
-        return None
+        details.update({
+            "openclaw_status": f"exit_{result.returncode}",
+            "model_status": "nonzero_exit",
+            "error_summary": details["stderr_preview"] or details["stdout_preview"] or f"OpenClaw exited with status {result.returncode}",
+        })
+        return {"output": None, **details} if return_details else None
     output = "\n".join(
         value
         for value in (
@@ -446,7 +477,12 @@ def run_openclaw_agent(prompt, timeout=45):
         )
         if value
     )
-    return extract_openclaw_answer(output) or None
+    answer = extract_openclaw_answer(output) or None
+    details.update({
+        "openclaw_status": "ok",
+        "model_status": "answered" if answer else "empty_output",
+    })
+    return {"output": answer, **details} if return_details else answer
 
 
 def sanitize_yoda_result(result):
@@ -469,6 +505,15 @@ def sanitize_yoda_result(result):
             output = "I found graph context for this node, but the answer model is unavailable right now. Try again after the Ask Yoda agent is reachable."
     payload["output"] = output
     payload.pop("prompt", None)
+    diagnostics = dict(payload.get("diagnostics") or {})
+    timings = payload.get("timings") or diagnostics.get("timings") or {}
+    diagnostics["timings"] = timings
+    diagnostics.setdefault("request_id", payload.get("request_id") or f"yoda-{int(time.time() * 1000)}")
+    diagnostics.setdefault("source", payload.get("source") or "unknown")
+    diagnostics.setdefault("fallback_used", payload.get("source") == "fallback")
+    diagnostics.setdefault("model_status", "unknown")
+    payload["diagnostics"] = diagnostics
+    payload["request_id"] = diagnostics["request_id"]
     return payload
 
 
@@ -767,7 +812,8 @@ def copy_media_source_to_root(source_path, relative_path):
     if not source.is_file() or not is_supported_media_path(source.name):
         return None
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
+    if source.resolve() != destination.resolve():
+        shutil.copy2(source, destination)
     served_url = media_served_url_for_relative_path(relative_path)
     return {
         "path": str(destination),
@@ -2369,25 +2415,43 @@ class GraphStore:
         return "\n".join(lines)
 
     def ask_yoda(self, slug, question, history=None, depth="4"):
+        request_id = f"yoda-{int(time.time() * 1000)}"
         started_at = time.perf_counter()
         prompt_started_at = time.perf_counter()
-        prompt = self.build_yoda_prompt(slug, question, history, depth)
+        yoda_depth = clamp_yoda_depth(depth)
+        prompt = self.build_yoda_prompt(slug, question, history, yoda_depth)
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
-        agent_output = run_openclaw_agent(prompt)
+        agent_result = run_openclaw_agent(prompt, return_details=True)
+        agent_output = agent_result.get("output") if isinstance(agent_result, dict) else agent_result
         model_ms = int((time.perf_counter() - model_started_at) * 1000)
         timings = {
             "prompt_ms": prompt_ms,
             "model_ms": model_ms,
             "total_ms": int((time.perf_counter() - started_at) * 1000),
         }
+        diagnostics = {
+            "request_id": request_id,
+            "selected_slug": slug,
+            "depth": yoda_depth,
+            "timings": timings,
+            "source": "openclaw-agent" if agent_output else "fallback",
+            "fallback_used": not bool(agent_output),
+            "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",
+            "openclaw_status": agent_result.get("openclaw_status", "unknown") if isinstance(agent_result, dict) else "unknown",
+            "error_summary": agent_result.get("error_summary", "") if isinstance(agent_result, dict) else "",
+            "stdout_preview": agent_result.get("stdout_preview", "") if isinstance(agent_result, dict) else "",
+            "stderr_preview": agent_result.get("stderr_preview", "") if isinstance(agent_result, dict) else "",
+        }
         if agent_output:
-            return {"output": agent_output, "source": "openclaw-agent", "timings": timings}
+            return {"output": agent_output, "source": "openclaw-agent", "timings": timings, "request_id": request_id, "diagnostics": diagnostics}
         fallback_text = f"Question: {question}\nSelected node: {slug}\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now."
         return {
             "output": fallback_text or "I found no concise answer in the graph context for this question yet.",
             "source": "fallback",
             "timings": timings,
+            "request_id": request_id,
+            "diagnostics": diagnostics,
         }
 
     def backlinks(self, slug):
@@ -2775,7 +2839,22 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history, depth))
                 return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+                request_id = f"yoda-{int(time.time() * 1000)}"
+                return self.end_json({
+                    "error": str(exc),
+                    "request_id": request_id,
+                    "diagnostics": {
+                        "request_id": request_id,
+                        "selected_slug": slug,
+                        "depth": locals().get("depth", 4),
+                        "source": "api-error",
+                        "fallback_used": False,
+                        "model_status": "api_error",
+                        "openclaw_status": "not_started",
+                        "error_summary": str(exc)[:600],
+                        "timings": {},
+                    },
+                }, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-backlinks/"):
             slug = unquote(parsed.path.split("/api/entity-backlinks/", 1)[1]).strip("/")
             try:
