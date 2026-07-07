@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.92";
+const UI_VERSION = "V1.0.93";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -144,6 +144,7 @@ const modalChatInput = document.getElementById("modalChatInput");
 const modalYodaDepth = document.getElementById("modalYodaDepth");
 const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
 const modalYodaLogButton = document.getElementById("modalYodaLogButton");
+const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -559,6 +560,10 @@ function pointerStayedInsideFilterSidebar(target) {
       || target === filterDrawerHandle
     ),
   );
+}
+
+function yodaLogSlug() {
+  return state.modalAction?.slug || state.focusSlug;
 }
 
 function zoomBy(direction) {
@@ -2846,6 +2851,7 @@ function formatYodaDiagnosticLog(slug) {
 
 function openYodaLogWindow(slug = state.modalAction?.slug) {
   modalKicker.textContent = "Ask Yoda Log";
+  modalTitle.textContent = "Ask Yoda Log";
   modalPrimaryButton.textContent = "Close";
   modalCancelButton.hidden = true;
   modalEditor.hidden = true;
@@ -2856,6 +2862,7 @@ function openYodaLogWindow(slug = state.modalAction?.slug) {
   pre.className = "yoda-log-window";
   pre.textContent = formatYodaDiagnosticLog(slug);
   modalMarkdown.appendChild(pre);
+  operationModal.hidden = false;
   state.modalAction = { action: "result", slug, label: "Ask Yoda Log" };
 }
 
@@ -3238,7 +3245,7 @@ function closeModal() {
   modalChatInput.value = "";
   modalChatInput.disabled = false;
   modalYodaDepthWrap.hidden = true;
-  if (modalYodaLogButton) modalYodaLogButton.hidden = true;
+  if (modalYodaLogButton) modalYodaLogButton.disabled = false;
   modalPrimaryButton.hidden = false;
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
@@ -3387,7 +3394,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalChat.hidden = false;
     modalYodaDepthWrap.hidden = false;
-    if (modalYodaLogButton) modalYodaLogButton.hidden = !state.askYodaLogs.has(slug);
+    if (modalYodaLogButton) modalYodaLogButton.disabled = false;
     syncYodaDepthControl();
     modalChatInput.value = "";
     renderAskChat(slug, label, { mode: "yoda" });
@@ -3815,7 +3822,7 @@ async function runModalPrimaryAction() {
         timings: response.data.timings,
         diagnostics: response.data.diagnostics,
       });
-      if (modalYodaLogButton) modalYodaLogButton.hidden = false;
+      if (modalYodaLogButton) modalYodaLogButton.disabled = false;
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
       const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
@@ -4207,7 +4214,10 @@ function bindEvents() {
     setYodaDepth(event.target.value);
   });
   modalYodaLogButton?.addEventListener("click", () => {
-    openYodaLogWindow(state.modalAction?.slug);
+    openYodaLogWindow(yodaLogSlug());
+  });
+  settingsYodaLogButton?.addEventListener("click", () => {
+    openYodaLogWindow(yodaLogSlug());
   });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);

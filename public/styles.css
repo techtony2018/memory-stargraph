@@ -689,16 +689,27 @@ h2 {
   position: absolute;
   right: 0;
   top: 33.333%;
-  width: 12px;
+  width: 34px;
   height: 33.333%;
   min-height: 168px;
-  z-index: 28;
+  z-index: 29;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.filter-sidebar-drawer::before {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 12px;
+  height: 100%;
   border: 1px solid rgba(136, 246, 255, 0.3);
   border-right: 0;
   border-radius: 8px 0 0 8px;
   background: linear-gradient(180deg, rgba(136, 246, 255, 0.28), rgba(143, 124, 255, 0.18));
   box-shadow: 0 0 22px rgba(34, 211, 238, 0.18);
-  cursor: pointer;
 }
 
 .filter-sidebar {
@@ -1092,17 +1103,28 @@ h2 {
 }
 
 .cache-action-row,
-.refresh-inline-controls {
+.refresh-inline-controls,
+.settings-yoda-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.cache-action-row .source-badge {
-  flex: 1 1 auto;
+.settings-yoda-row {
+  flex-wrap: wrap;
 }
 
-.cache-action-row .ghost-button {
+.cache-action-row .cache-usage-label {
+  flex: 1 1 auto;
+  min-width: 92px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.cache-action-row .ghost-button,
+.settings-yoda-row .ghost-button {
   flex: 0 0 auto;
   min-height: 30px;
 }
