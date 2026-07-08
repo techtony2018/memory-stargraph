@@ -451,6 +451,35 @@ cover_image: companies/example-inc/logo.jpg
             self.assertEqual((media_root / "blogs/example-post/photo 1.jpg").read_bytes(), b"gbrain jpg")
             urlopen_mock.assert_called_once()
 
+    def test_ensure_media_references_fetches_relative_paths_from_gbrain_file_base(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    return False
+
+                def read(self):
+                    return b"stargraph png"
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.MEDIA_DISCOVERY_ROOTS", []),
+                mock.patch("server.GBRAIN_FILE_BASE_URLS", ["https://gbrain-host.example/gbrain-files/"]),
+                mock.patch("server.REMOTE_MEDIA_BASE_URLS", []),
+                mock.patch("server.urlopen", return_value=FakeResponse()) as urlopen_mock,
+            ):
+                media = parse_media_references("![UI](products/memory-stargraph/stargraph.png)")
+                enriched = ensure_media_references_available(media)
+
+            self.assertTrue(enriched[0]["served_available"])
+            self.assertEqual(enriched[0]["materialized_from"], "https://gbrain-host.example/gbrain-files/products/memory-stargraph/stargraph.png")
+            self.assertEqual((media_root / "products/memory-stargraph/stargraph.png").read_bytes(), b"stargraph png")
+            urlopen_mock.assert_called_once()
+
     def test_materialize_gbrain_file_reference_reads_gbrain_store_root(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "served"
@@ -468,6 +497,35 @@ cover_image: companies/example-inc/logo.jpg
             self.assertTrue(result["served_available"])
             self.assertEqual(result["source"], str(source.resolve()))
             self.assertEqual((media_root / "blogs/example-post/photo.jpg").read_bytes(), b"stored jpg")
+
+    def test_materialize_gbrain_file_reference_fetches_from_gbrain_file_base(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "served"
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    return False
+
+                def read(self):
+                    return b"stored from file base"
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.MEDIA_DISCOVERY_ROOTS", []),
+                mock.patch("server.GBRAIN_FILE_STORE_ROOTS", []),
+                mock.patch("server.REMOTE_MEDIA_BASE_URLS", []),
+                mock.patch("server.GBRAIN_FILE_BASE_URLS", ["https://gbrain-host.example/gbrain-files/"]),
+                mock.patch("server.urlopen", return_value=FakeResponse()) as urlopen_mock,
+            ):
+                result = materialize_gbrain_file_reference("products/memory-stargraph/stargraph.png")
+
+            self.assertTrue(result["served_available"])
+            self.assertEqual(result["source"], "https://gbrain-host.example/gbrain-files/products/memory-stargraph/stargraph.png")
+            self.assertEqual((media_root / "products/memory-stargraph/stargraph.png").read_bytes(), b"stored from file base")
+            urlopen_mock.assert_called_once()
 
     def test_copy_file_to_gbrain_store_writes_storage_path(self):
         with TemporaryDirectory() as tmpdir:

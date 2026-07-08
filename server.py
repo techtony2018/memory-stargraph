@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.111"
+UI_VERSION = "V1.0.112"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -902,10 +902,11 @@ def ensure_media_reference_available(item):
     if not relative_path:
         return item
     result = None
+    is_gbrain_file_reference = str(item.get("url") or "").strip().startswith(GBRAIN_FILE_SCHEME)
     source_file = find_media_source_file(relative_path)
     if source_file:
         result = copy_media_source_to_root(source_file, relative_path)
-    if not result and str(item.get("url") or "").strip().startswith(GBRAIN_FILE_SCHEME):
+    if not result and is_gbrain_file_reference:
         for base_url in GBRAIN_FILE_BASE_URLS:
             gbrain_file_url = gbrain_file_url_for_relative_path(base_url, relative_path)
             if not gbrain_file_url:
@@ -923,6 +924,17 @@ def ensure_media_reference_available(item):
                 continue
             try:
                 result = download_media_url_to_root(remote_url, relative_path)
+            except Exception:  # noqa: BLE001
+                result = None
+            if result:
+                break
+    if not result and not is_gbrain_file_reference:
+        for base_url in GBRAIN_FILE_BASE_URLS:
+            gbrain_file_url = gbrain_file_url_for_relative_path(base_url, relative_path)
+            if not gbrain_file_url:
+                continue
+            try:
+                result = download_media_url_to_root(gbrain_file_url, relative_path)
             except Exception:  # noqa: BLE001
                 result = None
             if result:
@@ -968,6 +980,16 @@ def materialize_gbrain_file_reference(relative_path):
             continue
         try:
             result = download_media_url_to_root(remote_url, safe_path)
+        except Exception:  # noqa: BLE001
+            result = None
+        if result:
+            return result
+    for base_url in GBRAIN_FILE_BASE_URLS:
+        gbrain_file_url = gbrain_file_url_for_relative_path(base_url, safe_path)
+        if not gbrain_file_url:
+            continue
+        try:
+            result = download_media_url_to_root(gbrain_file_url, safe_path)
         except Exception:  # noqa: BLE001
             result = None
         if result:
@@ -2610,6 +2632,11 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def serve_media_file(self, request_path, head_only=False):
         file_path = resolve_media_file_path(request_path)
+        if not file_path:
+            relative_path = safe_media_relative_path(str(request_path or "").split("/media/", 1)[1] if "/media/" in str(request_path or "") else "")
+            if relative_path:
+                materialize_gbrain_file_reference(relative_path)
+                file_path = resolve_media_file_path(request_path)
         if not file_path:
             self.send_error(HTTPStatus.NOT_FOUND, "Media file not found")
             return
