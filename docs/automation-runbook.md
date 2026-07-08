@@ -30,6 +30,21 @@ scripts/automation/deploy_targets.sh V1.0.xx <commit>
 
 Do not mark TODOs completed until all configured required targets report the expected `ui_version`, served HTML asset query strings, and served `public/app.js` version, or a target has a concrete unreachable/deployment reason recorded in local memory/GBrain.
 
+## Remote Shell Rule
+
+For remote host work, do not send complex inline SSH commands through the remote login shell. zsh/glob parsing has repeatedly broken commands that contain `[]`, `|`, `$()`, awk regexes, or nested quotes.
+
+Use a heredoc into remote bash for anything beyond a trivial one-liner:
+
+```bash
+ssh toddy@host 'bash -s' <<'REMOTE'
+set -euo pipefail
+# commands here
+REMOTE
+```
+
+Prefer simple process tools such as `pgrep -f`, `ps -p`, `case`, and `lsof` over fragile awk regexes inside quoted SSH strings. If a command must run under zsh and uses globs, explicitly guard with `setopt nonomatch`; otherwise avoid zsh parsing entirely by using `bash -s`.
+
 ## Browser Verification
 
 Use Chrome CDP first for UI verification:

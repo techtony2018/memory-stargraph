@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.112"
+UI_VERSION = "V1.0.113"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -886,14 +886,6 @@ def gbrain_file_url_for_relative_path(base_url, relative_path):
     return str(base_url).rstrip("/") + "/" + "/".join(quote(part) for part in safe_path.parts)
 
 
-def try_gbrain_signed_media_url(relative_path):
-    try:
-        output = run_gbrain("files", "signed-url", str(relative_path))
-    except Exception:  # noqa: BLE001
-        return None
-    return extract_first_http_url(output)
-
-
 def ensure_media_reference_available(item):
     served_url = item.get("served_url")
     if not served_url or item.get("served_available"):
@@ -939,13 +931,6 @@ def ensure_media_reference_available(item):
                 result = None
             if result:
                 break
-    if not result:
-        signed_url = try_gbrain_signed_media_url(relative_path)
-        if signed_url:
-            try:
-                result = download_media_url_to_root(signed_url, relative_path)
-            except Exception:  # noqa: BLE001
-                result = None
     if result:
         item = dict(item)
         item["served_available"] = result["served_available"]
@@ -994,12 +979,6 @@ def materialize_gbrain_file_reference(relative_path):
             result = None
         if result:
             return result
-    signed_url = try_gbrain_signed_media_url(safe_path)
-    if signed_url:
-        try:
-            return download_media_url_to_root(signed_url, safe_path)
-        except Exception:  # noqa: BLE001
-            return None
     return None
 
 
