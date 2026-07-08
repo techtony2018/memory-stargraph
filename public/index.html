@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.93">
+    <link rel="stylesheet" href="/styles.css?v=1.0.94">
   </head>
   <body>
     <div class="app-shell">
@@ -56,14 +56,16 @@
               </label>
             </div>
             <div id="autopilotFlyout" class="floating-tool-panel autopilot-flyout" hidden aria-label="Autopilot controls">
-              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous autopilot stop" data-tooltip="Go to previous autopilot stop." title="Go to previous autopilot stop.">‹</button>
-              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next autopilot stop" data-tooltip="Go to next autopilot stop." title="Go to next autopilot stop.">›</button>
-              <label class="timeline-days-wrap has-tooltip" data-tooltip="Filter graph to nodes updated within the last N days. 0 means all time." title="Filter graph to nodes updated within the last N days. 0 means all time.">
-                <input id="timelineDaysInput" type="number" min="0" max="7" step="1" value="0" aria-label="Autopilot timeline days, zero means all time">
-                <span id="timelineValue">days</span>
-              </label>
-              <button id="tourButton" class="autopilot-start-button icon-button has-tooltip" type="button" aria-pressed="false" aria-label="Start Autopilot" data-tooltip="Start or stop autopilot through important nodes." title="Start or stop autopilot through important nodes.">
-                <svg class="autopilot-launch-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 19 5"></path><path d="M9 5h10v10"></path><path d="M14 5v5h5"></path></svg>
+              <button id="tourPlanButton" class="icon-button has-tooltip" type="button" aria-label="Open Autopilot plan" data-tooltip="View and edit planned playback." title="View and edit planned playback.">
+                <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h11"></path><path d="M8 12h11"></path><path d="M8 18h11"></path><path d="M4 6h.01"></path><path d="M4 12h.01"></path><path d="M4 18h.01"></path></svg>
+              </button>
+              <button id="tourButton" class="autopilot-start-button icon-button has-tooltip" type="button" aria-pressed="false" aria-label="Play Autopilot" data-tooltip="Play or pause autopilot." title="Play or pause autopilot.">
+                <svg class="autopilot-icon play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+              </button>
+              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous autopilot stop" data-tooltip="Previous planned stop." title="Previous planned stop.">‹</button>
+              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next autopilot stop" data-tooltip="Next planned stop." title="Next planned stop.">›</button>
+              <button id="tourStopButton" class="icon-button has-tooltip" type="button" aria-label="Stop Autopilot" data-tooltip="Stop autopilot and return to manual mode." title="Stop autopilot and return to manual mode.">
+                <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"></path></svg>
               </button>
               <span id="tourCounter" class="tour-counter" aria-live="polite">0/0</span>
             </div>
@@ -148,6 +150,9 @@
               <button id="newNodeButton" class="new-node-icon-button has-tooltip" type="button" aria-label="New node" data-tooltip="Create a new gbrain entity." title="Create a new gbrain entity.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
               </button>
+              <button id="mapAskYodaButton" class="new-node-icon-button map-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." title="Ask Yoda about this node." disabled aria-disabled="true">
+                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png" alt="" aria-hidden="true">
+              </button>
               <button id="mapFilterToggleButton" class="map-filter-toggle-button has-tooltip" type="button" aria-pressed="true" aria-label="Toggle graph filters" data-tooltip="Show or hide graph filters." title="Show or hide graph filters.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
               </button>
@@ -188,7 +193,7 @@
             <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
             </a>
-            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.93</a>
+            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.94</a>
           </div>
         </section>
 
@@ -295,6 +300,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.93"></script>
+    <script src="/app.js?v=1.0.94"></script>
   </body>
   </html>

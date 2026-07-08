@@ -105,17 +105,13 @@ try {
       newButtonOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".new-node-floating")).opacity),
       newButtonText: document.querySelector("#newNodeButton")?.textContent,
       tourWidth: Math.round(document.querySelector("#tourButton")?.getBoundingClientRect().width || 0),
-      timelineWrapsDays: (() => {
-        const strip = document.querySelector("#autopilotFlyout")?.getBoundingClientRect();
-        const days = document.querySelector(".timeline-days-wrap")?.getBoundingClientRect();
-        return Boolean(strip && days && days.right <= strip.right - 2 && days.left >= strip.left);
-      })(),
+      autopilotToolbarOrder: [...document.querySelectorAll("#autopilotFlyout > button, #autopilotFlyout > span")].map((item) => item.id),
+      noPlannedFlightRailButton: ![...document.querySelectorAll(".nav-rail-button")].some((item) => /planned flight/i.test(item.textContent || "")),
       toolbarAboveMap: (() => {
         const toolbar = document.querySelector("#metrics")?.getBoundingClientRect();
         const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
         return Boolean(toolbar && map && toolbar.right <= map.right && toolbar.bottom <= map.bottom && toolbar.left >= map.left && toolbar.top >= map.top);
       })(),
-      daysAfterNumber: document.querySelector(".timeline-days-wrap input + #timelineValue")?.textContent === "days",
       graphFloatingOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".graph-floating-controls")).opacity),
       mapControlsInsideMap: (() => {
         const map = document.querySelector(".graph-canvas-wrap")?.getBoundingClientRect();
@@ -140,8 +136,8 @@ try {
       })(),
       modalAboveMapControls: Number.parseInt(getComputedStyle(document.querySelector("#operationModal")).zIndex, 10) > Number.parseInt(getComputedStyle(document.querySelector(".graph-floating-controls")).zIndex, 10),
       cloudModePresent: Boolean(document.querySelector("#cloudModeToggle")?.checked),
-      timelinePresent: Boolean(document.querySelector("#timelineDaysInput") && document.querySelector("#timelineValue")),
-      tourPresent: Boolean(document.querySelector("#tourButton") && document.querySelector("#tourPrevButton") && document.querySelector("#tourNextButton")),
+      timelinePresent: !document.querySelector("#autopilotFlyout #timelineDaysInput") && !document.querySelector("#autopilotFlyout #timelineValue"),
+      tourPresent: Boolean(document.querySelector("#tourPlanButton") && document.querySelector("#tourButton") && document.querySelector("#tourPrevButton") && document.querySelector("#tourNextButton") && document.querySelector("#tourStopButton")),
       directLinksPanelPresent: Boolean(document.querySelector("#detailLinks")),
       pointerHint: document.querySelector("#hoverLabel")?.textContent,
       hasDarshaGhost: slugs.includes("people/darsha-krana"),
@@ -242,7 +238,8 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.toolbarAboveMap || !initial.daysAfterNumber || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
+  const expectedTourOrder = ["tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
+  if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.noPlannedFlightRailButton || expectedTourOrder.some((id, index) => initial.autopilotToolbarOrder[index] !== id) || !initial.toolbarAboveMap || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
     throw new Error(`Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control: ${JSON.stringify(initial)}`);
   }
   if (initial.metricsColumns !== 1) {
