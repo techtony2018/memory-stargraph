@@ -196,12 +196,14 @@ Direct TLS on port `8788` will use `https://<host>:8788/`; Tailscale Serve is us
 
 Verification commands:
 - export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+- scripts/automation/preflight.sh
 - python3 -m py_compile server.py
 - python3 -m unittest discover -s tests
 - node --check public/app.js
 - node --check tests/browser_smoke.mjs
 - node tests/browser_smoke.mjs
 - If Playwright is not locally resolvable, use `npx --yes --package playwright node tests/browser_smoke.mjs`.
+- For Chrome CDP verification, use `npx --yes --package playwright node scripts/automation/cdp_probe.mjs V1.0.xx http://127.0.0.1:8788`.
 
 Supported node operations to preserve:
 1. View
@@ -230,6 +232,7 @@ Safety:
 - `Hide` is UI-only.
 - `Delete from gbrain`, markdown edits, relationship edits, timeline events, and file attachments modify gbrain.
 - Do not push until the verification commands pass and the browser smoke has been run or a specific blocker is reported.
+- Any automation run lasting more than five minutes must append a short retrospective with `scripts/automation/retrospect.sh`, then implement or record at least one concrete process improvement.
 ```
 
 ## Project Layout
@@ -240,16 +243,19 @@ Safety:
 - `public/app.js` - graph rendering, interactions, and node operations
 - `tests/test_graph_parsing.py` - backend parser and command-construction tests
 - `tests/browser_smoke.mjs` - Playwright end-to-end smoke test
+- `scripts/automation/` - preflight, deployment, Chrome CDP, and retrospective helpers for daily automation runs
+- `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
 - `dashboard-integration.json` - All Things Codex Dashboard launcher metadata
 
 ## Verification
 
 ```bash
+scripts/automation/preflight.sh
 python3 -m py_compile server.py
 python3 -m unittest discover -s tests
 node --check public/app.js
 node --check tests/browser_smoke.mjs
-node tests/browser_smoke.mjs
+npx --yes --package playwright node scripts/automation/cdp_probe.mjs V1.0.xx http://127.0.0.1:8788
 ```
 
 Useful live checks:
