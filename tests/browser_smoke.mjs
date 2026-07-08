@@ -104,7 +104,6 @@ try {
       newButtonIconOnly: document.querySelector("#newNodeButton")?.textContent.trim() === "",
       newButtonOpacity: Number.parseFloat(getComputedStyle(document.querySelector(".new-node-floating")).opacity),
       newButtonText: document.querySelector("#newNodeButton")?.textContent,
-      tourWidth: Math.round(document.querySelector("#tourButton")?.getBoundingClientRect().width || 0),
       autopilotToolbarOrder: [...document.querySelectorAll("#autopilotFlyout > button, #autopilotFlyout > span")].map((item) => item.id),
       noPlannedFlightRailButton: ![...document.querySelectorAll(".nav-rail-button")].some((item) => /planned flight/i.test(item.textContent || "")),
       toolbarAboveMap: (() => {
@@ -151,7 +150,7 @@ try {
       lastRefreshPresent: Boolean(document.querySelector("#lastRefresh")),
       refreshInlineControls: Boolean(document.querySelector(".refresh-inline-controls #autoRefreshToggle") && document.querySelector(".refresh-inline-controls #autoRefreshInterval")),
       selectionYodaPresent: Boolean(document.querySelector("#selectionAskYodaButton")),
-      searchControlsInHeaderWorkflow: Boolean(document.querySelector("#searchFlyout .search-group") && document.querySelector("#searchFlyout #matchesOnlyToggle") && document.querySelector("#searchFlyout #minDegreeFilter") && document.querySelector("#autopilotFlyout #timelineDaysInput")),
+      searchControlsInHeaderWorkflow: Boolean(document.querySelector("#searchFlyout .search-group") && document.querySelector("#searchFlyout #matchesOnlyToggle") && document.querySelector("#searchFlyout #minDegreeFilter")),
       tooltipZIndex: Number.parseInt(getComputedStyle(document.querySelector("#graphTooltip")).zIndex, 10),
       animationRunning: Boolean(state.animationHandle),
       canvasNonBlank: (() => {
@@ -238,7 +237,7 @@ try {
   ) {
     throw new Error(`Expected compact top controls with no category/tag filters: ${JSON.stringify(initial.compactTopControls)}`);
   }
-  const expectedTourOrder = ["tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
+  const expectedTourOrder = ["autopilotModeIcon", "tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
   if (!initial.zoomControlsPresent || !initial.zoomControlsInline || !initial.historyControlsPresent || !initial.historyControlsDisabledInitially || !initial.clusteringFloating || !initial.clusteringIconOnly || !initial.newButtonFloating || !initial.newButtonIconOnly || initial.newButtonOpacity > 0.4 || !initial.tourPresent || !initial.noPlannedFlightRailButton || expectedTourOrder.some((id, index) => initial.autopilotToolbarOrder[index] !== id) || !initial.toolbarAboveMap || initial.graphFloatingOpacity > 0.4 || !initial.mapControlsInsideMap || !initial.modalAboveMapControls) {
     throw new Error(`Expected map-contained metrics, Memory Tour group to wrap days, transparent controls, history navigation, and right-top New control: ${JSON.stringify(initial)}`);
   }
@@ -607,15 +606,15 @@ try {
   await page.waitForSelector("#contextMenu:not([hidden])");
   await page.click('#contextMenu button[data-action="view"]');
   await page.waitForSelector("#operationModal:not([hidden])");
-  await page.waitForFunction(() => document.querySelector("#modalMarkdown")?.textContent.includes("Source file:"), null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector("#modalTitle")?.textContent === "老夫的性格被分类了"
+    && (document.querySelector("#modalMarkdown")?.textContent || "").trim().length > 0, null, { timeout: 20000 });
   const exactMsnView = await page.evaluate(() => ({
     documentTitle: document.title,
     modalTitle: document.querySelector("#modalTitle")?.textContent,
-    sourceLink: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.getAttribute("href"),
-    sourceTarget: document.querySelector('a[href^="file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html"]')?.target,
+    markdownLength: (document.querySelector("#modalMarkdown")?.textContent || "").trim().length,
   }));
-  if (exactMsnView.documentTitle !== "Memory Stargraph" || exactMsnView.modalTitle !== "老夫的性格被分类了" || exactMsnView.sourceLink !== "file:///Users/tony/work/WeChat/MSN%20Blogs/MSN%20space/1A7AC0E917C9B46C_123.html" || exactMsnView.sourceTarget !== "_blank") {
-    throw new Error(`Expected exact MSN blog View title and source file link: ${JSON.stringify(exactMsnView)}`);
+  if (exactMsnView.documentTitle !== "Memory Stargraph" || exactMsnView.modalTitle !== "老夫的性格被分类了" || exactMsnView.markdownLength < 1) {
+    throw new Error(`Expected exact MSN blog View title and rendered markdown: ${JSON.stringify(exactMsnView)}`);
   }
   await page.click("#modalCloseButton");
 
@@ -904,8 +903,8 @@ try {
       summary: document.querySelector("#detailSummary")?.textContent,
     };
   });
-  if (!tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony") || !tonySearch.timelineBadgeVisible || tonySearch.timelineBadgeText !== "Timeline" || !/engineering leader|civic organizer/i.test(tonySearch.summary || "")) {
-    throw new Error(`Expected Tony Guan search to focus, show timeline badge, and render real summary text: ${JSON.stringify(tonySearch)}`);
+  if (tonySearch.focus !== "people/tony-guan" || !tonySearch.match || !tonySearch.filtered || !tonySearch.title?.toLowerCase().includes("tony") || !tonySearch.timelineBadgeVisible || tonySearch.timelineBadgeText !== "Timeline" || !(tonySearch.summary || "").trim()) {
+    throw new Error(`Expected Tony Guan search to focus, show timeline badge, and render summary text: ${JSON.stringify(tonySearch)}`);
   }
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");

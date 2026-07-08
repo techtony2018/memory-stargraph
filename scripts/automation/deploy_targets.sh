@@ -29,6 +29,7 @@ tracked_files=(
   public/app.js
   public/index.html
   public/styles.css
+  public/assets/brand/yoda-selection-avatar.png
   tests/browser_smoke.mjs
   tests/test_frontend_static.py
 )

@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.97">
+    <link rel="stylesheet" href="/styles.css?v=1.0.111">
   </head>
   <body>
     <div class="app-shell">
@@ -56,6 +56,9 @@
               </label>
             </div>
             <div id="autopilotFlyout" class="floating-tool-panel autopilot-flyout" hidden aria-label="Autopilot controls">
+              <span id="autopilotModeIcon" class="autopilot-mode-icon has-tooltip" aria-hidden="true" data-tooltip="Autopilot mode is active." title="Autopilot mode is active.">
+                <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5 9.5 7l8-2.5 2 2-2.5 8-6.5 6.5-1.8-5.2z"></path><path d="m9.5 7 4.8 4.8"></path><path d="M6.6 16.4 3.8 19.2"></path><path d="M9 18.8 6.8 21"></path><circle cx="16" cy="8" r="1.4"></circle></svg>
+              </span>
               <button id="tourPlanButton" class="icon-button has-tooltip" type="button" aria-label="Open Autopilot plan" data-tooltip="View and edit planned playback." title="View and edit planned playback.">
                 <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h11"></path><path d="M8 12h11"></path><path d="M8 18h11"></path><path d="M4 6h.01"></path><path d="M4 12h.01"></path><path d="M4 18h.01"></path></svg>
               </button>
@@ -150,8 +153,11 @@
               <button id="newNodeButton" class="new-node-icon-button has-tooltip" type="button" aria-label="New node" data-tooltip="Create a new gbrain entity." title="Create a new gbrain entity.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
               </button>
+              <button id="mapViewButton" class="new-node-icon-button map-view-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." title="View selected node." disabled aria-disabled="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
+              </button>
               <button id="mapAskYodaButton" class="new-node-icon-button map-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." title="Ask Yoda about this node." disabled aria-disabled="true">
-                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png" alt="" aria-hidden="true">
+                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.111" alt="" aria-hidden="true">
               </button>
               <button id="mapFilterToggleButton" class="map-filter-toggle-button has-tooltip" type="button" aria-pressed="true" aria-label="Toggle graph filters" data-tooltip="Show or hide graph filters." title="Show or hide graph filters.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
@@ -193,7 +199,7 @@
             <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
             </a>
-            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.97</a>
+            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.111</a>
           </div>
         </section>
 
@@ -206,8 +212,11 @@
                 <button id="timelineBadge" class="timeline-badge" type="button" hidden>Timeline</button>
               </div>
               <div class="selection-actions">
+                <button id="selectionViewButton" class="selection-view-button icon-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." title="View selected node." disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
+                </button>
                 <button id="selectionAskYodaButton" class="selection-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." title="Ask Yoda about this node.">
-                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png" alt="" aria-hidden="true">
+                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.111" alt="" aria-hidden="true">
                 </button>
                 <button id="historyBackButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." title="Back to previous selected node." disabled>‹</button>
                 <button id="historyForwardButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." title="Forward to next selected node." disabled>›</button>
@@ -300,6 +309,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.97"></script>
+    <script src="/app.js?v=1.0.111"></script>
   </body>
   </html>

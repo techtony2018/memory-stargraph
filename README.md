@@ -17,7 +17,7 @@ It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it ru
 ### Interactive Stargraph
 
 <p align="center">
-  <img src="docs/assets/memory-stargraph-ui-2026-07-06.png" alt="Memory Stargraph interactive star-cloud UI showing clustered gbrain entities, relationship hover, Ask Yoda, Autopilot, and local cache controls">
+  <img src="docs/assets/memory-stargraph-ui-2026-07-08.png" alt="Memory Stargraph interactive star-cloud UI showing clustered gbrain entities, relationship hover, Ask Yoda, Autopilot, and local cache controls">
 </p>
 
 ### Shared AI Memory Architecture
@@ -48,22 +48,22 @@ http://127.0.0.1:8788
 
 ## Main Features
 
-These are the highest-value features for understanding, maintaining, and extending a `gbrain` knowledge base.
+These are the highest-value capabilities for turning a `gbrain` knowledge base into an operational shared memory system.
 
-1. **Ask Yoda** - Ask contextual questions in a chat-style panel backed by the selected node, configurable graph depth, media hints, and targeted gbrain retrieval.
-2. **Autopilot memory tour** - Step through important nodes with previous/next controls, a visible counter, auto/manual plan modes, looped playback, and load-timeout recovery.
-3. **Local caching** - Cache node content and media in the browser with a configurable memory limit, usage readout, and one-click flush.
-4. **Entity graph exploration** - Search by slug, title, tag, or summary, then click any node to lazily load its direct gbrain neighbors.
-5. **Relationship and backlink traversal** - Inspect outgoing relationships, incoming backlinks, page through long lists, and jump directly to related nodes.
-6. **Media and document attachments** - Attach local files through the browser, write markdown references back to gbrain, and preview supported media from trusted roots.
-7. **Fast exact-slug search** - Resolve exact slugs before indexed search, preserve Unicode terms, and report search timing after render.
-8. **Performance-optimized large graph rendering** - Cull hidden nodes and filtered edges, use idle rendering, and limit animated edge work to relevant neighborhoods.
-9. **Settings and graph controls** - Configure display effects, cache limits, Yoda depth, clustering, filters, zoom, and history navigation.
-10. **Remote and dashboard operation** - Run locally, behind All Things Codex Dashboard, or on remote hosts with health/version checks and host-specific config.
+1. **Ask Yoda** - The core differentiator: node-scoped AI Q&A grounded in the selected page, graph-depth context, media hints, relationship evidence, and targeted `gbrain` retrieval.
+2. **Interactive entity graph exploration** - The main product surface: a star-cloud map for navigating `gbrain` entities with exact search, click-to-select, lazy neighbor loading, hover context, and drill-down from any node.
+3. **Relationship and backlink traversal** - The knowledge-graph workbench: inspect outgoing relationships, incoming backlinks, relationship labels, and connected slugs so AI reasoning paths can be followed and debugged.
+4. **Entity mutation from the UI** - More than a read-only viewer: edit tags, add timeline events, attach files, refresh embeddings, add/remove relationships, hide noisy nodes, and create new entities from one cockpit.
+5. **Media and document attachments** - Knowledge is not only text: attach, reference, preview, and serve trusted local or remote media alongside markdown pages and graph relationships.
+6. **Fast exact-slug and Unicode-aware search** - Built for real `gbrain` data: exact slugs resolve before indexed search, imported archive names stay usable, and non-English terms are preserved through search and navigation.
+7. **Autopilot memory tour** - A strong demo and discovery mode: browse important nodes without starting from a blank map, customize the playback list, loop through a plan, and continue gracefully through partial node loads.
+8. **Local caching** - Keeps the graph usable when `gbrain`, remote MCP, or media sources are slow: cache node content and media in the browser with a visible budget, usage readout, and one-click flush.
+9. **Performance-optimized large graph rendering** - Required once memory gets big: culling, idle rendering, filtered edge work, hidden-node behavior, and bounded animation keep dense graphs responsive.
+10. **Remote/dashboard operation and health checks** - Operational beyond one laptop: run through the local dashboard or remote hosts with version checks, health probes, host-specific config, and deployment verification.
 
 ## How Ask Yoda Works
 
-Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.97 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
+Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.111 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
 
 Under the hood, the server gathers the selected page with `gbrain get`, nearby relationships with graph/backlink queries, backlinks, targeted search snippets, media hints, and direct reads of likely related source nodes. It keeps the prompt focused on the selected node, relationship labels, summaries, and nearby slugs so the answer can cite concrete graph context without dumping raw command output. If the configured agent path is available, Memory Stargraph asks that local agent to produce the response. If the agent is unavailable or times out, the endpoint falls back to a concise GBrain-context response so the UI still gives an actionable answer.
 
@@ -71,7 +71,7 @@ The Ask Yoda **View Log** button opens a scrollable diagnostics window for the l
 
 ## Autopilot Plan
 
-Autopilot can play a generated list from the currently visible map or a manually edited list. The Auto list is read-only and is enabled by default. Turn Auto list off in the Plan window to edit the Manual plan, use **Fill Plan** to replace the manual list from visible nodes, or add blank entries and type a slug. Slug fields show cached matches after two characters; press Return for live GBrain search when the cached list is not enough. Delay seconds controls the pause after a node is loaded, while Timeline days controls the recency filter used when generating the list.
+Autopilot can play a generated list from the currently visible map or a manually edited list. The Auto list is read-only and is enabled by default. Turn Auto list off in the Plan window to edit the Manual plan, use **Fill** to replace the manual list from visible nodes, **Add** for blank entries, or **Clear** to empty the plan after confirmation. Slug fields show cached matches after two characters; press Return for live GBrain search when the cached list is not enough. Delay starts after the selected node fully loads, or after the 20-second partial-info fallback. - Days controls the recency filter used when generating the list.
 
 The chat panel stores the visible conversation in browser state for the current session. It does not create durable GBrain notes by itself; durable changes still go through explicit actions such as modifying markdown, adding relationships, tags, timeline events, or attachments.
 

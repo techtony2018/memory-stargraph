@@ -1,7 +1,6 @@
-const UI_VERSION = "V1.0.97";
+const UI_VERSION = "V1.0.111";
 const RELATIONSHIP_PAGE_SIZE = 10;
-const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
-const TOUR_DELAY_FALLBACK_MS = 10 * 1000;
+let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
@@ -52,6 +51,9 @@ const state = {
     toolbarPinned: false,
     planSlugs: readJsonSetting(PLANNED_PLAYBACK_KEY, []),
     planDraft: null,
+    fillPlanConfirming: false,
+    clearPlanConfirming: false,
+    partialTimeoutSlugs: new Set(),
     useAutoList: true,
     loop: true,
     delaySeconds: 5,
@@ -82,6 +84,9 @@ const state = {
 
 const canvas = document.getElementById("graphCanvas");
 const ctx = canvas.getContext("2d");
+const workspace = document.querySelector(".workspace");
+const graphCanvasWrap = document.querySelector(".graph-canvas-wrap");
+const detailPanel = document.querySelector(".detail-panel");
 const hoverLabel = document.getElementById("hoverLabel");
 const graphTooltip = document.getElementById("graphTooltip");
 const navStargraphButton = document.getElementById("navStargraphButton");
@@ -101,6 +106,7 @@ const lastRefresh = document.getElementById("lastRefresh");
 const flushCacheButton = document.getElementById("flushCacheButton");
 const minDegreeFilter = document.getElementById("minDegreeFilter");
 const newNodeButton = document.getElementById("newNodeButton");
+const mapViewButton = document.getElementById("mapViewButton");
 const mapAskYodaButton = document.getElementById("mapAskYodaButton");
 const filterDrawerHandle = document.getElementById("filterDrawerHandle");
 const mapFilterToggleButton = document.getElementById("mapFilterToggleButton");
@@ -123,10 +129,12 @@ const settingsCancelButton = document.getElementById("settingsCancelButton");
 const historyBackButton = document.getElementById("historyBackButton");
 const historyForwardButton = document.getElementById("historyForwardButton");
 const floatingHistoryBackButton = document.getElementById("floatingHistoryBackButton");
+const compactSelectionQuery = window.matchMedia("(max-width: 720px)");
 const floatingHistoryForwardButton = document.getElementById("floatingHistoryForwardButton");
 
 const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
+const selectionViewButton = document.getElementById("selectionViewButton");
 const selectionAskYodaButton = document.getElementById("selectionAskYodaButton");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
@@ -621,7 +629,7 @@ function updateSelectionHistoryControls() {
 
 function updateAskYodaButtons() {
   const hasSelection = Boolean(state.focusSlug);
-  [selectionAskYodaButton, mapAskYodaButton].forEach((button) => {
+  [selectionAskYodaButton, mapAskYodaButton, mapViewButton, selectionViewButton].forEach((button) => {
     if (!button) return;
     button.disabled = !hasSelection;
     button.setAttribute("aria-disabled", hasSelection ? "false" : "true");
@@ -706,7 +714,7 @@ async function showTourStop(index) {
   state.tour.pending = true;
   state.tour.index = (index + state.tour.slugs.length) % state.tour.slugs.length;
   const slug = state.tour.slugs[state.tour.index];
-  const recoveryTimer = window.setTimeout(() => clearTourPending(slug), 15000);
+  const recoveryTimer = window.setTimeout(() => clearTourPending(slug), tourNodeLoadTimeoutMs + 5000);
   const node = state.nodeMap.get(slug);
   if (!node) {
     window.clearTimeout(recoveryTimer);
@@ -715,21 +723,27 @@ async function showTourStop(index) {
   }
   hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
   updateTourControls();
-  let timedOut = false;
   try {
     const loadStep = (async () => {
-      await loadEntity(slug, { source: "system" });
+      let result;
+      try {
+        result = await loadEntity(slug, { source: "system" });
+      } catch (error) {
+        result = handleTourNodeError(slug, error);
+      }
+      if (result?.status === "partial" || result?.status === "error") {
+        handleTourNodeTimeout(slug);
+        return "timeout";
+      }
       await waitForTourSelectionLoad(slug);
       return "loaded";
     })();
     const timeoutStep = new Promise((resolve) => {
-      state.tour.timeoutTimer = window.setTimeout(() => handleTourNodeTimeout(slug), TOUR_NODE_LOAD_TIMEOUT_MS);
-      window.setTimeout(() => {
-        handleTourNodeTimeout(slug);
-        resolve("timeout");
-      }, TOUR_DELAY_FALLBACK_MS);
+      state.tour.timeoutTimer = window.setTimeout(() => {
+        resolve(handleTourNodeTimeout(slug));
+      }, tourNodeLoadTimeoutMs);
     });
-    timedOut = (await Promise.race([loadStep, timeoutStep])) === "timeout";
+    await Promise.race([loadStep, timeoutStep]);
   } finally {
     window.clearTimeout(recoveryTimer);
     if (state.tour.timeoutTimer) {
@@ -738,7 +752,7 @@ async function showTourStop(index) {
     }
     clearTourPending(slug);
   }
-  if (state.tour.active && !timedOut) scheduleNextTourStop();
+  if (state.tour.active) scheduleNextTourStop();
 }
 
 function clearTourPending(slug = state.focusSlug) {
@@ -748,10 +762,17 @@ function clearTourPending(slug = state.focusSlug) {
 
 function handleTourNodeTimeout(slug) {
   const node = state.nodeMap.get(slug);
-  hoverLabel.textContent = `Autopilot timeout: skipped ${node?.label || slug}.`;
-  clearTourPending(slug);
-  if (state.tour.active) scheduleNextTourStop();
+  state.tour.partialTimeoutSlugs.add(slug);
+  hoverLabel.textContent = `Partial info loaded for ${node?.label || slug}, moving to next node`;
   return "timeout";
+}
+
+function handleTourNodeError(slug, error) {
+  const node = state.nodeMap.get(slug);
+  state.tour.partialTimeoutSlugs.add(slug);
+  hoverLabel.textContent = `Partial info loaded for ${node?.label || slug}, moving to next node`;
+  console.warn("Autopilot node load failed", slug, error);
+  return { status: "error", slug, error };
 }
 
 function selectionIsLoadedForTour(slug) {
@@ -867,11 +888,12 @@ function moveTour(delta) {
 
 function updateTourControls() {
   if (!tourButton) return;
+  const tourDocked = state.tour.active || state.tour.toolbarPinned;
   const stopText = `Autopilot ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}`;
   const modeText = state.tour.mode === "planned" ? "planned playback" : "automatic tour";
   const tooltip = state.tour.active ? `${stopText}. Click to pause ${modeText}.` : `Play ${state.tour.useAutoList ? "automatic tour" : plannedPlaybackSlugs().length ? "planned playback" : "automatic tour"}.`;
   if (autopilotFlyout) {
-    autopilotFlyout.hidden = !state.tour.active && !state.tour.toolbarPinned && !navAutopilotButton?.classList.contains("is-open");
+    autopilotFlyout.hidden = !tourDocked && !navAutopilotButton?.classList.contains("is-open");
   }
   tourButton.classList.toggle("is-active", state.tour.active);
   tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
@@ -883,13 +905,9 @@ function updateTourControls() {
     : '<svg class="autopilot-icon play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>';
   if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
   tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-active", state.tour.active);
-  if (autopilotFlyout && state.tour.active) {
-    autopilotFlyout.style.left = "50%";
-    autopilotFlyout.style.right = "auto";
-    autopilotFlyout.style.top = "18px";
-    autopilotFlyout.style.transform = "translateX(-50%)";
-  } else if (autopilotFlyout) {
-    autopilotFlyout.style.transform = "";
+  tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-docked", tourDocked);
+  if (autopilotFlyout && !autopilotFlyout.hidden) {
+    positionFloatingPanel(autopilotFlyout, navAutopilotButton);
   }
   updateTourCounter();
   updateNavModeState();
@@ -1015,14 +1033,7 @@ function positionFloatingPanel(panel, button) {
     panel.style.transform = "";
     return;
   }
-  if (panel === autopilotFlyout && state.tour.active) {
-    panel.style.left = "50%";
-    panel.style.right = "auto";
-    panel.style.top = "18px";
-    panel.style.transform = "translateX(-50%)";
-    return;
-  }
-  if (panel === autopilotFlyout && state.tour.toolbarPinned) {
+  if (panel === autopilotFlyout && (state.tour.active || state.tour.toolbarPinned)) {
     panel.style.left = "50%";
     panel.style.right = "auto";
     panel.style.top = "18px";
@@ -1058,6 +1069,22 @@ function updateNavModeState() {
   navSettingsButton?.classList.toggle("is-flashing", settingsOpen);
   navAutopilotButton?.classList.toggle("is-active", state.tour.active || autopilotOpen);
   navAutopilotButton?.classList.toggle("is-flashing", state.tour.active || autopilotOpen);
+}
+
+function updateResponsiveSelectionPlacement() {
+  if (!detailPanel || !workspace || !graphCanvasWrap) return;
+  const compact = compactSelectionQuery.matches;
+  if (compact) {
+    if (detailPanel.parentElement !== graphCanvasWrap) {
+      graphCanvasWrap.appendChild(detailPanel);
+    }
+    detailPanel.classList.add("is-map-overlay");
+  } else {
+    if (detailPanel.parentElement !== workspace) {
+      workspace.appendChild(detailPanel);
+    }
+    detailPanel.classList.remove("is-map-overlay");
+  }
 }
 
 function isHidden(slug) {
@@ -1102,9 +1129,11 @@ function pickSearchFocus(graph, query) {
   if (!normalizedQuery) return null;
   const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
   const coverage = graph?.source?.coverage || {};
-  const searchSlugs = new Set(normalizeSearchText(coverage.last_search_query || "") === normalizedQuery
+  const orderedSearchSlugs = normalizeSearchText(coverage.last_search_query || "") === normalizedQuery
     ? coverage.search_slugs || []
-    : []);
+    : [];
+  const searchSlugs = new Set(orderedSearchSlugs);
+  const searchRank = new Map(orderedSearchSlugs.map((slug, index) => [slug, index]));
   const candidates = (graph.nodes || [])
     .filter((node) => !isHidden(node.slug) && (searchSlugs.has(node.slug) || matchesQuery(node, normalizedQuery)))
     .map((node) => {
@@ -1115,7 +1144,8 @@ function pickSearchFocus(graph, query) {
       const phraseBoost = label.includes(normalizedQuery) || slug.includes(normalizedQuery) ? 50 : 0;
       const termBoost = queryTerms.every((term) => label.includes(term) || slug.includes(term)) ? 20 : 0;
       const backendBoost = searchSlugs.has(node.slug) ? 35 : 0;
-      return { node, score: exactBoost + phraseBoost + termBoost + backendBoost + categoryBoost + (node.degree || 0) };
+      const backendRankBoost = searchRank.has(node.slug) ? Math.max(0, 1000 - (searchRank.get(node.slug) || 0) * 20) : 0;
+      return { node, score: exactBoost + phraseBoost + termBoost + backendBoost + backendRankBoost + categoryBoost + (node.degree || 0) };
     })
     .sort((left, right) => right.score - left.score || (right.node.degree || 0) - (left.node.degree || 0));
   return candidates[0]?.node.slug || null;
@@ -3387,9 +3417,60 @@ function renderAutopilotPlanForm() {
   state.slugSelectorSearch.clear();
   const draft = planDraftSlugs();
 
+  const timingRow = document.createElement("div");
+  timingRow.className = "plan-timing-row";
+
+  const loopLabel = document.createElement("label");
+  loopLabel.className = "plan-toggle";
+  const loopInput = document.createElement("input");
+  loopInput.id = "plannedLoopToggle";
+  loopInput.type = "checkbox";
+  loopInput.checked = state.tour.loop;
+  loopInput.addEventListener("change", () => {
+    state.tour.loop = loopInput.checked;
+  });
+  loopLabel.append(loopInput, document.createTextNode("Loop"));
+  timingRow.appendChild(loopLabel);
+
+  const delayInput = document.createElement("input");
+  delayInput.id = "plannedDelaySeconds";
+  delayInput.type = "number";
+  delayInput.min = "1";
+  delayInput.max = "60";
+  delayInput.step = "1";
+  delayInput.value = String(state.tour.delaySeconds);
+  delayInput.addEventListener("input", () => {
+    state.tour.delaySeconds = Math.max(1, Math.min(60, Number.parseInt(delayInput.value, 10) || 5));
+  });
+  const delayField = document.createElement("label");
+  delayField.className = "operation-field plan-number-field has-tooltip";
+  delayField.dataset.tooltip = "Seconds to wait after the selected node is loaded, or after the 10-second load fallback.";
+  delayField.title = delayField.dataset.tooltip;
+  delayField.append(Object.assign(document.createElement("span"), { textContent: "Delay" }), delayInput);
+  timingRow.appendChild(delayField);
+
+  const daysInput = document.createElement("input");
+  daysInput.id = "timelineDaysInput";
+  daysInput.type = "number";
+  daysInput.min = "0";
+  daysInput.max = "7";
+  daysInput.step = "1";
+  daysInput.value = String(state.timelineDays);
+  daysInput.addEventListener("input", () => {
+    state.timelineDays = Math.max(0, Math.min(7, Number.parseInt(daysInput.value, 10) || 0));
+    updateTimelineLabel();
+    applyFilter();
+  });
+  const daysField = document.createElement("label");
+  daysField.className = "operation-field plan-number-field has-tooltip";
+  daysField.dataset.tooltip = "Recency filter used when generating an auto plan from visible map nodes. 0 means all time.";
+  daysField.title = daysField.dataset.tooltip;
+  daysField.append(Object.assign(document.createElement("span"), { textContent: "- Days" }), daysInput);
+  timingRow.appendChild(daysField);
+  modalForm.appendChild(timingRow);
+
   const controls = document.createElement("div");
   controls.className = "plan-controls";
-
   const autoLabel = document.createElement("label");
   autoLabel.className = "plan-toggle";
   const autoInput = document.createElement("input");
@@ -3407,58 +3488,7 @@ function renderAutopilotPlanForm() {
   tabLabel.className = "plan-tab-label";
   tabLabel.textContent = state.tour.useAutoList ? "Auto generated list" : "Manual plan";
   controls.appendChild(tabLabel);
-
-  const loopLabel = document.createElement("label");
-  loopLabel.className = "plan-toggle";
-  const loopInput = document.createElement("input");
-  loopInput.id = "plannedLoopToggle";
-  loopInput.type = "checkbox";
-  loopInput.checked = state.tour.loop;
-  loopInput.addEventListener("change", () => {
-    state.tour.loop = loopInput.checked;
-  });
-  loopLabel.append(loopInput, document.createTextNode("Loop"));
-  controls.appendChild(loopLabel);
   modalForm.appendChild(controls);
-
-  const timingRow = document.createElement("div");
-  timingRow.className = "plan-timing-row";
-  const delayInput = document.createElement("input");
-  delayInput.id = "plannedDelaySeconds";
-  delayInput.type = "number";
-  delayInput.min = "1";
-  delayInput.max = "60";
-  delayInput.step = "1";
-  delayInput.value = String(state.tour.delaySeconds);
-  delayInput.addEventListener("input", () => {
-    state.tour.delaySeconds = Math.max(1, Math.min(60, Number.parseInt(delayInput.value, 10) || 5));
-  });
-  const delayField = document.createElement("label");
-  delayField.className = "operation-field has-tooltip";
-  delayField.dataset.tooltip = "Seconds to wait after the selected node is loaded, or after the 10-second load fallback.";
-  delayField.title = delayField.dataset.tooltip;
-  delayField.append(Object.assign(document.createElement("span"), { textContent: "Delay seconds" }), delayInput);
-  timingRow.appendChild(delayField);
-
-  const daysInput = document.createElement("input");
-  daysInput.id = "timelineDaysInput";
-  daysInput.type = "number";
-  daysInput.min = "0";
-  daysInput.max = "7";
-  daysInput.step = "1";
-  daysInput.value = String(state.timelineDays);
-  daysInput.addEventListener("input", () => {
-    state.timelineDays = Math.max(0, Math.min(7, Number.parseInt(daysInput.value, 10) || 0));
-    updateTimelineLabel();
-    applyFilter();
-  });
-  const daysField = document.createElement("label");
-  daysField.className = "operation-field has-tooltip";
-  daysField.dataset.tooltip = "Recency filter used when generating an auto plan from visible map nodes. 0 means all time.";
-  daysField.title = daysField.dataset.tooltip;
-  daysField.append(Object.assign(document.createElement("span"), { textContent: "Timeline days" }), daysInput);
-  timingRow.appendChild(daysField);
-  modalForm.appendChild(timingRow);
 
   if (state.tour.useAutoList) {
     const autoList = document.createElement("div");
@@ -3485,20 +3515,93 @@ function renderAutopilotPlanForm() {
     return;
   }
 
+  const actionRow = document.createElement("div");
+  actionRow.className = "plan-action-row";
+
   const fillButton = document.createElement("button");
   fillButton.id = "fillPlanButton";
   fillButton.className = "ghost-button compact-button has-tooltip";
   fillButton.type = "button";
-  fillButton.textContent = "Fill Plan";
+  fillButton.textContent = "Fill";
   fillButton.dataset.tooltip = "Click to erase current autopilot list and generate a new one based on nodes visible in the map.";
   fillButton.title = fillButton.dataset.tooltip;
   fillButton.addEventListener("click", () => {
-    const confirmed = window.confirm("This will fully erase current autopilot plan and generate a new one based on nodes visible in the map, are you sure?");
-    if (!confirmed) return;
-    draft.splice(0, draft.length, ...autoPlanSlugs());
+    state.tour.fillPlanConfirming = true;
+    state.tour.clearPlanConfirming = false;
     renderAutopilotPlanForm();
   });
-  modalForm.appendChild(fillButton);
+  actionRow.appendChild(fillButton);
+
+  const addCurrent = document.createElement("button");
+  addCurrent.id = "addCurrentPlanNodeButton";
+  addCurrent.className = "ghost-button compact-button";
+  addCurrent.type = "button";
+  addCurrent.textContent = "Add";
+  addCurrent.addEventListener("click", () => {
+    draft.push("");
+    renderAutopilotPlanForm();
+  });
+  actionRow.appendChild(addCurrent);
+
+  const clearButton = document.createElement("button");
+  clearButton.id = "clearPlanButton";
+  clearButton.className = "ghost-button compact-button";
+  clearButton.type = "button";
+  clearButton.textContent = "Clear";
+  clearButton.addEventListener("click", () => {
+    state.tour.clearPlanConfirming = true;
+    state.tour.fillPlanConfirming = false;
+    renderAutopilotPlanForm();
+  });
+  actionRow.appendChild(clearButton);
+  modalForm.appendChild(actionRow);
+
+  if (state.tour.fillPlanConfirming || state.tour.clearPlanConfirming) {
+    const isClearConfirm = state.tour.clearPlanConfirming;
+    const confirmPanel = document.createElement("section");
+    confirmPanel.className = "plan-confirm-dialog";
+    confirmPanel.setAttribute("role", "alertdialog");
+    confirmPanel.setAttribute("aria-labelledby", "planConfirmTitle");
+    confirmPanel.setAttribute("aria-describedby", "planConfirmMessage");
+
+    const title = document.createElement("h4");
+    title.id = "planConfirmTitle";
+    title.textContent = "Warning";
+    const message = document.createElement("p");
+    message.id = "planConfirmMessage";
+    message.textContent = isClearConfirm
+      ? "This will fully erase current autopilot plan, are you sure?"
+      : "This will fully erase current autopilot plan and generate a new one based on nodes visible in the map, are you sure?";
+
+    const actions = document.createElement("div");
+    actions.className = "plan-confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost-button compact-button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      state.tour.fillPlanConfirming = false;
+      state.tour.clearPlanConfirming = false;
+      renderAutopilotPlanForm();
+    });
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "ghost-button compact-button primary";
+    confirm.textContent = isClearConfirm ? "Clear" : "Generate";
+    confirm.addEventListener("click", () => {
+      if (isClearConfirm) {
+        draft.splice(0, draft.length);
+      } else {
+        draft.splice(0, draft.length, ...autoPlanSlugs());
+      }
+      state.tour.fillPlanConfirming = false;
+      state.tour.clearPlanConfirming = false;
+      renderAutopilotPlanForm();
+    });
+    actions.append(cancel, confirm);
+    confirmPanel.append(title, message, actions);
+    modalForm.appendChild(confirmPanel);
+  }
 
   const list = document.createElement("div");
   list.className = "plan-list";
@@ -3506,13 +3609,13 @@ function renderAutopilotPlanForm() {
   if (!draft.length) {
     const empty = document.createElement("p");
     empty.className = "operation-empty";
-    empty.textContent = "No planned nodes. Fill Plan or add a new entry.";
+    empty.textContent = "No planned nodes. Fill or Add.";
     list.appendChild(empty);
   }
   draft.forEach((slug, index) => {
     const row = document.createElement("div");
     row.className = "plan-row";
-    if (slug && !isValidPlanSlug(slug)) {
+    if (slug && !state.tour.partialTimeoutSlugs.has(slug) && !isValidPlanSlug(slug)) {
       row.classList.add("is-invalid");
       row.title = "Node invalid, please check!";
     }
@@ -3529,7 +3632,11 @@ function renderAutopilotPlanForm() {
       value: slug,
       placeholder: "Type two characters; press Return for live search",
       onInput: (value) => {
-        draft[index] = value.trim();
+        const nextSlug = value.trim();
+        if (draft[index] && draft[index] !== nextSlug) {
+          state.tour.partialTimeoutSlugs.delete(draft[index]);
+        }
+        draft[index] = nextSlug;
       },
     });
     row.appendChild(input.closest(".operation-field"));
@@ -3570,16 +3677,7 @@ function renderAutopilotPlanForm() {
     list.appendChild(row);
   });
 
-  const addCurrent = document.createElement("button");
-  addCurrent.id = "addCurrentPlanNodeButton";
-  addCurrent.className = "ghost-button compact-button";
-  addCurrent.type = "button";
-  addCurrent.textContent = "+ New Entry";
-  addCurrent.addEventListener("click", () => {
-    draft.push("");
-    renderAutopilotPlanForm();
-  });
-  modalForm.append(addCurrent, list);
+  modalForm.appendChild(list);
 }
 
 function renderNewNodeForm() {
@@ -3752,7 +3850,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     state.tour.planDraft = [...state.tour.planSlugs];
     modalTitle.textContent = "Autopilot Plan";
     modalKicker.textContent = "Autopilot";
-    modalPrimaryButton.textContent = "OK";
+    modalPrimaryButton.textContent = "Play";
     modalCancelButton.textContent = "Cancel";
     modalMessage.textContent = "";
     modalEditor.hidden = true;
@@ -4139,9 +4237,11 @@ async function runModalPrimaryAction() {
     state.tour.planDraft = null;
     state.tour.slugs = state.tour.useAutoList ? autoPlanSlugs() : plannedPlaybackSlugs();
     state.tour.mode = state.tour.useAutoList ? "auto" : state.tour.slugs.length ? "planned" : "auto";
+    state.tour.index = 0;
     updateTourControls();
     closeModal();
     showFloatingPanel(autopilotFlyout, navAutopilotButton);
+    await startPlannedPlayback();
     return;
   }
   if (action === "timeline-view") {
@@ -4414,7 +4514,7 @@ modalConfirmInput.addEventListener("input", () => {
 });
 
 async function loadEntity(slug, options = {}) {
-  if (isHidden(slug)) return;
+  if (isHidden(slug)) return { status: "hidden", slug };
   const busyToken = beginBusyOperation("Loading view");
   let directBusyToken = null;
   if (options.source !== "search" && options.source !== "system") {
@@ -4450,10 +4550,20 @@ async function loadEntity(slug, options = {}) {
       setHover(slug);
     }
     await ensureExpanded(slug);
-    if (loadId !== state.entityLoadId) return;
+    if (loadId !== state.entityLoadId) return { status: "stale", slug };
     const response = await apiGet(`/api/entity/${encodeURIComponent(slug)}`);
-    if (!response.ok) return;
-    if (loadId !== state.entityLoadId) return;
+    if (!response.ok) {
+      const requested = requestedNode || state.nodeMap.get(slug);
+      state.focusSlug = slug;
+      updateAskYodaButtons();
+      detailTitle.textContent = requested?.label || slug;
+      if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
+      detailType.textContent = `${requested?.category || requested?.type || "entity"} · partial info`;
+      detailSummary.textContent = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}.`;
+      setHover(slug);
+      return { status: "partial", slug, httpStatus: response.status };
+    }
+    if (loadId !== state.entityLoadId) return { status: "stale", slug };
     const payload = response.data;
     const { entity, neighbors, second_ring: secondRing, source } = payload;
     state.focusSlug = entity.slug;
@@ -4536,6 +4646,7 @@ async function loadEntity(slug, options = {}) {
     detailSecondRing.appendChild(empty);
   }
     setHover(slug);
+    return { status: "loaded", slug: entity.slug };
   } finally {
     endBusyOperation(directBusyToken);
     endBusyOperation(busyToken);
@@ -4662,7 +4773,12 @@ function bindEvents() {
 
   navAutopilotButton?.addEventListener("click", (event) => {
     event.stopPropagation();
-    toggleFloatingPanel(autopilotFlyout, navAutopilotButton);
+    if (state.tour.active || state.tour.toolbarPinned) {
+      stopTour();
+      setFlyoutOpen(autopilotFlyout, navAutopilotButton, false);
+      return;
+    }
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
   });
 
   navSettingsButton?.addEventListener("click", (event) => {
@@ -4683,6 +4799,10 @@ function bindEvents() {
     showFloatingPanel(settingsFlyout, navSettingsButton);
   });
 
+  settingsFlyout?.addEventListener("mouseleave", () => {
+    setFlyoutOpen(settingsFlyout, navSettingsButton, false);
+  });
+
   settingsOkButton?.addEventListener("click", applySettingsFromControls);
   settingsCancelButton?.addEventListener("click", cancelSettingsChanges);
   flushCacheButton?.addEventListener("click", flushNodeCache);
@@ -4701,8 +4821,14 @@ function bindEvents() {
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
   });
+  selectionViewButton?.addEventListener("click", () => {
+    if (state.focusSlug) void openNodeModal("view", state.focusSlug);
+  });
   mapAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
+  });
+  mapViewButton?.addEventListener("click", () => {
+    if (state.focusSlug) void openNodeModal("view", state.focusSlug);
   });
   detailTitle?.addEventListener("dblclick", () => {
     if (state.focusSlug) void openNodeModal("view", state.focusSlug);
@@ -5176,11 +5302,18 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
+    updateResponsiveSelectionPlacement();
     resizeCanvas();
     if (state.graph) {
       buildRuntimeGraph(state.graph);
     }
   });
+
+  if (typeof compactSelectionQuery.addEventListener === "function") {
+    compactSelectionQuery.addEventListener("change", updateResponsiveSelectionPlacement);
+  } else if (typeof compactSelectionQuery.addListener === "function") {
+    compactSelectionQuery.addListener(updateResponsiveSelectionPlacement);
+  }
 }
 
 async function fetchGraph(endpoint = "/api/graph", options = {}) {
@@ -5216,6 +5349,7 @@ async function fetchHidden() {
 
 async function init() {
   bindEvents();
+  updateResponsiveSelectionPlacement();
   uiVersion.textContent = UI_VERSION;
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
   if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
