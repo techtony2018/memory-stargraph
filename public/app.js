@@ -1,6 +1,7 @@
-const UI_VERSION = "V1.0.94";
+const UI_VERSION = "V1.0.97";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TOUR_NODE_LOAD_TIMEOUT_MS = 60 * 1000;
+const TOUR_DELAY_FALLBACK_MS = 10 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
@@ -48,9 +49,11 @@ const state = {
     timer: null,
     pending: false,
     timeoutTimer: null,
+    toolbarPinned: false,
     planSlugs: readJsonSetting(PLANNED_PLAYBACK_KEY, []),
     planDraft: null,
-    loop: false,
+    useAutoList: true,
+    loop: true,
     delaySeconds: 5,
   },
   selectionHistory: { slugs: [], index: -1, navigating: false },
@@ -680,8 +683,16 @@ function buildTourSlugs() {
   return diverse;
 }
 
+function autoPlanSlugs() {
+  return buildTourSlugs().slice(0, 14);
+}
+
+function isValidPlanSlug(slug) {
+  return Boolean(slug && state.nodeMap.has(slug) && !isHidden(slug));
+}
+
 function plannedPlaybackSlugs() {
-  return state.tour.planSlugs.filter((slug) => state.nodeMap.has(slug) && !isHidden(slug));
+  return state.tour.planSlugs.filter((slug) => isValidPlanSlug(slug));
 }
 
 function persistPlannedPlayback() {
@@ -713,7 +724,10 @@ async function showTourStop(index) {
     })();
     const timeoutStep = new Promise((resolve) => {
       state.tour.timeoutTimer = window.setTimeout(() => handleTourNodeTimeout(slug), TOUR_NODE_LOAD_TIMEOUT_MS);
-      window.setTimeout(() => resolve("timeout"), TOUR_NODE_LOAD_TIMEOUT_MS);
+      window.setTimeout(() => {
+        handleTourNodeTimeout(slug);
+        resolve("timeout");
+      }, TOUR_DELAY_FALLBACK_MS);
     });
     timedOut = (await Promise.race([loadStep, timeoutStep])) === "timeout";
   } finally {
@@ -775,6 +789,7 @@ function scheduleNextTourStop() {
 function stopTour() {
   state.tour.active = false;
   state.tour.mode = "auto";
+  state.tour.toolbarPinned = false;
   if (state.tour.timer) {
     window.clearTimeout(state.tour.timer);
     state.tour.timer = null;
@@ -789,6 +804,7 @@ function stopTour() {
 
 function pauseTour() {
   state.tour.active = false;
+  state.tour.toolbarPinned = true;
   if (state.tour.timer) {
     window.clearTimeout(state.tour.timer);
     state.tour.timer = null;
@@ -806,22 +822,24 @@ async function startTour() {
   if (!state.tour.slugs.length) return;
   state.tour.mode = "auto";
   state.tour.active = true;
+  state.tour.toolbarPinned = true;
   updateTourControls();
   await showTourStop(state.tour.index || 0);
 }
 
 async function startPlannedPlayback() {
-  const planned = plannedPlaybackSlugs();
+  const planned = state.tour.useAutoList ? autoPlanSlugs() : plannedPlaybackSlugs();
   if (!planned.length) {
     state.tour.slugs = buildTourSlugs();
     if (!state.tour.slugs.length) return;
     state.tour.mode = "auto";
   } else {
     state.tour.slugs = planned;
-    state.tour.mode = "planned";
+    state.tour.mode = state.tour.useAutoList ? "auto" : "planned";
   }
   state.tour.index = Math.max(0, Math.min(state.tour.index || 0, state.tour.slugs.length - 1));
   state.tour.active = true;
+  state.tour.toolbarPinned = true;
   updateTourControls();
   await showTourStop(state.tour.index);
 }
@@ -835,12 +853,15 @@ function toggleTour() {
 }
 
 function moveTour(delta) {
-  if (!state.tour.slugs.length || state.tour.mode === "planned") {
-    const planned = plannedPlaybackSlugs();
+  const wasActive = state.tour.active;
+  if (!state.tour.slugs.length || state.tour.mode === "planned" || state.tour.useAutoList) {
+    const planned = state.tour.useAutoList ? autoPlanSlugs() : plannedPlaybackSlugs();
     state.tour.slugs = planned.length ? planned : buildTourSlugs();
-    state.tour.mode = planned.length ? "planned" : "auto";
+    state.tour.mode = state.tour.useAutoList || !planned.length ? "auto" : "planned";
   }
   pauseTour();
+  state.tour.active = wasActive;
+  updateTourControls();
   void showTourStop(state.tour.index + delta);
 }
 
@@ -848,9 +869,9 @@ function updateTourControls() {
   if (!tourButton) return;
   const stopText = `Autopilot ${state.tour.index + 1 || 1}/${Math.max(1, state.tour.slugs.length)}`;
   const modeText = state.tour.mode === "planned" ? "planned playback" : "automatic tour";
-  const tooltip = state.tour.active ? `${stopText}. Click to pause ${modeText}.` : `Play ${plannedPlaybackSlugs().length ? "planned playback" : "automatic tour"}.`;
+  const tooltip = state.tour.active ? `${stopText}. Click to pause ${modeText}.` : `Play ${state.tour.useAutoList ? "automatic tour" : plannedPlaybackSlugs().length ? "planned playback" : "automatic tour"}.`;
   if (autopilotFlyout) {
-    autopilotFlyout.hidden = !state.tour.active && !navAutopilotButton?.classList.contains("is-open");
+    autopilotFlyout.hidden = !state.tour.active && !state.tour.toolbarPinned && !navAutopilotButton?.classList.contains("is-open");
   }
   tourButton.classList.toggle("is-active", state.tour.active);
   tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
@@ -860,7 +881,7 @@ function updateTourControls() {
   tourButton.innerHTML = state.tour.active
     ? '<svg class="autopilot-icon pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>'
     : '<svg class="autopilot-icon play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>';
-  if (metricMode) metricMode.textContent = state.tour.active ? (state.tour.mode === "planned" ? "Planned" : "Autopilot") : "Manual";
+  if (metricMode) metricMode.textContent = state.tour.active ? "Autopilot" : "Manual";
   tourButton.closest(".autopilot-flyout")?.classList.toggle("tour-active", state.tour.active);
   if (autopilotFlyout && state.tour.active) {
     autopilotFlyout.style.left = "50%";
@@ -878,7 +899,7 @@ function updateTourCounter(_slug = state.focusSlug) {
   if (!tourCounter) return;
   const total = state.tour.slugs.length;
   const current = total ? state.tour.index + 1 : 0;
-  const plannedTotal = plannedPlaybackSlugs().length;
+  const plannedTotal = state.tour.useAutoList ? autoPlanSlugs().length : plannedPlaybackSlugs().length;
   tourCounter.textContent = state.tour.active || total ? `${current}/${total}` : `0/${plannedTotal || 0}`;
   tourCounter.hidden = false;
 }
@@ -966,6 +987,9 @@ function hideFloatingPanels(exceptPanel = null) {
       if (panel === autopilotFlyout && state.tour.active) {
         return;
       }
+      if (panel === autopilotFlyout && state.tour.toolbarPinned) {
+        return;
+      }
       setFlyoutOpen(panel, button, false);
     }
   });
@@ -992,6 +1016,13 @@ function positionFloatingPanel(panel, button) {
     return;
   }
   if (panel === autopilotFlyout && state.tour.active) {
+    panel.style.left = "50%";
+    panel.style.right = "auto";
+    panel.style.top = "18px";
+    panel.style.transform = "translateX(-50%)";
+    return;
+  }
+  if (panel === autopilotFlyout && state.tour.toolbarPinned) {
     panel.style.left = "50%";
     panel.style.right = "auto";
     panel.style.top = "18px";
@@ -2998,6 +3029,11 @@ function closeModalFromControl() {
     void returnFromYodaLog();
     return;
   }
+  if (state.modalAction?.action === "tour-plan") {
+    closeModal();
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
+    return;
+  }
   closeModal();
 }
 
@@ -3353,18 +3389,24 @@ function renderAutopilotPlanForm() {
 
   const controls = document.createElement("div");
   controls.className = "plan-controls";
-  const fillButton = document.createElement("button");
-  fillButton.id = "fillPlanButton";
-  fillButton.className = "ghost-button compact-button";
-  fillButton.type = "button";
-  fillButton.textContent = "Fill Plan";
-  fillButton.addEventListener("click", () => {
-    if (!draft.length) {
-      draft.push(...buildTourSlugs().slice(0, 14));
-      renderAutopilotPlanForm();
-    }
+
+  const autoLabel = document.createElement("label");
+  autoLabel.className = "plan-toggle";
+  const autoInput = document.createElement("input");
+  autoInput.id = "autoPlanToggle";
+  autoInput.type = "checkbox";
+  autoInput.checked = state.tour.useAutoList;
+  autoInput.addEventListener("change", () => {
+    state.tour.useAutoList = autoInput.checked;
+    renderAutopilotPlanForm();
   });
-  controls.appendChild(fillButton);
+  autoLabel.append(autoInput, document.createTextNode("Auto list"));
+  controls.appendChild(autoLabel);
+
+  const tabLabel = document.createElement("span");
+  tabLabel.className = "plan-tab-label";
+  tabLabel.textContent = state.tour.useAutoList ? "Auto generated list" : "Manual plan";
+  controls.appendChild(tabLabel);
 
   const loopLabel = document.createElement("label");
   loopLabel.className = "plan-toggle";
@@ -3379,6 +3421,8 @@ function renderAutopilotPlanForm() {
   controls.appendChild(loopLabel);
   modalForm.appendChild(controls);
 
+  const timingRow = document.createElement("div");
+  timingRow.className = "plan-timing-row";
   const delayInput = document.createElement("input");
   delayInput.id = "plannedDelaySeconds";
   delayInput.type = "number";
@@ -3389,7 +3433,12 @@ function renderAutopilotPlanForm() {
   delayInput.addEventListener("input", () => {
     state.tour.delaySeconds = Math.max(1, Math.min(60, Number.parseInt(delayInput.value, 10) || 5));
   });
-  appendField(modalForm, "Delay seconds", delayInput);
+  const delayField = document.createElement("label");
+  delayField.className = "operation-field has-tooltip";
+  delayField.dataset.tooltip = "Seconds to wait after the selected node is loaded, or after the 10-second load fallback.";
+  delayField.title = delayField.dataset.tooltip;
+  delayField.append(Object.assign(document.createElement("span"), { textContent: "Delay seconds" }), delayInput);
+  timingRow.appendChild(delayField);
 
   const daysInput = document.createElement("input");
   daysInput.id = "timelineDaysInput";
@@ -3403,7 +3452,53 @@ function renderAutopilotPlanForm() {
     updateTimelineLabel();
     applyFilter();
   });
-  appendField(modalForm, "Timeline days", daysInput);
+  const daysField = document.createElement("label");
+  daysField.className = "operation-field has-tooltip";
+  daysField.dataset.tooltip = "Recency filter used when generating an auto plan from visible map nodes. 0 means all time.";
+  daysField.title = daysField.dataset.tooltip;
+  daysField.append(Object.assign(document.createElement("span"), { textContent: "Timeline days" }), daysInput);
+  timingRow.appendChild(daysField);
+  modalForm.appendChild(timingRow);
+
+  if (state.tour.useAutoList) {
+    const autoList = document.createElement("div");
+    autoList.className = "plan-list plan-list-readonly";
+    const autoSlugs = autoPlanSlugs();
+    if (!autoSlugs.length) {
+      const empty = document.createElement("p");
+      empty.className = "operation-empty";
+      empty.textContent = "No visible nodes available for the auto list.";
+      autoList.appendChild(empty);
+    }
+    autoSlugs.forEach((slug, index) => {
+      const row = document.createElement("div");
+      row.className = "plan-row plan-row-readonly";
+      const indexLabel = document.createElement("span");
+      indexLabel.className = "plan-index";
+      indexLabel.textContent = String(index + 1);
+      const link = createEntityMarkdownLink(slug, labelForSlug(slug));
+      link.className = "relationship-source-link";
+      row.append(indexLabel, link);
+      autoList.appendChild(row);
+    });
+    modalForm.appendChild(autoList);
+    return;
+  }
+
+  const fillButton = document.createElement("button");
+  fillButton.id = "fillPlanButton";
+  fillButton.className = "ghost-button compact-button has-tooltip";
+  fillButton.type = "button";
+  fillButton.textContent = "Fill Plan";
+  fillButton.dataset.tooltip = "Click to erase current autopilot list and generate a new one based on nodes visible in the map.";
+  fillButton.title = fillButton.dataset.tooltip;
+  fillButton.addEventListener("click", () => {
+    const confirmed = window.confirm("This will fully erase current autopilot plan and generate a new one based on nodes visible in the map, are you sure?");
+    if (!confirmed) return;
+    draft.splice(0, draft.length, ...autoPlanSlugs());
+    renderAutopilotPlanForm();
+  });
+  modalForm.appendChild(fillButton);
 
   const list = document.createElement("div");
   list.className = "plan-list";
@@ -3411,12 +3506,16 @@ function renderAutopilotPlanForm() {
   if (!draft.length) {
     const empty = document.createElement("p");
     empty.className = "operation-empty";
-    empty.textContent = "No planned nodes. Fill Plan or add the selected node.";
+    empty.textContent = "No planned nodes. Fill Plan or add a new entry.";
     list.appendChild(empty);
   }
   draft.forEach((slug, index) => {
     const row = document.createElement("div");
     row.className = "plan-row";
+    if (slug && !isValidPlanSlug(slug)) {
+      row.classList.add("is-invalid");
+      row.title = "Node invalid, please check!";
+    }
     row.draggable = true;
     row.dataset.index = String(index);
     const handle = document.createElement("span");
@@ -3439,10 +3538,10 @@ function renderAutopilotPlanForm() {
     addButton.className = "relationship-icon-button plan-insert-button";
     addButton.type = "button";
     addButton.textContent = "+";
-    addButton.title = "Insert selected node after this row";
-    addButton.setAttribute("aria-label", "Insert selected node into plan");
+    addButton.title = "Insert blank entry below this row";
+    addButton.setAttribute("aria-label", "Insert blank plan entry");
     addButton.addEventListener("click", () => {
-      draft.splice(index + 1, 0, state.focusSlug || "");
+      draft.splice(index + 1, 0, "");
       renderAutopilotPlanForm();
     });
     const removeButton = document.createElement("button");
@@ -3475,9 +3574,9 @@ function renderAutopilotPlanForm() {
   addCurrent.id = "addCurrentPlanNodeButton";
   addCurrent.className = "ghost-button compact-button";
   addCurrent.type = "button";
-  addCurrent.textContent = "+ Current";
+  addCurrent.textContent = "+ New Entry";
   addCurrent.addEventListener("click", () => {
-    draft.push(state.focusSlug || "");
+    draft.push("");
     renderAutopilotPlanForm();
   });
   modalForm.append(addCurrent, list);
@@ -3655,7 +3754,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Autopilot";
     modalPrimaryButton.textContent = "OK";
     modalCancelButton.textContent = "Cancel";
-    modalMessage.textContent = "Edit planned playback order. Type two characters for cached slug suggestions; press Return for live GBrain search.";
+    modalMessage.textContent = "";
     modalEditor.hidden = true;
     modalForm.hidden = false;
     operationModal.classList.add("compact-modal");
@@ -4038,10 +4137,11 @@ async function runModalPrimaryAction() {
     state.tour.planSlugs = planDraftSlugs().map((slug) => String(slug || "").trim()).filter(Boolean);
     persistPlannedPlayback();
     state.tour.planDraft = null;
-    state.tour.slugs = plannedPlaybackSlugs();
-    state.tour.mode = state.tour.slugs.length ? "planned" : "auto";
+    state.tour.slugs = state.tour.useAutoList ? autoPlanSlugs() : plannedPlaybackSlugs();
+    state.tour.mode = state.tour.useAutoList ? "auto" : state.tour.slugs.length ? "planned" : "auto";
     updateTourControls();
     closeModal();
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
     return;
   }
   if (action === "timeline-view") {
@@ -4709,6 +4809,8 @@ function bindEvents() {
   });
 
   tourPlanButton?.addEventListener("click", () => {
+    state.tour.toolbarPinned = true;
+    showFloatingPanel(autopilotFlyout, navAutopilotButton);
     void openNodeModal("tour-plan", state.focusSlug || "");
   });
   tourButton?.addEventListener("click", () => {
@@ -4784,6 +4886,7 @@ function bindEvents() {
     if (state.modalAction?.action === "tour-plan") {
       state.tour.planDraft = null;
       closeModal();
+      showFloatingPanel(autopilotFlyout, navAutopilotButton);
       return;
     }
     if (state.modalAction?.action === "remove-link") {

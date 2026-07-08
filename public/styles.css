@@ -1776,7 +1776,7 @@ h2 {
 }
 
 .plan-controls {
-  grid-template-columns: auto auto;
+  grid-template-columns: auto auto auto;
   justify-content: start;
   align-items: center;
 }
@@ -1788,6 +1788,20 @@ h2 {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.plan-tab-label {
+  color: #67e8f9;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.plan-timing-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .plan-list {
@@ -1805,6 +1819,35 @@ h2 {
   cursor: grab;
   font-size: 12px;
   letter-spacing: -0.08em;
+}
+
+.plan-row.is-invalid {
+  border: 1px solid rgba(255, 105, 135, 0.54);
+  background: rgba(127, 29, 29, 0.18);
+  box-shadow: 0 0 18px rgba(255, 105, 135, 0.18);
+}
+
+.plan-row.is-invalid input {
+  color: #fecdd3;
+  border-color: rgba(255, 105, 135, 0.7);
+}
+
+.plan-row-readonly {
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+}
+
+.plan-index {
+  color: rgba(103, 232, 249, 0.72);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.plan-list-readonly .relationship-source-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .operation-choice-grid {
@@ -2154,6 +2197,7 @@ h2 {
   --pink: #ec4899;
   --orange: #fb923c;
   --hud-border: rgba(56, 189, 248, 0.34);
+  --hud-stroke: linear-gradient(135deg, rgba(165, 243, 252, 0.96), rgba(56, 189, 248, 0.68) 28%, rgba(168, 85, 247, 0.46) 50%, rgba(56, 189, 248, 0.72) 72%, rgba(165, 243, 252, 0.96));
   --hud-glow: 0 0 22px rgba(34, 211, 238, 0.22), 0 0 54px rgba(59, 130, 246, 0.13);
   --chamfer: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
 }
@@ -2224,17 +2268,6 @@ body::after {
   pointer-events: none;
   border: 1px solid rgba(56, 189, 248, 0.12);
   clip-path: var(--chamfer);
-}
-
-.topbar::after,
-.modal-panel::after {
-  background:
-    linear-gradient(135deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.62) 78%, transparent 84%),
-    linear-gradient(225deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.58) 78%, transparent 84%);
-  box-shadow:
-    inset 16px -16px 26px rgba(34, 211, 238, 0.08),
-    inset -16px -16px 26px rgba(34, 211, 238, 0.08),
-    0 0 24px rgba(34, 211, 238, 0.16);
 }
 
 .brand-lockup {
@@ -2872,6 +2905,53 @@ body::after {
     grid-template-columns: 72px minmax(0, 1fr);
   }
 
+  .graph-canvas-wrap {
+    min-height: clamp(520px, 58dvh, 660px);
+  }
+
+  #graphCanvas {
+    height: clamp(520px, 58dvh, 660px);
+  }
+
+  .graph-brand-row {
+    grid-template-columns: minmax(20px, 1fr) auto minmax(76px, 1fr);
+    gap: 8px;
+  }
+
+  .graph-wordmark-link {
+    min-width: min(300px, 54vw);
+    min-height: 52px;
+    padding: 6px 14px;
+  }
+
+  .graph-wordmark {
+    width: min(260px, 48vw);
+    height: 36px;
+  }
+
+  .graph-brand-row .ui-version {
+    margin-right: 18px;
+  }
+
+  .radar-widget {
+    width: 108px;
+    height: 108px;
+    right: 18px;
+    bottom: 54px;
+  }
+
+  .radar-stats {
+    width: 94px;
+    font-size: 8px;
+  }
+
+  .graph-canvas-wrap > .canvas-overlay,
+  .canvas-overlay {
+    left: 18px;
+    right: 138px;
+    bottom: 18px;
+  }
+
   .detail-panel {
     grid-column: 1 / -1;
   }
@@ -2925,8 +3005,51 @@ body::after {
   }
 
   .radar-widget {
-    width: 54px;
-    height: 54px;
+    width: 72px;
+    height: 72px;
+    right: 10px;
+    bottom: 44px;
+  }
+
+  .radar-stats {
+    width: 70px;
+    font-size: 6.5px;
+  }
+
+  .graph-canvas-wrap {
+    min-height: clamp(440px, 62dvh, 560px);
+  }
+
+  #graphCanvas {
+    height: clamp(440px, 62dvh, 560px);
+  }
+
+  .graph-brand-row {
+    grid-template-columns: minmax(0, 1fr) auto minmax(62px, 1fr);
+    gap: 6px;
+  }
+
+  .graph-wordmark-link {
+    min-width: min(230px, 58vw);
+    min-height: 44px;
+    padding: 4px 10px;
+  }
+
+  .graph-wordmark {
+    width: min(205px, 52vw);
+    height: 30px;
+  }
+
+  .graph-brand-row .ui-version {
+    margin-right: 10px;
+    font-size: 13px;
+  }
+
+  .graph-canvas-wrap > .canvas-overlay,
+  .canvas-overlay {
+    left: 10px;
+    right: 92px;
+    bottom: 12px;
   }
 }
 
@@ -2947,20 +3070,30 @@ body::after {
   filter: drop-shadow(0 0 9px rgba(34, 211, 238, 0.2)) drop-shadow(0 0 22px rgba(59, 130, 246, 0.12));
 }
 
+.topbar::after,
 .graph-panel::after,
 .detail-panel::after,
 .nav-rail::after,
-.floating-tool-panel::after {
+.floating-tool-panel::after,
+.modal-panel::after,
+.map-filter-panel::after {
   content: "";
   position: absolute;
   pointer-events: none;
   inset: 0;
+  z-index: 2;
+  padding: 2px;
   clip-path: var(--chamfer);
-  border: 1px solid rgba(103, 232, 249, 0.42);
-  background:
-    linear-gradient(135deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.62) 78%, transparent 84%),
-    linear-gradient(225deg, transparent 0 72%, rgba(34, 211, 238, 0.18) 74%, rgba(103, 232, 249, 0.58) 78%, transparent 84%);
-  opacity: 0.44;
+  background: var(--hud-stroke);
+  opacity: 1;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
   box-shadow:
     inset 0 0 18px rgba(34, 211, 238, 0.1),
     inset 16px -16px 26px rgba(34, 211, 238, 0.08),
@@ -3085,12 +3218,39 @@ body::after {
 }
 
 .graph-wordmark-link {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 10px 0 0;
+  min-width: min(340px, 48vw);
+  min-height: 58px;
+  padding: 7px 18px;
   grid-column: 2;
   justify-self: center;
+  border: 1px solid rgba(103, 232, 249, 0.42);
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.12), transparent 32%),
+    rgba(2, 8, 22, 0.68);
+  clip-path: var(--chamfer);
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.16), inset 0 0 20px rgba(34, 211, 238, 0.08);
+}
+
+.graph-wordmark-link::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  inset: 0;
+  padding: 2px;
+  background: var(--hud-stroke);
+  clip-path: var(--chamfer);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
 }
 
 .graph-brand-row {
@@ -3104,6 +3264,7 @@ body::after {
 .graph-brand-row .ui-version {
   grid-column: 3;
   justify-self: end;
+  margin-right: clamp(14px, 2vw, 28px);
 }
 
 .graph-wordmark {
@@ -3120,7 +3281,21 @@ body::after {
 }
 
 .graph-canvas-wrap::after {
-  border-color: rgba(103, 232, 249, 0.72);
+  border: 0;
+  padding: 2px;
+  background:
+    linear-gradient(135deg, rgba(165, 243, 252, 1), rgba(56, 189, 248, 0.86) 24%, rgba(56, 189, 248, 0.34) 44%, rgba(56, 189, 248, 0.72) 72%, rgba(165, 243, 252, 1)),
+    linear-gradient(45deg, transparent 0 calc(100% - 24px), rgba(165, 243, 252, 0.95) calc(100% - 22px) calc(100% - 20px), transparent calc(100% - 18px)),
+    linear-gradient(135deg, transparent 0 calc(100% - 24px), rgba(165, 243, 252, 0.95) calc(100% - 22px) calc(100% - 20px), transparent calc(100% - 18px));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 1;
   box-shadow:
     inset 0 0 48px rgba(34, 211, 238, 0.16),
     inset 0 0 2px rgba(255, 255, 255, 0.18),
@@ -3428,7 +3603,7 @@ body::after {
     width: 78px;
     height: 78px;
     right: 12px;
-    bottom: 12px;
+    bottom: 44px;
   }
 
   .radar-stats {
@@ -3454,6 +3629,22 @@ body::after {
   .canvas-overlay {
     left: 12px;
     right: 104px;
-    bottom: 12px;
+    bottom: 14px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .graph-canvas-wrap,
+  #graphCanvas {
+    min-height: clamp(520px, 58dvh, 660px);
+    height: clamp(520px, 58dvh, 660px);
+  }
+}
+
+@media (max-width: 720px) {
+  .graph-canvas-wrap,
+  #graphCanvas {
+    min-height: clamp(440px, 62dvh, 560px);
+    height: clamp(440px, 62dvh, 560px);
   }
 }

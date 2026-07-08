@@ -51,7 +51,7 @@ http://127.0.0.1:8788
 These are the highest-value features for understanding, maintaining, and extending a `gbrain` knowledge base.
 
 1. **Ask Yoda** - Ask contextual questions in a chat-style panel backed by the selected node, configurable graph depth, media hints, and targeted gbrain retrieval.
-2. **Autopilot memory tour** - Step through important nodes with previous/next controls, a visible counter, and load-timeout recovery.
+2. **Autopilot memory tour** - Step through important nodes with previous/next controls, a visible counter, auto/manual plan modes, looped playback, and load-timeout recovery.
 3. **Local caching** - Cache node content and media in the browser with a configurable memory limit, usage readout, and one-click flush.
 4. **Entity graph exploration** - Search by slug, title, tag, or summary, then click any node to lazily load its direct gbrain neighbors.
 5. **Relationship and backlink traversal** - Inspect outgoing relationships, incoming backlinks, page through long lists, and jump directly to related nodes.
@@ -63,11 +63,15 @@ These are the highest-value features for understanding, maintaining, and extendi
 
 ## How Ask Yoda Works
 
-Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.94 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
+Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.97 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
 
 Under the hood, the server gathers the selected page with `gbrain get`, nearby relationships with graph/backlink queries, backlinks, targeted search snippets, media hints, and direct reads of likely related source nodes. It keeps the prompt focused on the selected node, relationship labels, summaries, and nearby slugs so the answer can cite concrete graph context without dumping raw command output. If the configured agent path is available, Memory Stargraph asks that local agent to produce the response. If the agent is unavailable or times out, the endpoint falls back to a concise GBrain-context response so the UI still gives an actionable answer.
 
 The Ask Yoda **View Log** button opens a scrollable diagnostics window for the latest request. It shows the `request_id`, selected slug, depth, source, timing phases, fallback status, model/OpenClaw status, and safe stdout/stderr or error summaries when available. It is intended for debugging endpoint behavior without exposing full prompts, secrets, or raw private context.
+
+## Autopilot Plan
+
+Autopilot can play a generated list from the currently visible map or a manually edited list. The Auto list is read-only and is enabled by default. Turn Auto list off in the Plan window to edit the Manual plan, use **Fill Plan** to replace the manual list from visible nodes, or add blank entries and type a slug. Slug fields show cached matches after two characters; press Return for live GBrain search when the cached list is not enough. Delay seconds controls the pause after a node is loaded, while Timeline days controls the recency filter used when generating the list.
 
 The chat panel stores the visible conversation in browser state for the current session. It does not create durable GBrain notes by itself; durable changes still go through explicit actions such as modifying markdown, adding relationships, tags, timeline events, or attachments.
 
