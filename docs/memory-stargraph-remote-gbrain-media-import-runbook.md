@@ -151,6 +151,25 @@ On the GBrain host itself, do not configure `remote_media_base_urls` or `gbrain_
 
 This means new web-service hosts should not need a full pre-synced `media/` mirror. The mirror is a cache, not the durable source of truth.
 
+## Attachment Consistency Rule
+
+The attach flow must never create a markdown-only media reference. A successful
+attachment requires both:
+
+1. `gbrain files upload <file> --page <slug>` succeeds.
+2. `gbrain files list <slug>` shows the uploaded filename.
+
+Only after both checks pass may Stargraph append or update markdown/frontmatter
+references such as `![Label](people/example/photo.jpg)`. If the upload command
+fails, or the file ledger does not show the file after upload, report the error
+and leave the page markdown unchanged.
+
+If an older node already contains a relative media reference but
+`gbrain files list <slug>` says `No files for page`, treat that as a data
+consistency bug. Repair it by uploading the original bytes to the GBrain files
+ledger for the same page; copying into one web service's `media/` directory is
+only a cache repair and is not sufficient.
+
 ## Verification Checklist
 
 For a representative imported node:

@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.113";
+const UI_VERSION = "V1.0.114";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;

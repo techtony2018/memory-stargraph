@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.113"
+UI_VERSION = "V1.0.114"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -840,6 +840,25 @@ def copy_file_to_gbrain_store(source_path, relative_path):
         shutil.copy2(source, destination)
         return destination
     return None
+
+
+def gbrain_file_ledger_has_relative_path(slug, relative_path):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    if not safe_path:
+        return False
+    try:
+        output = run_gbrain("files", "list", slug)
+    except Exception:  # noqa: BLE001
+        return False
+    filename = safe_path.name
+    page = str(slug or "").strip("/")
+    for line in str(output or "").splitlines():
+        if filename not in line:
+            continue
+        if page and page not in line:
+            continue
+        return True
+    return False
 
 
 def extract_first_http_url(text):
@@ -2547,15 +2566,22 @@ class GraphStore:
         except Exception:  # noqa: BLE001
             raw = ""
         local_media = materialize_local_media_for_slug(slug, file_path, raw)
+        relative_path = relative_path_for_local_media(local_media)
+        if not relative_path:
+            raise RuntimeError("Could not create a safe relative media path for this attachment.")
         try:
             run_gbrain("files", "upload", file_path, "--page", slug)
-        except RuntimeError:
-            if not local_media:
-                raise
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Attachment upload did not reach GBrain files; markdown was not updated. "
+                "Fix the GBrain file upload path and try again."
+            ) from exc
+        if not gbrain_file_ledger_has_relative_path(slug, relative_path):
+            raise RuntimeError(
+                f"Attachment upload was not visible in GBrain files for {slug}; markdown was not updated."
+            )
         markdown_updated = False
-        relative_path = relative_path_for_local_media(local_media)
-        if relative_path:
-            copy_file_to_gbrain_store(file_path, relative_path)
+        copy_file_to_gbrain_store(file_path, relative_path)
         if raw and relative_path:
             updated_raw = append_attachment_reference(raw, relative_path, description)
             if updated_raw != raw:

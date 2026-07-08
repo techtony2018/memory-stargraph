@@ -34,6 +34,7 @@ from server import (
     gbrain_file_url_for_relative_path,
     materialize_gbrain_file_reference,
     copy_file_to_gbrain_store,
+    gbrain_file_ledger_has_relative_path,
 )
 
 
@@ -577,15 +578,67 @@ cover_image: companies/example-inc/logo.jpg
                 mock.patch("server.run_gbrain") as run,
                 mock.patch.object(store, "invalidate") as invalidate,
             ):
-                run.side_effect = ["# Azul Systems\n\nCompany notes.", "", ""]
+                run.side_effect = [
+                    "# Azul Systems\n\nCompany notes.",
+                    "uploaded",
+                    "1 file(s):\n  companies/azul-systems / Azul.jpg  [8KB, image/jpeg]",
+                    "",
+                ]
                 result = store.attach_file("companies/azul-systems", str(source), "Azul company logo")
 
             self.assertEqual(result["served_url"], "/media/companies/azul-systems/Azul.jpg")
             self.assertTrue(result["markdown_updated"])
+            run.assert_any_call("files", "list", "companies/azul-systems")
             run.assert_any_call("put", "companies/azul-systems", input_text=mock.ANY)
             put_content = next(call.kwargs["input_text"] for call in run.mock_calls if call.args[:2] == ("put", "companies/azul-systems"))
             self.assertIn("![Azul company logo](companies/azul-systems/Azul.jpg)", put_content)
             invalidate.assert_called_once()
+
+    def test_graph_store_attach_file_refuses_markdown_when_upload_fails(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "Garry.jpg"
+            source.write_bytes(b"fake jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                run.side_effect = ["# Garry Tan\n\nNotes.", RuntimeError("no storage backend")]
+                with self.assertRaisesRegex(RuntimeError, "markdown was not updated"):
+                    store.attach_file("people/garry-tan", str(source), "Garry")
+
+            put_calls = [call for call in run.mock_calls if call.args[:1] == ("put",)]
+            self.assertEqual(put_calls, [])
+            invalidate.assert_not_called()
+
+    def test_graph_store_attach_file_refuses_markdown_when_ledger_misses_upload(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "Garry.jpg"
+            source.write_bytes(b"fake jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                run.side_effect = ["# Garry Tan\n\nNotes.", "uploaded", "No files for page: people/garry-tan"]
+                with self.assertRaisesRegex(RuntimeError, "not visible in GBrain files"):
+                    store.attach_file("people/garry-tan", str(source), "Garry")
+
+            put_calls = [call for call in run.mock_calls if call.args[:1] == ("put",)]
+            self.assertEqual(put_calls, [])
+            invalidate.assert_not_called()
+
+    def test_gbrain_file_ledger_has_relative_path_checks_page_and_filename(self):
+        output = "1 file(s):\n  people/garry-tan / Garry.jpg  [25KB, image/jpeg]\n"
+        with mock.patch("server.run_gbrain", return_value=output):
+            self.assertTrue(gbrain_file_ledger_has_relative_path("people/garry-tan", "people/garry-tan/Garry.jpg"))
+            self.assertFalse(gbrain_file_ledger_has_relative_path("people/tony-guan", "people/garry-tan/Garry.jpg"))
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(
@@ -798,12 +851,24 @@ cover_image: companies/example-inc/logo.jpg
 
     def test_graph_store_node_operations_call_gbrain_commands(self):
         store = GraphStore()
+        tmpdir = TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        media_root = Path(tmpdir.name) / "media"
+        source = Path(tmpdir.name) / "example.jpg"
+        source.write_bytes(b"fake jpg")
+
+        def fake_run(*args, **_kwargs):
+            if args[:2] == ("files", "list"):
+                return "1 file(s):\n  people/tony-guan / example.jpg  [8KB, image/jpeg]"
+            return "ok"
+
         with (
             mock.patch("server.run_gbrain") as run,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
+            mock.patch("server.MEDIA_ROOTS", [media_root]),
             mock.patch.object(store, "invalidate") as invalidate,
         ):
-            run.return_value = "ok"
+            run.side_effect = fake_run
             store.add_relationship("people/tony-guan", "companies/azul-systems", "employed by", "past role")
             store.remove_relationship("people/tony-guan", "companies/azul-systems", "employed by")
             store.update_tags("people/tony-guan", ["founder", "java"], ["old"])
@@ -812,7 +877,7 @@ cover_image: companies/example-inc/logo.jpg
             store.ask_yoda("people/tony-guan", "What should I know?", [{"role": "user", "content": "Earlier"}])
             store.backlinks("people/tony-guan")
             store.graph_query("people/tony-guan", "employed by", "both", "2")
-            store.attach_file("people/tony-guan", "/tmp/example.pdf")
+            store.attach_file("people/tony-guan", str(source))
             store.history("people/tony-guan")
             store.refresh_embedding("people/tony-guan")
 
@@ -833,7 +898,9 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
-                mock.call("files", "upload", "/tmp/example.pdf", "--page", "people/tony-guan"),
+                mock.call("files", "upload", str(source), "--page", "people/tony-guan"),
+                mock.call("files", "list", "people/tony-guan"),
+                mock.call("put", "people/tony-guan", input_text=mock.ANY),
                 mock.call("history", "people/tony-guan"),
                 mock.call("embed", "people/tony-guan"),
             ]
