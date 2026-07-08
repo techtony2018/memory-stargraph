@@ -43,7 +43,13 @@ verify_url() {
   # shellcheck disable=SC2086
   curl $curl_flags -sS --max-time 10 "$base/" | grep -E "styles.css\\?v=${version#V}|app.js\\?v=${version#V}|>${version}<" >/dev/null
   # shellcheck disable=SC2086
-  curl $curl_flags -sS --max-time 10 "$base/app.js?v=${version#V}" | head -1 | grep "const UI_VERSION = \"$version\""
+  local app_tmp
+  app_tmp="$(mktemp)"
+  # Avoid curl|head under pipefail: head can close the pipe early and turn a
+  # successful fetch into curl exit 23.
+  curl $curl_flags -sS --max-time 10 "$base/app.js?v=${version#V}" -o "$app_tmp"
+  head -1 "$app_tmp" | grep "const UI_VERSION = \"$version\""
+  rm -f "$app_tmp"
 }
 
 echo "== local dashboard-managed service =="
