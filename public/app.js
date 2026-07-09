@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.117";
+const UI_VERSION = "V1.0.118";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -68,6 +68,8 @@ const state = {
   yodaLogReturn: null,
   slugSelectorSearch: new Map(),
   relationshipTargetSearch: { loading: false, liveOptions: [] },
+  relationshipTypeSearch: { loading: false, liveOptions: [] },
+  settingsPinned: false,
   relationshipPages: new Map(),
   backlinkPages: new Map(),
   relationshipReturnView: null,
@@ -561,6 +563,19 @@ function resetZoom() {
   setZoom(1);
 }
 
+function setHudTooltip(element, text) {
+  if (!element) return;
+  const value = String(text || "").trim();
+  element.removeAttribute("title");
+  if (!value) {
+    element.classList.remove("has-tooltip");
+    delete element.dataset.tooltip;
+    return;
+  }
+  element.dataset.tooltip = value;
+  element.classList.add("has-tooltip");
+}
+
 function updateCloudModeControl() {
   if (!cloudModeButton) return;
   cloudModeButton.classList.toggle("is-on", state.cloudMode);
@@ -568,8 +583,7 @@ function updateCloudModeControl() {
   cloudModeButton.setAttribute("aria-pressed", state.cloudMode ? "true" : "false");
   cloudModeButton.setAttribute("aria-label", state.cloudMode ? "Clustering on" : "Clustering off");
   const tooltip = state.cloudMode ? "Clustering is on. Click to turn it off." : "Clustering is off. Click to turn it on.";
-  cloudModeButton.dataset.tooltip = tooltip;
-  cloudModeButton.title = tooltip;
+  setHudTooltip(cloudModeButton, tooltip);
   if (cloudModeToggle) cloudModeToggle.checked = state.cloudMode;
 }
 
@@ -919,8 +933,7 @@ function updateTourControls() {
   tourButton.classList.toggle("is-active", state.tour.active);
   tourButton.setAttribute("aria-pressed", state.tour.active ? "true" : "false");
   tourButton.setAttribute("aria-label", state.tour.active ? "Pause Autopilot" : "Play Autopilot");
-  tourButton.dataset.tooltip = tooltip;
-  tourButton.title = tooltip;
+  setHudTooltip(tourButton, tooltip);
   tourButton.innerHTML = state.tour.active
     ? '<svg class="autopilot-icon pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>'
     : '<svg class="autopilot-icon play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>';
@@ -948,8 +961,7 @@ function setSearchLoading(active) {
   searchInput.disabled = active;
   searchButton.disabled = active;
   searchButton.setAttribute("aria-label", active ? "Searching" : "Run search");
-  searchButton.dataset.tooltip = active ? "Searching memory nodes." : "Run search and load the best matching entity.";
-  searchButton.title = searchButton.dataset.tooltip;
+  setHudTooltip(searchButton, active ? "Searching memory nodes." : "Run search and load the best matching entity.");
 }
 
 async function runLazySearch(query) {
@@ -1013,6 +1025,7 @@ function setFlyoutOpen(panel, button, open) {
   button.setAttribute("aria-expanded", open ? "true" : "false");
   button.classList.toggle("is-open", open);
   if (panel === settingsFlyout && open) {
+    state.settingsPinned = false;
     state.pendingSettings = snapshotSettings();
     if (flowingEdgesToggle) flowingEdgesToggle.checked = state.flowingEdges;
     syncYodaDepthControl();
@@ -1040,6 +1053,12 @@ function toggleFloatingPanel(panel, button) {
   const willOpen = panel.hidden;
   hideFloatingPanels(panel);
   setFlyoutOpen(panel, button, willOpen);
+}
+
+function pinSettingsFlyout() {
+  if (settingsFlyout && !settingsFlyout.hidden) {
+    state.settingsPinned = true;
+  }
 }
 
 function positionFloatingPanel(panel, button) {
@@ -1321,9 +1340,9 @@ function updateCategoryLegend(graph) {
       item.type = "button";
       item.dataset.cluster = category;
       item.className = state.hiddenClusters.has(category) ? "is-dimmed" : "is-active";
-      item.title = state.hiddenClusters.has(category)
+      setHudTooltip(item, state.hiddenClusters.has(category)
         ? `Click to show ${category} cluster`
-        : `Click to hide ${category} cluster`;
+        : `Click to hide ${category} cluster`);
       const label = document.createElement("span");
       label.className = "cluster-label";
       const swatch = document.createElement("i");
@@ -1359,9 +1378,9 @@ function updateHubClusterLegend() {
     item.type = "button";
     item.dataset.hub = node.slug;
     item.className = state.hiddenHubConnections.has(node.slug) ? "is-dimmed" : "is-active";
-    item.title = state.hiddenHubConnections.has(node.slug)
+    setHudTooltip(item, state.hiddenHubConnections.has(node.slug)
       ? `Click to show direct connections of ${node.label || node.slug}`
-      : `Click to hide direct connections of ${node.label || node.slug}`;
+      : `Click to hide direct connections of ${node.label || node.slug}`);
     const label = document.createElement("span");
     label.className = "cluster-label";
     const swatch = document.createElement("i");
@@ -2206,7 +2225,7 @@ function renderSelectionMediaPreview(items = [], slug = state.focusSlug || "") {
   selectionMediaPreview.classList.remove("is-loading");
   if (selectionMediaSlug) {
     selectionMediaSlug.textContent = slug || "No selection";
-    selectionMediaSlug.title = slug || "";
+    setHudTooltip(selectionMediaSlug, slug || "");
   }
   const first = [...items].find((item) => item && (item.served_url || item.url));
   const rendered = renderSingleMediaPreview(selectionMediaPreview, first, { eager: true });
@@ -2218,7 +2237,7 @@ function renderSelectionMediaLoading(slug = state.focusSlug || "") {
   if (!selectionMediaPreview) return;
   if (selectionMediaSlug) {
     selectionMediaSlug.textContent = slug || "No selection";
-    selectionMediaSlug.title = slug || "";
+    setHudTooltip(selectionMediaSlug, slug || "");
   }
   selectionMediaPreview.innerHTML = "";
   selectionMediaPreview.textContent = "loading media..";
@@ -2762,7 +2781,7 @@ function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
   const link = createEntityMarkdownLink(sourceSlug, labelForSlug(sourceSlug));
   link.className = "relationship-source-link backlink-from-link";
   link.setAttribute("data-backlink-slug", sourceSlug);
-  link.title = `Open ${sourceSlug}`;
+  setHudTooltip(link, `Open ${sourceSlug}`);
   row.appendChild(link);
 
   const relation = document.createElement("span");
@@ -2774,7 +2793,7 @@ function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
   addButton.type = "button";
   addButton.className = "relationship-icon-button relationship-add-backlink backlink-link-back";
   addButton.textContent = "+";
-  addButton.title = options.addTitle || "Add backlink";
+  setHudTooltip(addButton, options.addTitle || "Add backlink");
   addButton.setAttribute("aria-label", "Add backlink");
   addButton.addEventListener("click", () => {
     state.relationshipReturnView = { action: "backlinks", slug: selectedSlug };
@@ -2787,7 +2806,7 @@ function relationshipRow(sourceSlug, linkType, selectedSlug, options = {}) {
     removeButton.type = "button";
     removeButton.className = "relationship-icon-button relationship-remove";
     removeButton.textContent = "×";
-    removeButton.title = "Remove relationship";
+    setHudTooltip(removeButton, "Remove relationship");
     removeButton.setAttribute("aria-label", "Remove relationship");
     removeButton.addEventListener("click", () => {
       void openRemoveRelationshipModal(selectedSlug, sourceSlug, linkType);
@@ -2831,7 +2850,7 @@ function renderRelationshipsMessage(slug) {
   addButton.type = "button";
   addButton.className = "ghost-button compact-button inline-action-button relationship-add-selected";
   addButton.textContent = "+";
-  addButton.title = "Add relationship";
+  setHudTooltip(addButton, "Add relationship");
   addButton.setAttribute("aria-label", "Add relationship");
   addButton.addEventListener("click", () => {
     void openSelectedRelationshipModal(slug);
@@ -2860,7 +2879,7 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     const link = createEntityMarkdownLink(item.from_slug, labelForSlug(item.from_slug));
     link.className = "relationship-source-link backlink-from-link";
     link.setAttribute("data-backlink-slug", item.from_slug);
-    link.title = `Open ${item.from_slug}`;
+    setHudTooltip(link, `Open ${item.from_slug}`);
     row.appendChild(link);
     const relation = document.createElement("span");
     relation.className = "relationship-type backlink-relation";
@@ -2870,7 +2889,7 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     linkBack.type = "button";
     linkBack.className = "relationship-icon-button relationship-add-backlink backlink-link-back";
     linkBack.textContent = "+";
-    linkBack.title = "Add relationship";
+    setHudTooltip(linkBack, "Add relationship");
     linkBack.setAttribute("aria-label", "Add relationship");
     linkBack.addEventListener("click", () => {
       state.relationshipReturnView = { action: "backlinks", slug: selectedSlug };
@@ -3017,7 +3036,7 @@ function renderMarkdownInline(text, parent) {
     if (offset > cursor) appendInlineMarkdown(parent, value.slice(cursor, offset));
     const link = createEntityMarkdownLink(match, match);
     link.className = "chat-slug-link";
-    link.title = `Open ${match}`;
+    setHudTooltip(link, `Open ${match}`);
     parent.appendChild(link);
     cursor = offset + match.length;
     return match;
@@ -3229,13 +3248,17 @@ function mergeSlugSelectorOptions(cachedOptions = [], liveOptions = []) {
   return [...merged.values()];
 }
 
-function positionSlugSelectorPopup(selector) {
+function setSelectorPopupPosition(selector) {
   const { input, popup } = selector;
   if (!input || !popup || popup.hidden) return;
   const rect = input.getBoundingClientRect();
   popup.style.left = `${Math.max(8, rect.left)}px`;
   popup.style.top = `${Math.min(window.innerHeight - 12, rect.bottom + 6)}px`;
   popup.style.width = `${Math.max(260, rect.width)}px`;
+}
+
+function positionSlugSelectorPopup(selector) {
+  setSelectorPopupPosition(selector);
 }
 
 function hideSlugSelectorPopup(selector) {
@@ -3366,6 +3389,176 @@ function createSlugSelector({
     if (event.key === "Enter") {
       event.preventDefault();
       void runLiveSlugSelectorSearch(selector);
+    } else if (event.key === "Escape") {
+      hideSlugSelectorPopup(selector);
+    }
+  });
+  return { input, popup, selector };
+}
+
+function relationshipTypeSelectorState(selectorId) {
+  return slugSelectorState(selectorId);
+}
+
+function cachedRelationshipTypeResults(query) {
+  const normalized = normalizeSearchText(query);
+  const terms = normalized.split(/\s+/).filter(Boolean);
+  return allKnownRelationshipTypes()
+    .map((type) => {
+      const haystack = normalizeSearchText(type);
+      const exact = haystack === normalized;
+      const termMatch = !terms.length || terms.every((term) => haystack.includes(term));
+      return { value: type, source: "cached", score: (exact ? 100 : 0) + (termMatch ? 30 : 0) };
+    })
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.value.localeCompare(right.value))
+    .slice(0, 20);
+}
+
+function parseRelationshipTypesFromOutput(rawOutput) {
+  const types = new Set();
+  String(rawOutput || "").split(/\r?\n/).forEach((line) => {
+    const match = line.match(/--(.+?)->/);
+    const value = match?.[1]?.trim().replace(/_/g, " ");
+    if (value) types.add(value);
+  });
+  return [...types];
+}
+
+function mergeRelationshipTypeOptions(cachedOptions = [], liveOptions = []) {
+  const merged = new Map();
+  [...cachedOptions, ...liveOptions].forEach((item) => {
+    const value = String(item?.value || item || "").trim();
+    if (!value || merged.has(value.toLowerCase())) return;
+    merged.set(value.toLowerCase(), { value, source: item.source || "live" });
+  });
+  return [...merged.values()];
+}
+
+function chooseRelationshipTypeOption(selector, value) {
+  const { input } = selector;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  hideSlugSelectorPopup(selector);
+  input.focus();
+}
+
+function showRelationshipTypePopup(selector, options = []) {
+  const { input, popup } = selector;
+  if (!input || !popup || document.activeElement !== input) return;
+  popup.innerHTML = "";
+  if (!options.length) {
+    const empty = document.createElement("p");
+    empty.className = "slug-selector-empty relationship-type-empty";
+    empty.textContent = input.value.trim().length >= 2 ? "No matching types. Add will create it." : "Type two characters";
+    popup.appendChild(empty);
+    popup.hidden = false;
+    setSelectorPopupPosition(selector);
+    return;
+  }
+  options.slice(0, 8).forEach(({ value, source }) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "slug-selector-option relationship-type-option";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-label", `Select relationship type ${value}`);
+    const type = document.createElement("span");
+    type.className = "slug-selector-slug relationship-type-value";
+    type.textContent = value;
+    const meta = document.createElement("span");
+    meta.className = "slug-selector-meta";
+    meta.textContent = source === "live" ? "GBrain live relationship type" : "cached relationship type";
+    row.append(type, meta);
+    row.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      chooseRelationshipTypeOption(selector, value);
+    });
+    popup.appendChild(row);
+  });
+  popup.hidden = false;
+  setSelectorPopupPosition(selector);
+}
+
+function renderRelationshipTypeOptions(selector) {
+  const { input, selectorId } = selector;
+  const query = input.value.trim();
+  const selectorData = relationshipTypeSelectorState(selectorId);
+  const cachedOptions = query.length >= 2 ? cachedRelationshipTypeResults(query) : [];
+  showRelationshipTypePopup(selector, mergeRelationshipTypeOptions(cachedOptions, selectorData.liveOptions));
+}
+
+async function runLiveRelationshipTypeSearch(selector) {
+  const { input, sourceSlug = state.focusSlug, selectorId, statusTarget = modalMessage } = selector;
+  const query = input.value.trim();
+  const selectorData = relationshipTypeSelectorState(selectorId);
+  const exactCachedType = allKnownRelationshipTypes().find((type) => type.toLowerCase() === query.toLowerCase());
+  if (exactCachedType) {
+    chooseRelationshipTypeOption(selector, exactCachedType);
+    return;
+  }
+  if (!query || selectorData.loading || !sourceSlug) return;
+  selectorData.loading = true;
+  modalPrimaryButton.disabled = true;
+  const busyToken = beginBusyOperation(`Discovering relationship types for ${query}`);
+  try {
+    const response = await apiPost(`/api/entity-graph-query/${encodeURIComponent(sourceSlug)}`, {
+      direction: "both",
+      depth: "2",
+    });
+    const discovered = response.ok ? parseRelationshipTypesFromOutput(response.data.output || "") : [];
+    selectorData.liveOptions = discovered
+      .filter((type) => normalizeSearchText(type).includes(normalizeSearchText(query)))
+      .map((value) => ({ value, source: "live" }));
+    state.relationshipTypeSearch.liveOptions = selectorData.liveOptions;
+    renderRelationshipTypeOptions(selector);
+    if (statusTarget) statusTarget.textContent = selectorData.liveOptions.length ? "Live GBrain relationship types merged into type list." : "No live relationship type matches found; Add will create a new type.";
+  } finally {
+    endBusyOperation(busyToken);
+    selectorData.loading = false;
+    modalPrimaryButton.disabled = false;
+  }
+}
+
+function createRelationshipTypeSelector({
+  id,
+  label = "Relationship type",
+  sourceSlug = state.focusSlug,
+  value = "",
+  placeholder = "Type two characters; press Return for live type search",
+  onInput = null,
+  statusTarget = modalMessage,
+}) {
+  const input = document.createElement("input");
+  input.id = id;
+  input.value = value;
+  input.removeAttribute("list");
+  input.placeholder = placeholder;
+  input.autocomplete = "off";
+  appendField(modalForm, label, input);
+  const popup = document.createElement("div");
+  popup.className = "slug-selector-popup relationship-type-selector-popup";
+  popup.id = `${id}Popup`;
+  popup.hidden = true;
+  popup.setAttribute("role", "listbox");
+  document.body.appendChild(popup);
+  input.setAttribute("aria-controls", popup.id);
+  input.setAttribute("aria-autocomplete", "list");
+  const selector = { selectorId: id, input, popup, sourceSlug, statusTarget };
+  renderRelationshipTypeOptions(selector);
+  input.addEventListener("input", () => {
+    renderRelationshipTypeOptions(selector);
+    if (onInput) onInput(input.value);
+  });
+  input.addEventListener("focus", () => {
+    renderRelationshipTypeOptions(selector);
+  });
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => hideSlugSelectorPopup(selector), 80);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void runLiveRelationshipTypeSearch(selector);
     } else if (event.key === "Escape") {
       hideSlugSelectorPopup(selector);
     }
@@ -3549,7 +3742,10 @@ function renderTagOperationForm(slug) {
 function renderAddRelationshipForm(slug) {
   removeSlugSelectorPopups();
   modalForm.innerHTML = "";
+  state.slugSelectorSearch.delete("operationTarget");
+  state.slugSelectorSearch.delete("operationLinkType");
   state.relationshipTargetSearch = { loading: false, liveOptions: [] };
+  state.relationshipTypeSearch = { loading: false, liveOptions: [] };
   const { input: operationTarget } = createSlugSelector({
     id: "operationTarget",
     label: "Target entity",
@@ -3562,17 +3758,15 @@ function renderAddRelationshipForm(slug) {
     },
   });
 
-  const typeInput = document.createElement("input");
-  typeInput.id = "operationLinkType";
-  typeInput.setAttribute("list", "operationLinkTypeOptions");
-  typeInput.placeholder = "Search existing type or enter a new one";
-  appendField(modalForm, "Relationship type", typeInput);
-  modalForm.appendChild(makeDatalist(
-    "operationLinkTypeOptions",
-    allKnownRelationshipTypes(),
-    (type) => type,
-    (type) => type,
-  ));
+  createRelationshipTypeSelector({
+    id: "operationLinkType",
+    sourceSlug: slug,
+    placeholder: "Type two characters; press Return for live type search",
+    onInput: () => {
+      const selectorData = relationshipTypeSelectorState("operationLinkType");
+      state.relationshipTypeSearch.liveOptions = selectorData.liveOptions;
+    },
+  });
 
   const contextInput = document.createElement("textarea");
   contextInput.id = "operationContext";
@@ -3618,8 +3812,7 @@ function renderAutopilotPlanForm() {
   });
   const delayField = document.createElement("label");
   delayField.className = "operation-field plan-number-field has-tooltip";
-  delayField.dataset.tooltip = "Seconds to wait after the selected node is loaded, or after the 10-second load fallback.";
-  delayField.title = delayField.dataset.tooltip;
+  setHudTooltip(delayField, "Seconds to wait after the selected node is loaded, or after the 10-second load fallback.");
   delayField.append(Object.assign(document.createElement("span"), { textContent: "Delay" }), delayInput);
   timingRow.appendChild(delayField);
 
@@ -3637,8 +3830,7 @@ function renderAutopilotPlanForm() {
   });
   const daysField = document.createElement("label");
   daysField.className = "operation-field plan-number-field has-tooltip";
-  daysField.dataset.tooltip = "Recency filter used when generating an auto plan from visible map nodes. 0 means all time.";
-  daysField.title = daysField.dataset.tooltip;
+  setHudTooltip(daysField, "Recency filter used when generating an auto plan from visible map nodes. 0 means all time.");
   daysField.append(Object.assign(document.createElement("span"), { textContent: "- Days" }), daysInput);
   timingRow.appendChild(daysField);
   modalForm.appendChild(timingRow);
@@ -3697,8 +3889,7 @@ function renderAutopilotPlanForm() {
   fillButton.className = "ghost-button compact-button has-tooltip";
   fillButton.type = "button";
   fillButton.textContent = "Fill";
-  fillButton.dataset.tooltip = "Click to erase current autopilot list and generate a new one based on nodes visible in the map.";
-  fillButton.title = fillButton.dataset.tooltip;
+  setHudTooltip(fillButton, "Click to erase current autopilot list and generate a new one based on nodes visible in the map.");
   fillButton.addEventListener("click", () => {
     state.tour.fillPlanConfirming = true;
     state.tour.clearPlanConfirming = false;
@@ -3791,7 +3982,7 @@ function renderAutopilotPlanForm() {
     row.className = "plan-row";
     if (slug && state.tour.invalidPlanSlugs.has(slug)) {
       row.classList.add("is-invalid");
-      row.title = "Node invalid, please check!";
+      setHudTooltip(row, "Node invalid, please check!");
     }
     row.draggable = true;
     row.dataset.index = String(index);
@@ -3820,7 +4011,7 @@ function renderAutopilotPlanForm() {
     addButton.className = "relationship-icon-button plan-insert-button";
     addButton.type = "button";
     addButton.textContent = "+";
-    addButton.title = "Insert blank entry below this row";
+    setHudTooltip(addButton, "Insert blank entry below this row");
     addButton.setAttribute("aria-label", "Insert blank plan entry");
     addButton.addEventListener("click", () => {
       draft.splice(index + 1, 0, "");
@@ -3830,7 +4021,7 @@ function renderAutopilotPlanForm() {
     removeButton.className = "relationship-icon-button plan-remove-button";
     removeButton.type = "button";
     removeButton.textContent = "-";
-    removeButton.title = "Remove this plan row";
+    setHudTooltip(removeButton, "Remove this plan row");
     removeButton.setAttribute("aria-label", "Remove node from plan");
     removeButton.addEventListener("click", () => {
       draft.splice(index, 1);
@@ -4789,7 +4980,7 @@ async function loadEntity(slug, options = {}) {
     button.appendChild(label);
     if (neighbor.link_types?.length) {
       const relationship = `relationship: ${neighbor.link_types.join(", ")}`;
-      button.title = relationship;
+      setHudTooltip(button, relationship);
       button.dataset.relationship = relationship;
       const relation = document.createElement("span");
       relation.className = "direct-link-relationship";
@@ -4979,11 +5170,23 @@ function bindEvents() {
   });
 
   settingsFlyout?.addEventListener("mouseleave", () => {
-    setFlyoutOpen(settingsFlyout, navSettingsButton, false);
+    if (!state.settingsPinned) {
+      setFlyoutOpen(settingsFlyout, navSettingsButton, false);
+    }
   });
 
-  settingsOkButton?.addEventListener("click", applySettingsFromControls);
-  settingsCancelButton?.addEventListener("click", cancelSettingsChanges);
+  settingsFlyout?.addEventListener("pointerdown", pinSettingsFlyout);
+  settingsFlyout?.addEventListener("focusin", pinSettingsFlyout);
+  settingsFlyout?.addEventListener("input", pinSettingsFlyout);
+  settingsFlyout?.addEventListener("change", pinSettingsFlyout);
+  settingsOkButton?.addEventListener("click", () => {
+    state.settingsPinned = false;
+    applySettingsFromControls();
+  });
+  settingsCancelButton?.addEventListener("click", () => {
+    state.settingsPinned = false;
+    cancelSettingsChanges();
+  });
   flushCacheButton?.addEventListener("click", flushNodeCache);
   yodaDepthInput?.addEventListener("input", (event) => {
     setYodaDepth(event.target.value);

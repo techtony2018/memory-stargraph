@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.117">
+    <link rel="stylesheet" href="/styles.css?v=1.0.118">
   </head>
   <body>
     <div class="app-shell">
@@ -42,32 +42,32 @@
                 <label class="search-wrap">
                   <input id="searchInput" type="search" placeholder="slug, title, tag, summary">
                 </label>
-                <button id="searchButton" class="ghost-button search-button search-icon-button has-tooltip" type="button" aria-label="Run search" data-tooltip="Run search and load the best matching entity." title="Run search and load the best matching entity.">
+                <button id="searchButton" class="ghost-button search-button search-icon-button has-tooltip" type="button" aria-label="Run search" data-tooltip="Run search and load the best matching entity.">
                   <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="5"></circle><path d="M14 14l6 6"></path></svg>
                 </button>
               </div>
-              <label class="toggle-wrap has-tooltip" data-tooltip="Only show nodes matching the active search." title="Only show nodes matching the active search.">
+              <label class="toggle-wrap has-tooltip" data-tooltip="Only show nodes matching the active search.">
                 <input id="matchesOnlyToggle" type="checkbox">
                 <span>Matches</span>
               </label>
-              <label class="filter-wrap short has-tooltip" data-tooltip="Minimum number of direct links required for visible nodes." title="Minimum number of direct links required for visible nodes.">
+              <label class="filter-wrap short has-tooltip" data-tooltip="Minimum number of direct links required for visible nodes.">
                 <span>Links</span>
                 <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
               </label>
             </div>
             <div id="autopilotFlyout" class="floating-tool-panel autopilot-flyout" hidden aria-label="Autopilot controls">
-              <span id="autopilotModeIcon" class="autopilot-mode-icon has-tooltip" aria-hidden="true" data-tooltip="Autopilot mode is active." title="Autopilot mode is active.">
+              <span id="autopilotModeIcon" class="autopilot-mode-icon has-tooltip" aria-hidden="true" data-tooltip="Autopilot mode is active.">
                 <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5 9.5 7l8-2.5 2 2-2.5 8-6.5 6.5-1.8-5.2z"></path><path d="m9.5 7 4.8 4.8"></path><path d="M6.6 16.4 3.8 19.2"></path><path d="M9 18.8 6.8 21"></path><circle cx="16" cy="8" r="1.4"></circle></svg>
               </span>
-              <button id="tourPlanButton" class="icon-button has-tooltip" type="button" aria-label="Open Autopilot plan" data-tooltip="View and edit planned playback." title="View and edit planned playback.">
+              <button id="tourPlanButton" class="icon-button has-tooltip" type="button" aria-label="Open Autopilot plan" data-tooltip="View and edit planned playback.">
                 <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h11"></path><path d="M8 12h11"></path><path d="M8 18h11"></path><path d="M4 6h.01"></path><path d="M4 12h.01"></path><path d="M4 18h.01"></path></svg>
               </button>
-              <button id="tourButton" class="autopilot-start-button icon-button has-tooltip" type="button" aria-pressed="false" aria-label="Play Autopilot" data-tooltip="Play or pause autopilot." title="Play or pause autopilot.">
+              <button id="tourButton" class="autopilot-start-button icon-button has-tooltip" type="button" aria-pressed="false" aria-label="Play Autopilot" data-tooltip="Play or pause autopilot.">
                 <svg class="autopilot-icon play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
               </button>
-              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous autopilot stop" data-tooltip="Previous planned stop." title="Previous planned stop.">‹</button>
-              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next autopilot stop" data-tooltip="Next planned stop." title="Next planned stop.">›</button>
-              <button id="tourStopButton" class="icon-button has-tooltip" type="button" aria-label="Stop Autopilot" data-tooltip="Stop autopilot and return to manual mode." title="Stop autopilot and return to manual mode.">
+              <button id="tourPrevButton" class="icon-button has-tooltip" type="button" aria-label="Previous autopilot stop" data-tooltip="Previous planned stop.">‹</button>
+              <button id="tourNextButton" class="icon-button has-tooltip" type="button" aria-label="Next autopilot stop" data-tooltip="Next planned stop.">›</button>
+              <button id="tourStopButton" class="icon-button has-tooltip" type="button" aria-label="Stop Autopilot" data-tooltip="Stop autopilot and return to manual mode.">
                 <svg class="autopilot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"></path></svg>
               </button>
               <span id="tourCounter" class="tour-counter" aria-live="polite">0/0</span>
@@ -78,7 +78,7 @@
               <div class="source-control-stack">
                 <section class="settings-section">
                   <h3>Display</h3>
-                  <label class="top-toggle has-tooltip" data-tooltip="Enable animated particles and dashed flow along graph edges." title="Enable animated particles and dashed flow along graph edges.">
+                  <label class="top-toggle has-tooltip" data-tooltip="Enable animated particles and dashed flow along graph edges.">
                     <input id="flowingEdgesToggle" type="checkbox">
                     <span>Flowing edge effect</span>
                   </label>
@@ -86,7 +86,7 @@
                 <section class="settings-section">
                   <h3>Yoda</h3>
                   <div class="settings-yoda-row">
-                    <label class="cache-limit-control has-tooltip" data-tooltip="Graph hops for Ask Yoda context." title="Graph hops for Ask Yoda context.">
+                    <label class="cache-limit-control has-tooltip" data-tooltip="Graph hops for Ask Yoda context.">
                       <span>Depth</span>
                       <input id="yodaDepthInput" type="number" min="1" max="6" step="1" value="4" aria-label="Ask Yoda graph context depth">
                     </label>
@@ -122,7 +122,7 @@
               </div>
             </div>
             <div class="graph-floating-controls" aria-label="Graph view controls">
-              <button id="cloudModeButton" class="cluster-icon-button has-tooltip is-on" type="button" aria-pressed="true" aria-label="Clustering on" data-tooltip="Turn category clustering on or off." title="Turn category clustering on or off.">
+              <button id="cloudModeButton" class="cluster-icon-button has-tooltip is-on" type="button" aria-pressed="true" aria-label="Clustering on" data-tooltip="Turn category clustering on or off.">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="7" cy="8" r="2.6"></circle>
                   <circle cx="16.5" cy="6.5" r="2.2"></circle>
@@ -134,32 +134,32 @@
               </button>
               <input id="cloudModeToggle" type="checkbox" checked hidden>
               <div class="zoom-floating" aria-label="Graph zoom controls">
-                <button id="zoomOutButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom out" data-tooltip="Zoom out." title="Zoom out.">
+                <button id="zoomOutButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom out" data-tooltip="Zoom out.">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M14.5 14.5 20 20"></path><path d="M7 10h6"></path></svg>
                 </button>
-                <span id="zoomLevel" class="zoom-level has-tooltip" role="button" tabindex="0" aria-label="Reset zoom to 100%" data-tooltip="Reset zoom to 100%." title="Reset zoom to 100%." aria-live="polite">100%</span>
-                <button id="zoomInButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom in" data-tooltip="Zoom in." title="Zoom in.">
+                <span id="zoomLevel" class="zoom-level has-tooltip" role="button" tabindex="0" aria-label="Reset zoom to 100%" data-tooltip="Reset zoom to 100%." aria-live="polite">100%</span>
+                <button id="zoomInButton" class="zoom-icon-button has-tooltip" type="button" aria-label="Zoom in" data-tooltip="Zoom in.">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M14.5 14.5 20 20"></path><path d="M10 7v6"></path><path d="M7 10h6"></path></svg>
                 </button>
-                <button id="floatingHistoryBackButton" class="zoom-icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." title="Back to previous selected node." disabled>
+                <button id="floatingHistoryBackButton" class="zoom-icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." disabled>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18 9 12l6-6"></path></svg>
                 </button>
-                <button id="floatingHistoryForwardButton" class="zoom-icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." title="Forward to next selected node." disabled>
+                <button id="floatingHistoryForwardButton" class="zoom-icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." disabled>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
                 </button>
               </div>
             </div>
             <div class="new-node-floating" aria-label="Graph creation controls">
-              <button id="newNodeButton" class="new-node-icon-button has-tooltip" type="button" aria-label="New node" data-tooltip="Create a new gbrain entity." title="Create a new gbrain entity.">
+              <button id="newNodeButton" class="new-node-icon-button has-tooltip" type="button" aria-label="New node" data-tooltip="Create a new gbrain entity.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
               </button>
-              <button id="mapViewButton" class="new-node-icon-button map-view-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." title="View selected node." disabled aria-disabled="true">
+              <button id="mapViewButton" class="new-node-icon-button map-view-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." disabled aria-disabled="true">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
               </button>
-              <button id="mapAskYodaButton" class="new-node-icon-button map-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." title="Ask Yoda about this node." disabled aria-disabled="true">
-                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.117" alt="" aria-hidden="true">
+              <button id="mapAskYodaButton" class="new-node-icon-button map-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." disabled aria-disabled="true">
+                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.118" alt="" aria-hidden="true">
               </button>
-              <button id="mapFilterToggleButton" class="map-filter-toggle-button has-tooltip" type="button" aria-pressed="true" aria-label="Toggle graph filters" data-tooltip="Show or hide graph filters." title="Show or hide graph filters.">
+              <button id="mapFilterToggleButton" class="map-filter-toggle-button has-tooltip" type="button" aria-pressed="true" aria-label="Toggle graph filters" data-tooltip="Show or hide graph filters.">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
               </button>
             </div>
@@ -196,10 +196,10 @@
             <div id="graphTooltip" class="graph-tooltip" hidden></div>
           </div>
           <div class="graph-brand-row">
-            <a class="graph-wordmark-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">
+            <a class="graph-wordmark-link has-tooltip" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" data-tooltip="Open the Memory Stargraph GitHub repository.">
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.png" alt="Memory Stargraph">
             </a>
-            <a id="uiVersion" class="ui-version ui-version-link" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" title="Open the Memory Stargraph GitHub repository">V1.0.117</a>
+            <a id="uiVersion" class="ui-version ui-version-link has-tooltip" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" data-tooltip="Open the Memory Stargraph GitHub repository.">V1.0.118</a>
           </div>
         </section>
 
@@ -212,14 +212,14 @@
                 <button id="timelineBadge" class="timeline-badge" type="button" hidden>Timeline</button>
               </div>
               <div class="selection-actions">
-                <button id="selectionViewButton" class="selection-view-button icon-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." title="View selected node." disabled>
+                <button id="selectionViewButton" class="selection-view-button icon-button has-tooltip" type="button" aria-label="View selected node" data-tooltip="View selected node." disabled>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
                 </button>
-                <button id="selectionAskYodaButton" class="selection-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." title="Ask Yoda about this node.">
-                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.117" alt="" aria-hidden="true">
+                <button id="selectionAskYodaButton" class="selection-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node.">
+                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.118" alt="" aria-hidden="true">
                 </button>
-                <button id="historyBackButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." title="Back to previous selected node." disabled>‹</button>
-                <button id="historyForwardButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." title="Forward to next selected node." disabled>›</button>
+                <button id="historyBackButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." disabled>‹</button>
+                <button id="historyForwardButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." disabled>›</button>
                 <button id="nodeMenuButton" class="icon-button" type="button" aria-label="Node actions">...</button>
               </div>
             </div>
@@ -309,6 +309,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.117"></script>
+    <script src="/app.js?v=1.0.118"></script>
   </body>
   </html>
