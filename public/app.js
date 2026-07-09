@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.116";
+const UI_VERSION = "V1.0.117";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -2280,7 +2280,7 @@ function appendLocalSourcePathLinks(parent, text) {
 function appendTextWithBreaks(parent, text) {
   String(text || "").split(/ {2,}\n|\n/).forEach((part, index) => {
     if (index) parent.appendChild(document.createElement("br"));
-    if (part) appendLocalFileLinks(parent, part);
+    if (part) appendWebAddressLinks(parent, part);
   });
 }
 
@@ -2319,6 +2319,62 @@ function appendLocalFileLinks(parent, text) {
     return match;
   });
   if (cursor < value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function cleanWebAddressParts(value) {
+  let address = String(value || "");
+  let suffix = "";
+  while (/[.,;:!?]$/.test(address)) {
+    suffix = address.at(-1) + suffix;
+    address = address.slice(0, -1);
+  }
+  while (/[\])}]$/.test(address)) {
+    const last = address.at(-1);
+    const open = last === ")" ? "(" : last === "]" ? "[" : "{";
+    const closeCount = (address.match(new RegExp(`\\${last}`, "g")) || []).length;
+    const openCount = (address.match(new RegExp(`\\${open}`, "g")) || []).length;
+    if (closeCount <= openCount) break;
+    suffix = last + suffix;
+    address = address.slice(0, -1);
+  }
+  return { address, suffix };
+}
+
+function webAddressHrefForValue(value) {
+  const address = String(value || "").trim();
+  if (/^https?:\/\//i.test(address)) return address;
+  if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/.*)?$/i.test(address)) return `https://${address}`;
+  return "";
+}
+
+function appendWebAddressLink(parent, value) {
+  const { address, suffix } = cleanWebAddressParts(value);
+  const href = webAddressHrefForValue(address);
+  if (!href) {
+    appendLocalFileLinks(parent, value);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = address;
+  parent.appendChild(link);
+  if (suffix) parent.appendChild(document.createTextNode(suffix));
+}
+
+function appendWebAddressLinks(parent, text) {
+  const value = String(text || "");
+  const pattern = /(^|[\s([>])((?:https?:\/\/|www\.)[^\s<>"`]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"`]*)?)/gi;
+  let cursor = 0;
+  value.replace(pattern, (match, prefix, address, offset) => {
+    const addressOffset = offset + prefix.length;
+    if (addressOffset > cursor) appendLocalFileLinks(parent, value.slice(cursor, addressOffset));
+    appendWebAddressLink(parent, address);
+    cursor = offset + match.length;
+    return match;
+  });
+  if (cursor < value.length) appendLocalFileLinks(parent, value.slice(cursor));
 }
 
 function markdownTitleFromContent(content, fallback) {
