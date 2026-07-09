@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.114";
+const UI_VERSION = "V1.0.115";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -54,6 +54,7 @@ const state = {
     fillPlanConfirming: false,
     clearPlanConfirming: false,
     partialTimeoutSlugs: new Set(),
+    invalidPlanSlugs: new Set(),
     useAutoList: true,
     loop: true,
     delaySeconds: 5,
@@ -556,6 +557,10 @@ function setZoom(value) {
   requestRender();
 }
 
+function resetZoom() {
+  setZoom(1);
+}
+
 function updateCloudModeControl() {
   if (!cloudModeButton) return;
   cloudModeButton.classList.toggle("is-on", state.cloudMode);
@@ -605,6 +610,12 @@ function yodaLogSlug() {
 function zoomBy(direction) {
   const factor = direction > 0 ? 1.14 : 1 / 1.14;
   setZoom(state.zoom * factor);
+}
+
+function pauseTourForManualSelection(reason) {
+  if (!state.tour.active) return;
+  pauseTour();
+  hoverLabel.textContent = `Autopilot paused: ${reason}`;
 }
 
 function historyCanMove(delta) {
@@ -700,7 +711,7 @@ function isValidPlanSlug(slug) {
 }
 
 function plannedPlaybackSlugs() {
-  return state.tour.planSlugs.filter((slug) => isValidPlanSlug(slug));
+  return state.tour.planSlugs.map((slug) => String(slug || "").trim()).filter(Boolean);
 }
 
 function persistPlannedPlayback() {
@@ -717,8 +728,17 @@ async function showTourStop(index) {
   const recoveryTimer = window.setTimeout(() => clearTourPending(slug), tourNodeLoadTimeoutMs + 5000);
   const node = state.nodeMap.get(slug);
   if (!node) {
-    window.clearTimeout(recoveryTimer);
-    clearTourPending(slug);
+    hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${slug}`;
+    try {
+      const result = await loadEntity(slug, { source: "system" });
+      if (result?.status === "partial" || result?.status === "error") {
+        handleTourNodeError(slug, new Error(`Autopilot fetch failed for ${slug}`));
+      }
+    } finally {
+      window.clearTimeout(recoveryTimer);
+      clearTourPending(slug);
+    }
+    if (state.tour.active) scheduleNextTourStop();
     return;
   }
   hoverLabel.textContent = `Autopilot ${state.tour.index + 1}/${state.tour.slugs.length}: ${node.label}`;
@@ -770,6 +790,7 @@ function handleTourNodeTimeout(slug) {
 function handleTourNodeError(slug, error) {
   const node = state.nodeMap.get(slug);
   state.tour.partialTimeoutSlugs.add(slug);
+  state.tour.invalidPlanSlugs.add(slug);
   hoverLabel.textContent = `Partial info loaded for ${node?.label || slug}, moving to next node`;
   console.warn("Autopilot node load failed", slug, error);
   return { status: "error", slug, error };
@@ -964,6 +985,7 @@ async function runLazySearch(query) {
 async function submitSearch() {
   const query = state.query.trim();
   if (!query || query.length < 2 || state.lazySearch.loading) return;
+  pauseTourForManualSelection("manual search");
   await runLazySearch(query);
 }
 
@@ -2181,6 +2203,7 @@ function renderSingleMediaPreview(container, item, options = {}) {
 
 function renderSelectionMediaPreview(items = [], slug = state.focusSlug || "") {
   if (!selectionMediaPreview) return;
+  selectionMediaPreview.classList.remove("is-loading");
   if (selectionMediaSlug) {
     selectionMediaSlug.textContent = slug || "No selection";
     selectionMediaSlug.title = slug || "";
@@ -2191,8 +2214,21 @@ function renderSelectionMediaPreview(items = [], slug = state.focusSlug || "") {
   selectionMediaPreview.closest(".selection-blueprint")?.classList.toggle("has-media", rendered);
 }
 
+function renderSelectionMediaLoading(slug = state.focusSlug || "") {
+  if (!selectionMediaPreview) return;
+  if (selectionMediaSlug) {
+    selectionMediaSlug.textContent = slug || "No selection";
+    selectionMediaSlug.title = slug || "";
+  }
+  selectionMediaPreview.innerHTML = "";
+  selectionMediaPreview.textContent = "loading media..";
+  selectionMediaPreview.classList.add("is-loading");
+  selectionMediaPreview.hidden = false;
+  selectionMediaPreview.closest(".selection-blueprint")?.classList.add("has-media");
+}
+
 async function loadSelectionMediaPreview(slug, loadId) {
-  renderSelectionMediaPreview([], slug);
+  renderSelectionMediaLoading(slug);
   try {
     const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
     if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
@@ -2979,10 +3015,22 @@ function yodaLogEntries(slug) {
   return Array.isArray(entries) ? entries : [entries].filter(Boolean);
 }
 
+function nodeYodaLogEntries(slug, limit = 8) {
+  const entries = yodaLogEntries(slug);
+  return entries.slice(0, limit).map((entry) => ({ slug, entry }));
+}
+
+function globalYodaLogEntries(limit = 20) {
+  return [...state.askYodaLogs.entries()]
+    .flatMap(([slug, entries]) => (Array.isArray(entries) ? entries : [entries].filter(Boolean)).map((entry) => ({ slug, entry })))
+    .sort((left, right) => String(right.entry.captured_at || "").localeCompare(String(left.entry.captured_at || "")))
+    .slice(0, limit);
+}
+
 function rememberYodaLog(slug, entry) {
   const entries = yodaLogEntries(slug);
   entries.unshift({ ...entry, captured_at: chatTimestamp() });
-  state.askYodaLogs.set(slug, entries.slice(0, 8));
+  state.askYodaLogs.set(slug, entries.slice(0, 20));
 }
 
 function formatYodaDiagnosticEntry(slug, log, index) {
@@ -3009,19 +3057,20 @@ function formatYodaDiagnosticEntry(slug, log, index) {
   return rows.join("\n");
 }
 
-function formatYodaDiagnosticLog(slug) {
-  const entries = yodaLogEntries(slug);
+function formatYodaDiagnosticLog(slug, entries = nodeYodaLogEntries(slug, 8), scope = "node") {
   if (!entries.length) {
     return [
-      "Ask Yoda diagnostic log",
+      scope === "global" ? "Global Ask Yoda diagnostic log" : "Ask Yoda diagnostic log",
       `selected_slug: ${slug || "unknown"}`,
-      "No Ask Yoda diagnostic entries for this node yet.",
+      scope === "global" ? "No Ask Yoda diagnostic entries yet." : "No Ask Yoda diagnostic entries for this node yet.",
     ].join("\n");
   }
-  return entries.map((entry, index) => formatYodaDiagnosticEntry(slug, entry, index)).join("\n\n---\n\n");
+  return entries.map(({ slug: entrySlug, entry }, index) => formatYodaDiagnosticEntry(entrySlug, entry, index)).join("\n\n---\n\n");
 }
 
-function openYodaLogWindow(slug = state.modalAction?.slug, options = {}) {
+function openYodaLogWindow(options = {}) {
+  const scope = options.scope || "node";
+  const slug = options.slug || state.modalAction?.slug || state.focusSlug;
   const previous = state.modalAction;
   if (options.returnToAsk || previous?.action === "ask-yoda") {
     state.yodaLogReturn = { action: "ask-yoda", slug: previous?.slug || slug, label: previous?.label || state.nodeMap.get(slug)?.label || slug };
@@ -3029,7 +3078,7 @@ function openYodaLogWindow(slug = state.modalAction?.slug, options = {}) {
     state.yodaLogReturn = null;
   }
   modalKicker.textContent = "Ask Yoda Log";
-  modalTitle.textContent = "Ask Yoda Log";
+  modalTitle.textContent = scope === "global" ? "Global Ask Yoda Log" : "Ask Yoda Log";
   modalPrimaryButton.textContent = "Close";
   modalCancelButton.hidden = true;
   modalEditor.hidden = true;
@@ -3038,7 +3087,8 @@ function openYodaLogWindow(slug = state.modalAction?.slug, options = {}) {
   modalMarkdown.innerHTML = "";
   const pre = document.createElement("pre");
   pre.className = "yoda-log-window";
-  pre.textContent = formatYodaDiagnosticLog(slug);
+  const entries = scope === "global" ? globalYodaLogEntries(20) : nodeYodaLogEntries(slug, 8);
+  pre.textContent = formatYodaDiagnosticLog(slug, entries, scope);
   modalMarkdown.appendChild(pre);
   operationModal.hidden = false;
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
@@ -3123,6 +3173,38 @@ function mergeSlugSelectorOptions(cachedOptions = [], liveOptions = []) {
   return [...merged.values()];
 }
 
+function renderSlugSelectorPanel(selector, options = []) {
+  const { input, panel } = selector;
+  if (!input || !panel) return;
+  panel.innerHTML = "";
+  if (!options.length) {
+    const empty = document.createElement("p");
+    empty.className = "slug-selector-empty";
+    empty.textContent = input.value.trim().length >= 2 ? "No matching slugs" : "Type two characters";
+    panel.appendChild(empty);
+    return;
+  }
+  options.slice(0, 8).forEach(({ node, source }) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "slug-selector-row";
+    row.setAttribute("aria-label", `Select ${node.slug}`);
+    const slug = document.createElement("span");
+    slug.className = "slug-selector-slug";
+    slug.textContent = node.slug;
+    const meta = document.createElement("span");
+    meta.className = "slug-selector-meta";
+    meta.textContent = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
+    row.append(slug, meta);
+    row.addEventListener("click", () => {
+      input.value = node.slug;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+    panel.appendChild(row);
+  });
+}
+
 function renderSlugSelectorOptions(selector) {
   const { input, list, sourceSlug = "", selectorId } = selector;
   if (!input || !list) return;
@@ -3137,6 +3219,7 @@ function renderSlugSelectorOptions(selector) {
     item.label = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
     list.appendChild(item);
   });
+  renderSlugSelectorPanel(selector, options);
 }
 
 async function runLiveSlugSelectorSearch(selector) {
@@ -3181,7 +3264,11 @@ function createSlugSelector({
   const list = document.createElement("datalist");
   list.id = `${id}Options`;
   modalForm.appendChild(list);
-  const selector = { selectorId: id, input, list, sourceSlug, statusTarget };
+  const panel = document.createElement("div");
+  panel.className = "slug-selector-panel";
+  panel.id = `${id}Panel`;
+  modalForm.appendChild(panel);
+  const selector = { selectorId: id, input, list, panel, sourceSlug, statusTarget };
   renderSlugSelectorOptions(selector);
   input.addEventListener("input", () => {
     renderSlugSelectorOptions(selector);
@@ -3218,6 +3305,7 @@ async function runLiveRelationshipTargetSearch(sourceSlug, operationTarget) {
     selectorId: "operationTarget",
     input: operationTarget,
     list: modalForm.querySelector("#operationTargetOptions"),
+    panel: modalForm.querySelector("#operationTargetPanel"),
     sourceSlug,
     statusTarget: modalMessage,
   };
@@ -3615,7 +3703,7 @@ function renderAutopilotPlanForm() {
   draft.forEach((slug, index) => {
     const row = document.createElement("div");
     row.className = "plan-row";
-    if (slug && !state.tour.partialTimeoutSlugs.has(slug) && !isValidPlanSlug(slug)) {
+    if (slug && state.tour.invalidPlanSlugs.has(slug)) {
       row.classList.add("is-invalid");
       row.title = "Node invalid, please check!";
     }
@@ -3635,7 +3723,9 @@ function renderAutopilotPlanForm() {
         const nextSlug = value.trim();
         if (draft[index] && draft[index] !== nextSlug) {
           state.tour.partialTimeoutSlugs.delete(draft[index]);
+          state.tour.invalidPlanSlugs.delete(draft[index]);
         }
+        state.tour.invalidPlanSlugs.delete(nextSlug);
         draft[index] = nextSlug;
       },
     });
@@ -4291,7 +4381,9 @@ async function runModalPrimaryAction() {
       if (!name || !category) {
         throw new Error("Name and category are required.");
       }
-      const response = await apiPost("/api/entity-create", { name, description, category });
+      const creationNote = "node created via Memory Stargraph UI";
+      const creationDescription = [description, creationNote].filter(Boolean).join("\n\n");
+      const response = await apiPost("/api/entity-create", { name, description: creationDescription, category });
       if (!response.ok) throw new Error(response.data?.error || `Create node failed with ${response.status}`);
       closeModal();
       applyGraphPayload(response.data.graph, response.data.slug);
@@ -4735,7 +4827,8 @@ function finishCanvasDrag(clientX, clientY, options = {}) {
   state.drag.pointerId = null;
   const node = pickNode(clientX, clientY);
   if (!state.drag.moved && node && options.selectOnTap !== false) {
-    void loadEntity(node.slug);
+    pauseTourForManualSelection("manual map selection");
+    void loadEntity(node.slug, { source: "manual-map" });
   }
   canvas.style.cursor = node ? "pointer" : "default";
   requestRender();
@@ -4813,10 +4906,10 @@ function bindEvents() {
     setYodaDepth(event.target.value);
   });
   modalYodaLogButton?.addEventListener("click", () => {
-    openYodaLogWindow(yodaLogSlug());
+    openYodaLogWindow({ scope: "node", slug: yodaLogSlug() });
   });
   settingsYodaLogButton?.addEventListener("click", () => {
-    openYodaLogWindow(yodaLogSlug());
+    openYodaLogWindow({ scope: "global" });
   });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
@@ -4861,11 +4954,13 @@ function bindEvents() {
     if (event.key !== "Enter") return;
     event.preventDefault();
     hideFloatingPanels();
+    pauseTourForManualSelection("manual search");
     void submitSearch();
   });
 
   searchButton.addEventListener("click", () => {
     hideFloatingPanels();
+    pauseTourForManualSelection("manual search");
     void submitSearch();
   });
 
@@ -4959,6 +5054,14 @@ function bindEvents() {
 
   zoomInButton.addEventListener("click", () => {
     zoomBy(1);
+  });
+
+  zoomLevel?.addEventListener("click", resetZoom);
+  zoomLevel?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      resetZoom();
+    }
   });
 
   historyBackButton?.addEventListener("click", () => {
@@ -5102,7 +5205,8 @@ function bindEvents() {
     state.focusSlug = node.slug;
     setHover(node.slug);
     hideGraphTooltip();
-    void loadEntity(node.slug);
+    pauseTourForManualSelection("manual map selection");
+    void loadEntity(node.slug, { source: "manual-map" });
   };
 
   const beginTouchLikeDrag = (clientX, clientY, pointerId = null) => {
@@ -5275,7 +5379,8 @@ function bindEvents() {
     if (!node) return;
     event.preventDefault();
     state.focusSlug = node.slug;
-    void loadEntity(node.slug);
+    pauseTourForManualSelection("manual map selection");
+    void loadEntity(node.slug, { source: "manual-map" });
     showContextMenu(node.slug, event.clientX, event.clientY);
   });
 
@@ -5284,7 +5389,8 @@ function bindEvents() {
     if (!node) return;
     event.preventDefault();
     state.focusSlug = node.slug;
-    void loadEntity(node.slug);
+    pauseTourForManualSelection("manual map selection");
+    void loadEntity(node.slug, { source: "manual-map" });
     void openNodeModal("view", node.slug);
   });
 

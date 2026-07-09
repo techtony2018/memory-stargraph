@@ -26,7 +26,7 @@ It is built with Python stdlib plus vanilla HTML/CSS/Canvas JavaScript, so it ru
   <img src="docs/assets/shared-ai-memory-architecture.png" alt="Memory Stargraph and GBrain shared AI memory architecture diagram">
 </p>
 
-[Watch the demo video on YouTube](https://youtu.be/GbWZo7g1ZBA)
+[Watch the demo video on YouTube](https://youtu.be/eQ5UJKYMKaA)
 
 ## Run
 
@@ -63,11 +63,16 @@ These are the highest-value capabilities for turning a `gbrain` knowledge base i
 
 ## How Ask Yoda Works
 
-Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.113 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
+Ask Yoda is a node-scoped chat workflow. When you open Ask Yoda from a selected node, the browser sends the node slug, current question, recent chat history, and configured Yoda depth to the local Memory Stargraph server. Yoda depth controls graph-query hop depth and how many related source nodes the server reads directly: lower values are faster, higher values provide broader graph context. V1.0.115 exposes that depth both in the Ask Yoda chat and in Settings, with both controls staying synchronized.
 
 Under the hood, the server gathers the selected page with `gbrain get`, nearby relationships with graph/backlink queries, backlinks, targeted search snippets, media hints, and direct reads of likely related source nodes. It keeps the prompt focused on the selected node, relationship labels, summaries, and nearby slugs so the answer can cite concrete graph context without dumping raw command output. If the configured agent path is available, Memory Stargraph asks that local agent to produce the response. If the agent is unavailable or times out, the endpoint falls back to a concise GBrain-context response so the UI still gives an actionable answer.
 
 The Ask Yoda **View Log** button opens a scrollable diagnostics window for the latest request. It shows the `request_id`, selected slug, depth, source, timing phases, fallback status, model/OpenClaw status, and safe stdout/stderr or error summaries when available. It is intended for debugging endpoint behavior without exposing full prompts, secrets, or raw private context.
+
+## Posts about Memory Stargraph
+
+- [GBrain AI agents post](https://www.linkedin.com/posts/realtony_gbrain-ai-aiagents-ugcPost-7480756078972989440-LAZY)
+- [Memory Stargraph build post](https://www.linkedin.com/posts/realtony_gbrain-ai-aiagents-ugcPost-7477536967237242881-GMbC)
 
 ## Autopilot Plan
 
