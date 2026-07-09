@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.119";
+const UI_VERSION = "V1.0.120";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -8,6 +8,14 @@ const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
 const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 const PLANNED_PLAYBACK_KEY = "memory-stargraph.planned-playback.v1";
+const PLACEHOLDER_SUMMARY_TEXTS = new Set([
+  "summary",
+  "metadata",
+  "no summary available.",
+  "discovered by lazy graph expansion.",
+  "discovered by lazy search.",
+  "discovered by graph traversal.",
+]);
 
 const state = {
   graph: null,
@@ -70,6 +78,8 @@ const state = {
   relationshipTargetSearch: { loading: false, liveOptions: [] },
   relationshipTypeSearch: { loading: false, liveOptions: [] },
   settingsPinned: false,
+  hudTooltip: null,
+  hudTooltipTarget: null,
   relationshipPages: new Map(),
   backlinkPages: new Map(),
   relationshipReturnView: null,
@@ -563,6 +573,35 @@ function resetZoom() {
   setZoom(1);
 }
 
+function tooltipTargetFromEvent(event) {
+  if (!event.target?.closest) return null;
+  return event.target.closest(".has-tooltip") || null;
+}
+
+function bindHudTooltipEvents() {
+  ensureHudTooltipElement();
+  document.addEventListener("pointerover", (event) => {
+    const target = tooltipTargetFromEvent(event);
+    if (!target || target.contains(event.relatedTarget)) return;
+    showHudTooltip(target);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const target = tooltipTargetFromEvent(event);
+    if (!target || target.contains(event.relatedTarget)) return;
+    hideHudTooltip(target);
+  });
+  document.addEventListener("focusin", (event) => {
+    const target = tooltipTargetFromEvent(event);
+    if (target) showHudTooltip(target);
+  });
+  document.addEventListener("focusout", (event) => {
+    const target = tooltipTargetFromEvent(event);
+    if (target) hideHudTooltip(target);
+  });
+  window.addEventListener("scroll", () => hideHudTooltip(), true);
+  window.addEventListener("resize", () => hideHudTooltip());
+}
+
 function setHudTooltip(element, text) {
   if (!element) return;
   const value = String(text || "").trim();
@@ -574,6 +613,58 @@ function setHudTooltip(element, text) {
   }
   element.dataset.tooltip = value;
   element.classList.add("has-tooltip");
+}
+
+function ensureHudTooltipElement() {
+  if (state.hudTooltip || !document.body) return state.hudTooltip;
+  document.documentElement.classList.add("js-hud-tooltips");
+  state.hudTooltip = document.createElement("div");
+  state.hudTooltip.className = "hud-tooltip";
+  state.hudTooltip.setAttribute("role", "tooltip");
+  state.hudTooltip.hidden = true;
+  document.body.appendChild(state.hudTooltip);
+  return state.hudTooltip;
+}
+
+function positionHudTooltip(target) {
+  const tooltip = ensureHudTooltipElement();
+  if (!tooltip || !target) return;
+  const rect = target.getBoundingClientRect();
+  const width = tooltip.offsetWidth || 220;
+  const height = tooltip.offsetHeight || 36;
+  const margin = 10;
+  let left = rect.left + rect.width / 2 - width / 2;
+  let top = rect.bottom + 8;
+  if (top + height + margin > window.innerHeight) {
+    top = rect.top - height - 8;
+  }
+  left = Math.min(window.innerWidth - width - margin, Math.max(margin, left));
+  top = Math.min(window.innerHeight - height - margin, Math.max(margin, top));
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function showHudTooltip(target) {
+  const tooltipText = String(target?.dataset?.tooltip || "").trim();
+  const tooltip = ensureHudTooltipElement();
+  if (!tooltip || !target || !tooltipText) {
+    hideHudTooltip();
+    return;
+  }
+  state.hudTooltipTarget = target;
+  target.removeAttribute("title");
+  tooltip.textContent = tooltipText;
+  tooltip.hidden = false;
+  positionHudTooltip(target);
+}
+
+function hideHudTooltip(target = null) {
+  if (target && state.hudTooltipTarget && target !== state.hudTooltipTarget) return;
+  if (state.hudTooltip) {
+    state.hudTooltip.hidden = true;
+    state.hudTooltip.textContent = "";
+  }
+  state.hudTooltipTarget = null;
 }
 
 function setModalControlTooltips(primaryText = "", cancelText = "") {
@@ -1869,17 +1960,22 @@ function shortLabel(text, limit = 26) {
   return `${text.slice(0, limit - 1).trim()}…`;
 }
 
+function isPlaceholderSummary(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return !value || PLACEHOLDER_SUMMARY_TEXTS.has(value) || value.startsWith("discovered by lazy ");
+}
+
 function briefSummary(node) {
   const text = String(node?.summary || "").replace(/\s+/g, " ").trim();
-  if (!text || text === "No summary available." || ["summary", "metadata"].includes(text.toLowerCase())) {
-    return "No summary available.";
+  if (isPlaceholderSummary(text)) {
+    return "";
   }
   return shortLabel(text, 150);
 }
 
 function displaySummary(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
-  if (!value || value === "No summary available." || ["summary", "metadata"].includes(value.toLowerCase())) {
+  if (isPlaceholderSummary(value)) {
     return "No meaningful summary is available for this node yet.";
   }
   return value;
@@ -2129,9 +2225,14 @@ function showGraphTooltip(node, clientX, clientY) {
   graphTooltip.innerHTML = "";
   const title = document.createElement("strong");
   title.textContent = `${node.label} · ${node.category || node.type}`;
-  const summary = document.createElement("span");
-  summary.textContent = briefSummary(node);
-  graphTooltip.append(title, summary);
+  const summaryText = briefSummary(node);
+  if (summaryText) {
+    const summary = document.createElement("span");
+    summary.textContent = summaryText;
+    graphTooltip.append(title, summary);
+  } else {
+    graphTooltip.appendChild(title);
+  }
   if (linkTypes.length) {
     const relationship = document.createElement("small");
     relationship.textContent = `relationship: ${linkTypes.join(", ")}`;
@@ -5805,6 +5906,7 @@ async function fetchHidden() {
 }
 
 async function init() {
+  bindHudTooltipEvents();
   bindEvents();
   updateResponsiveSelectionPlacement();
   uiVersion.textContent = UI_VERSION;

@@ -184,6 +184,33 @@ body::before {
   transform: translate(-50%, 0);
 }
 
+.js-hud-tooltips .has-tooltip::before {
+  display: none;
+}
+
+.hud-tooltip {
+  position: fixed;
+  z-index: 500;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 20px));
+  padding: 7px 9px;
+  border: 1px solid rgba(34, 211, 238, 0.34);
+  border-radius: 3px;
+  color: var(--text);
+  background: rgba(2, 8, 22, 0.95);
+  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.36), 0 0 18px rgba(34, 211, 238, 0.18);
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  pointer-events: none;
+  text-transform: none;
+}
+
+.hud-tooltip[hidden] {
+  display: none;
+}
+
 .eyeline,
 .panel-label,
 .metric-label,

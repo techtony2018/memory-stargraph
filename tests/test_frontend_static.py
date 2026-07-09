@@ -324,8 +324,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("<p class=\"panel-label\">Hot Hubs</p>", markup)
         self.assertIn("<span>Top</span>", markup)
         self.assertNotIn("<span>Top hubs</span>", markup)
-        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.119"', markup)
-        self.assertIn('src="/assets/brand/yoda-selection-avatar.png?v=1.0.119"', markup)
+        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.120"', markup)
+        self.assertIn('src="/assets/brand/yoda-selection-avatar.png?v=1.0.120"', markup)
         self.assertIn("object-fit: contain", styles)
         self.assertIn("overflow: hidden", styles)
         self.assertIn(".selection-actions", styles)
@@ -410,9 +410,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.119"', markup)
-        self.assertIn('src="/app.js?v=1.0.119"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.119"', script)
+        self.assertIn('href="/styles.css?v=1.0.120"', markup)
+        self.assertIn('src="/app.js?v=1.0.120"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.120"', script)
         self.assertIn("height: 28px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -428,7 +428,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("updateCloudModeControl", script)
         self.assertNotIn("cloudModeButton.textContent", script)
         self.assertIn("displaySummary", script)
-        self.assertIn('["summary", "metadata"].includes', script)
+        self.assertIn("PLACEHOLDER_SUMMARY_TEXTS.has", script)
 
     def test_backlinks_modal_loads_immediately(self):
         script = (ROOT / "public/app.js").read_text()
@@ -823,13 +823,21 @@ class FrontendStaticTests(unittest.TestCase):
     def test_tooltips_are_hud_only_without_native_titles(self):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
+        styles = (ROOT / "public/styles.css").read_text()
 
         self.assertIn("function setHudTooltip", script)
+        self.assertIn("function showHudTooltip", script)
+        self.assertIn("function hideHudTooltip", script)
+        self.assertIn('document.documentElement.classList.add("js-hud-tooltips")', script)
+        self.assertIn('document.body.appendChild(state.hudTooltip)', script)
+        self.assertIn('event.target.closest(".has-tooltip")', script)
         self.assertIn("element.removeAttribute(\"title\")", script)
         self.assertNotIn(' title="', markup)
         self.assertNotRegex(script.replace("document.title =", "documentTitle ="), r"\.title\s*=")
         self.assertIn('class="graph-wordmark-link has-tooltip"', markup)
         self.assertIn('id="uiVersion" class="ui-version ui-version-link has-tooltip"', markup)
+        self.assertIn(".hud-tooltip", styles)
+        self.assertIn(".js-hud-tooltips .has-tooltip::before", styles)
 
     def test_static_actionable_controls_have_text_or_hud_tooltip(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -864,6 +872,17 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('setHudTooltip(clearButton, "Clear every manual plan row.")', script)
         self.assertIn('setHudTooltip(cancel, "Keep the current manual plan.")', script)
         self.assertIn('setHudTooltip(confirm, "Replace the manual plan with generated rows.")', script)
+
+    def test_map_tooltips_hide_lazy_expansion_placeholder(self):
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn("const PLACEHOLDER_SUMMARY_TEXTS", script)
+        self.assertIn("function isPlaceholderSummary", script)
+        self.assertIn('"discovered by lazy graph expansion."', script)
+        self.assertIn("const summaryText = briefSummary(node);", script)
+        self.assertIn("if (summaryText)", script)
+        self.assertIn("graphTooltip.append(title, summary)", script)
+        self.assertNotIn('return "No summary available.";', script[script.index("function briefSummary"):script.index("function displaySummary")])
 
     def test_ask_yoda_hidden_fallback_reveal_ui(self):
         script = (ROOT / "public/app.js").read_text()
@@ -1036,11 +1055,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.119"', markup)
-        self.assertIn('src="/app.js?v=1.0.119"', markup)
-        self.assertIn('>V1.0.119</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.119"', script)
-        self.assertIn('UI_VERSION = "V1.0.119"', server)
+        self.assertIn('href="/styles.css?v=1.0.120"', markup)
+        self.assertIn('src="/app.js?v=1.0.120"', markup)
+        self.assertIn('>V1.0.120</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.120"', script)
+        self.assertIn('UI_VERSION = "V1.0.120"', server)
 
     def test_readme_showcases_current_screenshot_and_top_features(self):
         readme = (ROOT / "README.md").read_text()
@@ -1108,10 +1127,10 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.119"', markup)
-        self.assertIn('src="/app.js?v=1.0.119"', markup)
-        self.assertIn('V1.0.119', markup)
-        self.assertIn('const UI_VERSION = "V1.0.119"', script)
+        self.assertIn('href="/styles.css?v=1.0.120"', markup)
+        self.assertIn('src="/app.js?v=1.0.120"', markup)
+        self.assertIn('V1.0.120', markup)
+        self.assertIn('const UI_VERSION = "V1.0.120"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -1125,11 +1144,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.119"', markup)
-        self.assertIn('src="/app.js?v=1.0.119"', markup)
-        self.assertIn('>V1.0.119</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.119"', script)
-        self.assertIn('UI_VERSION = "V1.0.119"', (ROOT / "server.py").read_text())
+        self.assertIn('href="/styles.css?v=1.0.120"', markup)
+        self.assertIn('src="/app.js?v=1.0.120"', markup)
+        self.assertIn('>V1.0.120</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.120"', script)
+        self.assertIn('UI_VERSION = "V1.0.120"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)
