@@ -156,6 +156,25 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("history", call_names)
         self.assertIn("refresh_embedding", call_names)
 
+    def test_entity_create_does_not_create_relationships_from_ui_context(self):
+        fake_store = FakeStore()
+        payload = {
+            "name": "ERFA Reporting",
+            "description": "node created via Memory Stargraph UI",
+            "category": "projects",
+            "source_slug": "products/memory-stargraph",
+            "context_slug": "products/memory-stargraph",
+            "link_type": "source",
+        }
+
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post("/api/entity-create", payload)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn(("create_entity", "ERFA Reporting", "node created via Memory Stargraph UI", "projects"), fake_store.calls)
+        self.assertNotIn("add_relationship", [call[0] for call in fake_store.calls])
+
     def test_entity_media_endpoint_returns_detected_media(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.115";
+const UI_VERSION = "V1.0.116";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -3173,21 +3173,52 @@ function mergeSlugSelectorOptions(cachedOptions = [], liveOptions = []) {
   return [...merged.values()];
 }
 
-function renderSlugSelectorPanel(selector, options = []) {
-  const { input, panel } = selector;
-  if (!input || !panel) return;
-  panel.innerHTML = "";
+function positionSlugSelectorPopup(selector) {
+  const { input, popup } = selector;
+  if (!input || !popup || popup.hidden) return;
+  const rect = input.getBoundingClientRect();
+  popup.style.left = `${Math.max(8, rect.left)}px`;
+  popup.style.top = `${Math.min(window.innerHeight - 12, rect.bottom + 6)}px`;
+  popup.style.width = `${Math.max(260, rect.width)}px`;
+}
+
+function hideSlugSelectorPopup(selector) {
+  const { popup } = selector || {};
+  if (!popup) return;
+  popup.hidden = true;
+  popup.innerHTML = "";
+}
+
+function removeSlugSelectorPopups() {
+  document.querySelectorAll(".slug-selector-popup").forEach((popup) => popup.remove());
+}
+
+function chooseSlugSelectorOption(selector, node) {
+  const { input } = selector;
+  input.value = node.slug;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  hideSlugSelectorPopup(selector);
+  input.focus();
+}
+
+function showSlugSelectorPopup(selector, options = []) {
+  const { input, popup } = selector;
+  if (!input || !popup || document.activeElement !== input) return;
+  popup.innerHTML = "";
   if (!options.length) {
     const empty = document.createElement("p");
     empty.className = "slug-selector-empty";
     empty.textContent = input.value.trim().length >= 2 ? "No matching slugs" : "Type two characters";
-    panel.appendChild(empty);
+    popup.appendChild(empty);
+    popup.hidden = false;
+    positionSlugSelectorPopup(selector);
     return;
   }
   options.slice(0, 8).forEach(({ node, source }) => {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = "slug-selector-row";
+    row.className = "slug-selector-option";
+    row.setAttribute("role", "option");
     row.setAttribute("aria-label", `Select ${node.slug}`);
     const slug = document.createElement("span");
     slug.className = "slug-selector-slug";
@@ -3196,30 +3227,24 @@ function renderSlugSelectorPanel(selector, options = []) {
     meta.className = "slug-selector-meta";
     meta.textContent = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
     row.append(slug, meta);
-    row.addEventListener("click", () => {
-      input.value = node.slug;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.focus();
+    row.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      chooseSlugSelectorOption(selector, node);
     });
-    panel.appendChild(row);
+    popup.appendChild(row);
   });
+  popup.hidden = false;
+  positionSlugSelectorPopup(selector);
 }
 
 function renderSlugSelectorOptions(selector) {
-  const { input, list, sourceSlug = "", selectorId } = selector;
-  if (!input || !list) return;
+  const { input, sourceSlug = "", selectorId } = selector;
+  if (!input) return;
   const query = input.value.trim();
   const selectorData = slugSelectorState(selectorId);
   const cachedOptions = query.length >= 2 ? cachedEntitySearchResults(query, sourceSlug) : [];
   const options = mergeSlugSelectorOptions(cachedOptions, selectorData.liveOptions);
-  list.innerHTML = "";
-  options.forEach(({ node, source }) => {
-    const item = document.createElement("option");
-    item.value = node.slug;
-    item.label = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
-    list.appendChild(item);
-  });
-  renderSlugSelectorPanel(selector, options);
+  showSlugSelectorPopup(selector, options);
 }
 
 async function runLiveSlugSelectorSearch(selector) {
@@ -3257,30 +3282,39 @@ function createSlugSelector({
   const input = document.createElement("input");
   input.id = id;
   input.value = value;
-  input.setAttribute("list", `${id}Options`);
+  input.removeAttribute("list");
   input.placeholder = placeholder;
   input.autocomplete = "off";
   appendField(modalForm, label, input);
-  const list = document.createElement("datalist");
-  list.id = `${id}Options`;
-  modalForm.appendChild(list);
-  const panel = document.createElement("div");
-  panel.className = "slug-selector-panel";
-  panel.id = `${id}Panel`;
-  modalForm.appendChild(panel);
-  const selector = { selectorId: id, input, list, panel, sourceSlug, statusTarget };
+  const popup = document.createElement("div");
+  popup.className = "slug-selector-popup";
+  popup.id = `${id}Popup`;
+  popup.hidden = true;
+  popup.setAttribute("role", "listbox");
+  document.body.appendChild(popup);
+  input.setAttribute("aria-controls", popup.id);
+  input.setAttribute("aria-autocomplete", "list");
+  const selector = { selectorId: id, input, popup, sourceSlug, statusTarget };
   renderSlugSelectorOptions(selector);
   input.addEventListener("input", () => {
     renderSlugSelectorOptions(selector);
     if (onInput) onInput(input.value);
   });
+  input.addEventListener("focus", () => {
+    renderSlugSelectorOptions(selector);
+  });
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => hideSlugSelectorPopup(selector), 80);
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       void runLiveSlugSelectorSearch(selector);
+    } else if (event.key === "Escape") {
+      hideSlugSelectorPopup(selector);
     }
   });
-  return { input, list, selector };
+  return { input, popup, selector };
 }
 
 function mergeRelationshipTargetOptions(cachedOptions = [], liveOptions = []) {
@@ -3288,24 +3322,18 @@ function mergeRelationshipTargetOptions(cachedOptions = [], liveOptions = []) {
 }
 
 function renderRelationshipTargetOptions(sourceSlug, query = "", liveOptions = state.relationshipTargetSearch.liveOptions) {
-  const list = modalForm.querySelector("#operationTargetOptions");
-  if (!list) return;
+  const input = modalForm.querySelector("#operationTarget");
+  const popup = document.getElementById("operationTargetPopup");
+  if (!input || !popup) return;
   const options = mergeRelationshipTargetOptions(query.length >= 2 ? cachedEntitySearchResults(query, sourceSlug) : [], liveOptions);
-  list.innerHTML = "";
-  options.forEach(({ node, source }) => {
-    const item = document.createElement("option");
-    item.value = node.slug;
-    item.label = `${node.label || node.slug} · ${node.category || node.type || "entity"} · ${source}`;
-    list.appendChild(item);
-  });
+  showSlugSelectorPopup({ input, popup }, options);
 }
 
 async function runLiveRelationshipTargetSearch(sourceSlug, operationTarget) {
   const selector = {
     selectorId: "operationTarget",
     input: operationTarget,
-    list: modalForm.querySelector("#operationTargetOptions"),
-    panel: modalForm.querySelector("#operationTargetPanel"),
+    popup: document.getElementById("operationTargetPopup"),
     sourceSlug,
     statusTarget: modalMessage,
   };
@@ -3463,6 +3491,7 @@ function renderTagOperationForm(slug) {
 }
 
 function renderAddRelationshipForm(slug) {
+  removeSlugSelectorPopups();
   modalForm.innerHTML = "";
   state.relationshipTargetSearch = { loading: false, liveOptions: [] };
   const { input: operationTarget } = createSlugSelector({
@@ -3501,6 +3530,7 @@ function planDraftSlugs() {
 }
 
 function renderAutopilotPlanForm() {
+  removeSlugSelectorPopups();
   modalForm.innerHTML = "";
   state.slugSelectorSearch.clear();
   const draft = planDraftSlugs();
@@ -3730,7 +3760,6 @@ function renderAutopilotPlanForm() {
       },
     });
     row.appendChild(input.closest(".operation-field"));
-    row.appendChild(document.getElementById(`planSlug${index}Options`));
     const addButton = document.createElement("button");
     addButton.className = "relationship-icon-button plan-insert-button";
     addButton.type = "button";
@@ -3853,6 +3882,7 @@ function checkedValues(name) {
 
 function closeModal() {
   operationModal.hidden = true;
+  removeSlugSelectorPopups();
   operationModal.classList.remove("compact-modal");
   state.modalAction = null;
   state.yodaLogReturn = null;
