@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.118"
+UI_VERSION = "V1.0.119"
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -488,13 +488,15 @@ def run_openclaw_agent(prompt, timeout=45, return_details=False):
 def sanitize_yoda_result(result):
     payload = dict(result or {})
     output = str(payload.get("output") or "").strip()
+    original_output = output
     raw_markers = [
         "Question-specific gbrain retrieval:",
         "Direct relationship context:",
         "Selected node content:",
         "OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.",
     ]
-    if any(marker in output for marker in raw_markers):
+    had_raw_fallback = any(marker in output for marker in raw_markers)
+    if had_raw_fallback:
         output = re.split(
             r"(?:Question-specific gbrain retrieval:|Direct relationship context:|Selected node content:)",
             output,
@@ -504,6 +506,8 @@ def sanitize_yoda_result(result):
         if not output:
             output = "I found graph context for this node, but the answer model is unavailable right now. Try again after the Ask Yoda agent is reachable."
     payload["output"] = output
+    if payload.get("source") == "fallback" and original_output:
+        payload["fallback_output"] = str(payload.get("fallback_output") or original_output).strip()
     payload.pop("prompt", None)
     diagnostics = dict(payload.get("diagnostics") or {})
     timings = payload.get("timings") or diagnostics.get("timings") or {}

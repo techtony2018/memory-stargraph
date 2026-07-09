@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.118";
+const UI_VERSION = "V1.0.119";
 const RELATIONSHIP_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
@@ -574,6 +574,12 @@ function setHudTooltip(element, text) {
   }
   element.dataset.tooltip = value;
   element.classList.add("has-tooltip");
+}
+
+function setModalControlTooltips(primaryText = "", cancelText = "") {
+  setHudTooltip(modalCloseButton, "Close this window.");
+  setHudTooltip(modalPrimaryButton, primaryText ? `${primaryText}.` : "");
+  setHudTooltip(modalCancelButton, cancelText ? `${cancelText}.` : "");
 }
 
 function updateCloudModeControl() {
@@ -1437,6 +1443,8 @@ function updateHiddenList() {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "Show";
+    const hiddenListButton = button;
+    setHudTooltip(hiddenListButton, "Restore this hidden category.");
     button.addEventListener("click", () => {
       void showNode(node.slug);
     });
@@ -2644,6 +2652,7 @@ function renderViewModalMessage(slug) {
   editButton.type = "button";
   editButton.className = "ghost-button compact-button inline-action-button";
   editButton.textContent = "Modify markdown";
+  setHudTooltip(editButton, "Edit this node markdown.");
   editButton.addEventListener("click", () => {
     void openNodeModal("edit", slug);
   });
@@ -2739,6 +2748,7 @@ function renderRelationshipPager(page, totalPages, onPage) {
   previous.type = "button";
   previous.textContent = "Previous";
   previous.disabled = page <= 0;
+  setHudTooltip(previous, "Previous page.");
   previous.addEventListener("click", () => onPage(page - 1));
   pager.appendChild(previous);
 
@@ -2749,6 +2759,7 @@ function renderRelationshipPager(page, totalPages, onPage) {
     button.type = "button";
     button.textContent = String(pageIndex + 1);
     button.setAttribute("aria-current", pageIndex === page ? "page" : "false");
+    setHudTooltip(button, `Go to page ${pageIndex + 1}.`);
     button.disabled = pageIndex === page;
     button.addEventListener("click", () => onPage(pageIndex));
     pager.appendChild(button);
@@ -2765,6 +2776,7 @@ function renderRelationshipPager(page, totalPages, onPage) {
   next.type = "button";
   next.textContent = "Next";
   next.disabled = page >= totalPages - 1;
+  setHudTooltip(next, "Next page.");
   next.addEventListener("click", () => onPage(page + 1));
   pager.appendChild(next);
   return pager;
@@ -3044,6 +3056,29 @@ function renderMarkdownInline(text, parent) {
   if (cursor < value.length) appendInlineMarkdown(parent, value.slice(cursor));
 }
 
+function renderHiddenFallbackReveal(message, parent) {
+  const fallbackOutput = String(message.fallbackOutput || "").trim();
+  if (!fallbackOutput) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "chat-fallback-reveal";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button compact-button";
+  button.textContent = "click to see result from Ask GBrain";
+  setHudTooltip(button, "Reveal raw Ask GBrain fallback output.");
+  const output = document.createElement("pre");
+  output.className = "chat-fallback-output";
+  output.hidden = true;
+  output.textContent = `Ask GBrain fallback output\n\n${fallbackOutput}`;
+  button.addEventListener("click", () => {
+    output.hidden = !output.hidden;
+    button.textContent = output.hidden ? "click to see result from Ask GBrain" : "hide Ask GBrain fallback output";
+    setHudTooltip(button, output.hidden ? "Reveal raw Ask GBrain fallback output." : "Hide raw Ask GBrain fallback output.");
+  });
+  wrapper.append(button, output);
+  parent.appendChild(wrapper);
+}
+
 function renderAskChat(slug, label, options = {}) {
   const history = chatHistoryFor(slug, label, options);
   modalChatLog.innerHTML = "";
@@ -3071,6 +3106,7 @@ function renderAskChat(slug, label, options = {}) {
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
     renderMarkdownInline(message.content, bubble);
+    renderHiddenFallbackReveal(message, bubble);
     if (message.pending) {
       const dots = document.createElement("span");
       dots.className = "thinking-dots";
@@ -3299,6 +3335,7 @@ function showSlugSelectorPopup(selector, options = []) {
     row.className = "slug-selector-option";
     row.setAttribute("role", "option");
     row.setAttribute("aria-label", `Select ${node.slug}`);
+    setHudTooltip(row, `Select ${node.slug}`);
     const slug = document.createElement("span");
     slug.className = "slug-selector-slug";
     slug.textContent = node.slug;
@@ -3462,6 +3499,8 @@ function showRelationshipTypePopup(selector, options = []) {
     row.className = "slug-selector-option relationship-type-option";
     row.setAttribute("role", "option");
     row.setAttribute("aria-label", `Select relationship type ${value}`);
+    const option = value;
+    setHudTooltip(row, `Use relationship type ${option}`);
     const type = document.createElement("span");
     type.className = "slug-selector-slug relationship-type-value";
     type.textContent = value;
@@ -3902,6 +3941,7 @@ function renderAutopilotPlanForm() {
   addCurrent.className = "ghost-button compact-button";
   addCurrent.type = "button";
   addCurrent.textContent = "Add";
+  setHudTooltip(addCurrent, "Add the currently selected node to the manual plan.");
   addCurrent.addEventListener("click", () => {
     draft.push("");
     renderAutopilotPlanForm();
@@ -3913,6 +3953,7 @@ function renderAutopilotPlanForm() {
   clearButton.className = "ghost-button compact-button";
   clearButton.type = "button";
   clearButton.textContent = "Clear";
+  setHudTooltip(clearButton, "Clear every manual plan row.");
   clearButton.addEventListener("click", () => {
     state.tour.clearPlanConfirming = true;
     state.tour.fillPlanConfirming = false;
@@ -3944,6 +3985,7 @@ function renderAutopilotPlanForm() {
     cancel.type = "button";
     cancel.className = "ghost-button compact-button";
     cancel.textContent = "Cancel";
+    setHudTooltip(cancel, "Keep the current manual plan.");
     cancel.addEventListener("click", () => {
       state.tour.fillPlanConfirming = false;
       state.tour.clearPlanConfirming = false;
@@ -3953,6 +3995,7 @@ function renderAutopilotPlanForm() {
     confirm.type = "button";
     confirm.className = "ghost-button compact-button primary";
     confirm.textContent = isClearConfirm ? "Clear" : "Generate";
+    setHudTooltip(confirm, "Replace the manual plan with generated rows.");
     confirm.addEventListener("click", () => {
       if (isClearConfirm) {
         draft.splice(0, draft.length);
@@ -4163,6 +4206,7 @@ function closeModal() {
   modalCancelButton.hidden = false;
   modalCancelButton.disabled = false;
   modalCancelButton.textContent = "Cancel";
+  setModalControlTooltips("Save", "Cancel");
 }
 
 async function openNodeModal(action, slug = state.focusSlug) {
@@ -4207,6 +4251,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderNewNodeForm();
+    setModalControlTooltips("Create node", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationNodeName")?.focus();
     return;
@@ -4224,6 +4269,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     operationModal.classList.add("compact-modal");
     renderAutopilotPlanForm();
+    setModalControlTooltips("Play", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("input")?.focus();
     return;
@@ -4234,12 +4280,14 @@ async function openNodeModal(action, slug = state.focusSlug) {
   modalCancelButton.hidden = false;
   modalCancelButton.textContent = "Cancel";
   modalPrimaryButton.classList.remove("danger");
+  setModalControlTooltips(modalPrimaryButton.textContent, modalCancelButton.textContent);
 
   if (action === "view" || action === "edit") {
     modalKicker.textContent = action === "view" ? "View" : "Modify gbrain page";
     modalPrimaryButton.textContent = action === "view" ? "Close" : "Save";
     modalEditor.readOnly = action === "view";
     modalCancelButton.hidden = action === "view";
+    setModalControlTooltips(modalPrimaryButton.textContent, modalCancelButton.hidden ? "" : modalCancelButton.textContent);
     if (action === "view") {
       renderViewModalMessage(slug);
     } else {
@@ -4270,6 +4318,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Node media";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
+    setModalControlTooltips("Close", "");
     modalEditor.hidden = true;
     modalMedia.hidden = false;
     modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown/frontmatter. Hosted or locally served media opens on desktop and mobile.";
@@ -4299,6 +4348,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalConfirmInput.dataset.expected = label;
     modalConfirmInput.placeholder = label;
     modalPrimaryButton.disabled = true;
+    setModalControlTooltips("Delete", "Cancel");
     modalMessage.textContent = `Type the full node name exactly to delete this page from gbrain: ${label}`;
     operationModal.hidden = false;
     modalConfirmInput.focus();
@@ -4312,6 +4362,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderAddRelationshipForm(slug);
+    setModalControlTooltips("Add relationship", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationTarget")?.focus();
     return;
@@ -4328,6 +4379,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     syncYodaDepthControl();
     modalChatInput.value = "";
     renderAskChat(slug, label, { mode: "yoda" });
+    setModalControlTooltips("Send", "Cancel");
     operationModal.hidden = false;
     modalChatInput.focus();
     return;
@@ -4337,6 +4389,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Backlinks";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
+    setModalControlTooltips("Close", "");
     modalEditor.readOnly = true;
     modalMessage.textContent = "Loading backlinks...";
     modalEditor.hidden = true;
@@ -4367,6 +4420,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderGraphQueryForm(slug);
+    setModalControlTooltips("Run graph query", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationGraphLinkType")?.focus();
     return;
@@ -4376,6 +4430,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Relationships";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
+    setModalControlTooltips("Close", "");
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
     renderRelationshipsMessage(slug);
@@ -4404,6 +4459,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "History";
     modalPrimaryButton.textContent = "Close";
     modalCancelButton.hidden = true;
+    setModalControlTooltips("Close", "");
     modalMessage.textContent = "Loading page history for this node.";
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
@@ -4417,6 +4473,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalKicker.textContent = "Timeline";
     modalPrimaryButton.textContent = "Add timeline event";
     modalCancelButton.textContent = "Close";
+    setModalControlTooltips("Add timeline event", "Close");
     modalMessage.textContent = "Read-only gbrain timeline. Add a dated event here when something new should be recorded.";
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
@@ -4444,6 +4501,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderRemoveRelationshipForm(slug);
+    setModalControlTooltips("Remove relationship", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationExistingRelationship")?.focus();
     return;
@@ -4456,6 +4514,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderTagOperationForm(slug);
+    setModalControlTooltips("Save tags", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationNewTag")?.focus();
     return;
@@ -4468,6 +4527,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalForm.hidden = false;
     renderTimelineEventForm();
+    setModalControlTooltips("Add event", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("#operationTimelineDate")?.focus();
     return;
@@ -4481,6 +4541,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalAttach.hidden = false;
     modalAttachStatus.textContent = "Choose a file from Finder. Supported media is copied into the web media root, attached to gbrain, and added to markdown using the description above.";
+    setModalControlTooltips("Attach file", "Cancel");
     operationModal.hidden = false;
     modalFileInput.focus();
     return;
@@ -4491,6 +4552,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalPrimaryButton.textContent = "Refresh embedding";
     modalMessage.textContent = "Runs `gbrain embed` for this node when the active gbrain backend supports it.";
     modalEditor.hidden = true;
+    setModalControlTooltips("Refresh embedding", "Cancel");
     operationModal.hidden = false;
   }
 }
@@ -4773,7 +4835,7 @@ async function runModalPrimaryAction() {
         diagnostics: response.data.diagnostics,
       });
       if (modalYodaLogButton) modalYodaLogButton.disabled = false;
-      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", timestamp: chatTimestamp() };
+      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", fallbackOutput: response.data.fallback_output || "", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
       const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
       modalMessage.textContent = `Ask another question or close the chat.${timing}`;

@@ -226,6 +226,32 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["timings"]["total_ms"], 42)
         self.assertIn(("ask_yoda", "people/tony-guan", "What should I know?", ({"role": "user", "content": "Hi"},), 6), fake_store.calls)
 
+    def test_ask_yoda_endpoint_preserves_hidden_raw_fallback_output(self):
+        fake_store = FakeStore()
+
+        def raw_fallback(slug, question, history=None, depth=4):
+            fake_store.calls.append(("ask_yoda", slug, question, tuple(history or []), depth))
+            return {
+                "output": "OpenClaw agent unavailable; using deterministic GBrain retrieval fallback.\n\nQuestion-specific gbrain retrieval:\nRAW QUERY DUMP",
+                "source": "fallback",
+                "timings": {"total_ms": 42},
+                "diagnostics": {"fallback_used": True, "source": "fallback"},
+            }
+
+        fake_store.ask_yoda = raw_fallback
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "What should I know?", "depth": 4},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn("fallback_output", data)
+        self.assertIn("RAW QUERY DUMP", data["fallback_output"])
+        self.assertNotIn("RAW QUERY DUMP", data["output"])
+        self.assertTrue(data["diagnostics"]["fallback_used"])
+
     def test_ask_yoda_endpoint_returns_safe_diagnostics_for_view_log(self):
         fake_store = FakeStore()
 
