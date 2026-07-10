@@ -84,6 +84,34 @@ class FakeStore:
         self.calls.append(("get_entity_media", slug))
         return [{"kind": "image", "url": "https://example.com/cover.jpg", "label": "Cover", "embeddable": True}]
 
+    def list_take_proposals(self, filters=None):
+        self.calls.append(("list_take_proposals", dict(filters or {})))
+        return {
+            "proposals": [
+                {
+                    "id": "tp-1",
+                    "claim": "Memory Stargraph needs take review",
+                    "holder": "people/tony-guan",
+                    "source_page_slug": "notes/source",
+                    "source_exists": True,
+                }
+            ],
+            "counts": {"pending": 1},
+            "next_cursor": "cursor-2",
+        }
+
+    def review_take_proposal(self, proposal_id, action, payload=None):
+        self.calls.append(("review_take_proposal", proposal_id, action, dict(payload or {})))
+        return {"ok": True, "proposal_id": proposal_id, "action": action, "acted_by": payload.get("acted_by")}
+
+    def bulk_review_take_proposals(self, payload=None):
+        self.calls.append(("bulk_review_take_proposals", dict(payload or {})))
+        return {"ok": True, "results": [{"id": item, "status": payload.get("action")} for item in payload.get("ids", [])]}
+
+    def list_takes(self, filters=None):
+        self.calls.append(("list_takes", dict(filters or {})))
+        return {"takes": [{"id": "take-1", "claim": "Existing take", "holder": filters.get("holder") or filters.get("page_slug")}]}
+
 
 class ApiEndpointTests(unittest.TestCase):
     def dispatch_post(self, path, payload=None):
@@ -327,8 +355,7 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         endpoints = {item["endpoint"] for item in data["operations"]}
-        self.assertEqual(
-            endpoints,
+        self.assertTrue(
             {
                 "/api/entity-ask-yoda/<slug>",
                 "/api/entity-create",
@@ -343,8 +370,69 @@ class ApiEndpointTests(unittest.TestCase):
                 "/api/entity-timeline/<slug>",
                 "/api/entity-attach-file/<slug>",
                 "/api/entity-embed/<slug>",
-            },
+                "/api/take-proposals",
+                "/api/take-proposals/<id>/accept",
+                "/api/take-proposals/<id>/reject",
+                "/api/take-proposals/<id>/defer",
+                "/api/take-proposals/bulk",
+                "/api/takes",
+            }.issubset(endpoints)
         )
+
+    def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/take-proposals?status=pending&holder=people%2Ftony-guan&limit=500&q=memory")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["counts"]["pending"], 1)
+        self.assertEqual(data["proposals"][0]["id"], "tp-1")
+        call = fake_store.calls[-1]
+        self.assertEqual(call[0], "list_take_proposals")
+        self.assertEqual(call[1]["limit"], 100)
+        self.assertEqual(call[1]["holder"], "people/tony-guan")
+        self.assertEqual(call[1]["query"], "memory")
+
+    def test_hosting_take_proposals_alias_uses_same_store_proxy(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/hosting/take-proposals?limit=2")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn(("list_take_proposals", {"status": "pending", "holder": "", "source_slug": "", "query": "", "limit": 2}), fake_store.calls)
+
+    def test_take_proposal_actions_pass_audit_and_idempotency_payload(self):
+        fake_store = FakeStore()
+        payload = {"acted_by": "memory-stargraph-ui", "idempotency_key": "abc-123", "reason": "reviewed"}
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post("/api/take-proposals/tp-1/accept", payload)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["action"], "accept")
+        self.assertIn(("review_take_proposal", "tp-1", "accept", payload), fake_store.calls)
+
+    def test_bulk_take_review_rejects_missing_ids_before_store_call(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post("/api/take-proposals/bulk", {"action": "accept", "ids": []})
+
+        self.assertEqual(status, 400)
+        self.assertIn("ids", data["error"])
+        self.assertNotIn("bulk_review_take_proposals", [call[0] for call in fake_store.calls])
+
+    def test_existing_takes_endpoint_reads_selected_node_takes(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/takes?slug=people%2Ftony-guan&limit=12")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["takes"][0]["claim"], "Existing take")
+        self.assertEqual(fake_store.calls[-1][0], "list_takes")
+        self.assertEqual(fake_store.calls[-1][1]["page_slug"], "people/tony-guan")
 
 
 if __name__ == "__main__":

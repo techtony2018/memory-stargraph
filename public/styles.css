@@ -1391,6 +1391,10 @@ h2 {
   width: min(380px, 100%);
 }
 
+.modal-panel:has(.take-review-list) {
+  width: min(1080px, 100%);
+}
+
 .modal-message {
   display: flex;
   align-items: center;
@@ -1406,6 +1410,86 @@ h2 {
 }
 
 .modal-slug-inline {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.take-review-toolbar {
+  display: grid;
+  grid-template-columns: 128px minmax(120px, 1fr) minmax(160px, 1.4fr) repeat(5, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.take-review-toolbar input,
+.take-review-toolbar select {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid rgba(143, 168, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(5, 8, 22, 0.88);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.take-review-status-line,
+.take-review-empty,
+.take-review-preview {
+  color: var(--muted);
+}
+
+.take-review-list,
+.take-review-existing {
+  display: grid;
+  gap: 8px;
+}
+
+.take-review-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid rgba(136, 246, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(6, 12, 28, 0.72);
+}
+
+.take-review-row-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.take-review-row-body strong,
+.take-review-row-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.take-review-row-body p {
+  font-size: 12px;
+}
+
+.take-review-row-actions,
+.take-review-pager {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.take-review-existing h4 {
+  margin: 8px 0 0;
+  color: var(--text);
+}
+
+.take-review-take {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(143, 168, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(143, 168, 255, 0.06);
   color: var(--muted);
   overflow-wrap: anywhere;
 }

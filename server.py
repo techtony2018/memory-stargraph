@@ -114,7 +114,9 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.120"
+UI_VERSION = "V1.0.121"
+TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
+TAKE_REVIEW_MAX_LIMIT = 100
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -143,6 +145,12 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
+    {"action": "take-review", "method": "GET", "endpoint": "/api/take-proposals", "mutates_gbrain": False},
+    {"action": "take-review-accept", "method": "POST", "endpoint": "/api/take-proposals/<id>/accept", "mutates_gbrain": True},
+    {"action": "take-review-reject", "method": "POST", "endpoint": "/api/take-proposals/<id>/reject", "mutates_gbrain": True},
+    {"action": "take-review-defer", "method": "POST", "endpoint": "/api/take-proposals/<id>/defer", "mutates_gbrain": True},
+    {"action": "take-review-bulk", "method": "POST", "endpoint": "/api/take-proposals/bulk", "mutates_gbrain": True},
+    {"action": "takes", "method": "GET", "endpoint": "/api/takes", "mutates_gbrain": False},
 ]
 
 MEDIA_EXTENSIONS = {
@@ -385,6 +393,111 @@ def extract_json_list(text):
         if isinstance(payload, list):
             return payload
     return None
+
+
+def gbrain_call_tool(tool_name, payload=None, timeout=30):
+    output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
+    parsed_object = extract_json_object(output)
+    if parsed_object is not None:
+        return parsed_object
+    parsed_list = extract_json_list(output)
+    if parsed_list is not None:
+        return parsed_list
+    return {"output": output}
+
+
+def clamp_take_review_limit(value):
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = 20
+    return max(1, min(TAKE_REVIEW_MAX_LIMIT, limit))
+
+
+def first_query_value(query, key, default=""):
+    values = query.get(key)
+    if not values:
+        return default
+    return str(values[0] or "").strip()
+
+
+def normalize_take_collection(payload, collection_key):
+    if isinstance(payload, list):
+        return {collection_key: payload}
+    if not isinstance(payload, dict):
+        return {collection_key: [], "backend_message": str(payload or "")}
+    normalized = dict(payload)
+    rows = normalized.get(collection_key)
+    if rows is None:
+        for key in ("items", "rows", "results", "data"):
+            if isinstance(normalized.get(key), list):
+                rows = normalized[key]
+                break
+    normalized[collection_key] = rows if isinstance(rows, list) else []
+    return normalized
+
+
+def take_review_filters_from_query(query):
+    limit = clamp_take_review_limit(first_query_value(query, "limit", "20"))
+    cursor = first_query_value(query, "cursor")
+    offset = first_query_value(query, "offset")
+    payload = {
+        "status": first_query_value(query, "status", "pending") or "pending",
+        "holder": first_query_value(query, "holder"),
+        "source_slug": first_query_value(query, "source_slug") or first_query_value(query, "source"),
+        "query": first_query_value(query, "q") or first_query_value(query, "query"),
+        "limit": limit,
+    }
+    if cursor:
+        payload["cursor"] = cursor
+    if offset:
+        try:
+            payload["offset"] = max(0, int(offset))
+        except ValueError:
+            payload["offset"] = 0
+    return payload
+
+
+def take_review_action_payload(proposal_id, action, payload):
+    raw_payload = payload if isinstance(payload, dict) else {}
+    idempotency_key = str(raw_payload.get("idempotency_key") or "").strip()
+    if not idempotency_key:
+        idempotency_key = f"{TAKE_REVIEW_ACTOR}:{action}:{proposal_id}"
+    return {
+        "id": str(proposal_id),
+        "proposal_id": str(proposal_id),
+        "acted_by": str(raw_payload.get("acted_by") or TAKE_REVIEW_ACTOR).strip() or TAKE_REVIEW_ACTOR,
+        "idempotency_key": idempotency_key,
+        "reason": str(raw_payload.get("reason") or "").strip(),
+        "source": "memory-stargraph",
+        "provenance": {
+            "surface": "memory-stargraph-ui",
+            "ui_version": UI_VERSION,
+        },
+    }
+
+
+def take_review_bulk_payload(payload):
+    raw_payload = payload if isinstance(payload, dict) else {}
+    action = str(raw_payload.get("action") or "").strip().lower()
+    ids = [str(item).strip() for item in raw_payload.get("ids") or [] if str(item).strip()]
+    if action not in {"accept", "reject", "defer"}:
+        raise ValueError("action must be accept, reject, or defer")
+    if not ids:
+        raise ValueError("ids are required for bulk review")
+    idempotency_key = str(raw_payload.get("idempotency_key") or "").strip() or f"{TAKE_REVIEW_ACTOR}:bulk:{action}:{','.join(ids)}"
+    return {
+        "action": action,
+        "ids": ids[:TAKE_REVIEW_MAX_LIMIT],
+        "acted_by": str(raw_payload.get("acted_by") or TAKE_REVIEW_ACTOR).strip() or TAKE_REVIEW_ACTOR,
+        "idempotency_key": idempotency_key,
+        "reason": str(raw_payload.get("reason") or "").strip(),
+        "source": "memory-stargraph",
+        "provenance": {
+            "surface": "memory-stargraph-ui",
+            "ui_version": UI_VERSION,
+        },
+    }
 
 
 def extract_openclaw_answer(output):
@@ -2606,6 +2719,42 @@ class GraphStore:
         run_gbrain("embed", slug)
         self.invalidate()
 
+    def list_take_proposals(self, filters=None):
+        payload = dict(filters or {})
+        payload["limit"] = clamp_take_review_limit(payload.get("limit"))
+        result = gbrain_call_tool("take_proposals_list", payload, timeout=30)
+        normalized = normalize_take_collection(result, "proposals")
+        normalized.setdefault("filters", payload)
+        normalized.setdefault("counts", {})
+        return normalized
+
+    def review_take_proposal(self, proposal_id, action, payload=None):
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"accept", "reject", "defer"}:
+            raise ValueError("action must be accept, reject, or defer")
+        review_payload = take_review_action_payload(proposal_id, normalized_action, payload or {})
+        result = gbrain_call_tool(f"take_proposals_{normalized_action}", review_payload, timeout=45)
+        if isinstance(result, dict):
+            return {"ok": True, "action": normalized_action, "proposal_id": str(proposal_id), **result}
+        return {"ok": True, "action": normalized_action, "proposal_id": str(proposal_id), "result": result}
+
+    def bulk_review_take_proposals(self, payload=None):
+        review_payload = take_review_bulk_payload(payload or {})
+        result = gbrain_call_tool("take_proposals_bulk", review_payload, timeout=60)
+        if isinstance(result, dict):
+            return {"ok": True, **result}
+        return {"ok": True, "results": result}
+
+    def list_takes(self, filters=None):
+        payload = dict(filters or {})
+        payload["limit"] = clamp_take_review_limit(payload.get("limit"))
+        if payload.get("page_slug") and not payload.get("holder"):
+            payload["holder"] = payload["page_slug"]
+        result = gbrain_call_tool("takes_list", payload, timeout=30)
+        normalized = normalize_take_collection(result, "takes")
+        normalized.setdefault("filters", payload)
+        return normalized
+
 
 STORE = GraphStore()
 
@@ -2704,6 +2853,30 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json({"slugs": sorted(read_hidden_slugs())})
         if parsed.path == "/api/node-operations":
             return self.end_json({"operations": NODE_OPERATION_ENDPOINTS})
+        if parsed.path in ("/api/take-proposals", "/api/hosting/take-proposals"):
+            filters = take_review_filters_from_query(parse_qs(parsed.query))
+            try:
+                data = STORE.list_take_proposals(filters)
+                return self.end_json({"ok": True, **data})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path in ("/api/takes", "/api/hosting/takes"):
+            query = parse_qs(parsed.query)
+            filters = {
+                "page_slug": first_query_value(query, "page_slug") or first_query_value(query, "slug"),
+                "holder": first_query_value(query, "holder"),
+                "kind": first_query_value(query, "kind"),
+                "limit": clamp_take_review_limit(first_query_value(query, "limit", "20")),
+            }
+            if first_query_value(query, "active"):
+                filters["active"] = first_query_value(query, "active").lower() == "true"
+            if first_query_value(query, "resolved"):
+                filters["resolved"] = first_query_value(query, "resolved").lower() == "true"
+            try:
+                data = STORE.list_takes(filters)
+                return self.end_json({"ok": True, **data})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/search":
             query = (parse_qs(parsed.query).get("q") or [""])[0].strip()
             if len(query) < 2:
@@ -2756,6 +2929,26 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
+        take_action_match = re.match(r"^/api/(?:hosting/)?take-proposals/([^/]+)/(accept|reject|defer)$", parsed.path)
+        if take_action_match:
+            proposal_id = unquote(take_action_match.group(1)).strip()
+            action = take_action_match.group(2)
+            try:
+                payload = self.read_json_body()
+                data = STORE.review_take_proposal(proposal_id, action, payload)
+                return self.end_json(data)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path in ("/api/take-proposals/bulk", "/api/hosting/take-proposals/bulk"):
+            try:
+                payload = self.read_json_body()
+                take_review_bulk_payload(payload)
+                data = STORE.bulk_review_take_proposals(payload)
+                return self.end_json(data)
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/entity-create":
             try:
                 payload = self.read_json_body()

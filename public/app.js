@@ -1,5 +1,6 @@
-const UI_VERSION = "V1.0.120";
+const UI_VERSION = "V1.0.121";
 const RELATIONSHIP_PAGE_SIZE = 10;
+const TAKE_REVIEW_PAGE_SIZE = 20;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
@@ -83,6 +84,17 @@ const state = {
   relationshipPages: new Map(),
   backlinkPages: new Map(),
   relationshipReturnView: null,
+  takeReview: {
+    proposals: [],
+    takes: [],
+    counts: {},
+    filters: { status: "pending", holder: "", query: "", cursor: "" },
+    selectedIds: new Set(),
+    nextCursor: "",
+    loading: false,
+    message: "",
+    pendingBulkConfirm: null,
+  },
   busyOperations: new Map(),
   busyOperationId: 0,
   animationTick: 0,
@@ -104,6 +116,7 @@ const hoverLabel = document.getElementById("hoverLabel");
 const graphTooltip = document.getElementById("graphTooltip");
 const navStargraphButton = document.getElementById("navStargraphButton");
 const navSearchButton = document.getElementById("navSearchButton");
+const navTakeReviewButton = document.getElementById("navTakeReviewButton");
 const navAutopilotButton = document.getElementById("navAutopilotButton");
 const navSettingsButton = document.getElementById("navSettingsButton");
 const searchFlyout = document.getElementById("searchFlyout");
@@ -4271,6 +4284,293 @@ function checkedValues(name) {
   return [...modalForm.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
 }
 
+function takeProposalId(proposal) {
+  return String(proposal?.id || proposal?.proposal_id || proposal?.row_num || "");
+}
+
+function proposalField(proposal, keys, fallback = "") {
+  for (const key of keys) {
+    const value = proposal?.[key];
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return fallback;
+}
+
+function takeReviewStatusCounts(counts) {
+  if (!counts || typeof counts !== "object") return "";
+  return Object.entries(counts)
+    .filter(([, value]) => Number(value) > 0)
+    .map(([key, value]) => `${key} ${value}`)
+    .join(" · ");
+}
+
+function createTakeReviewButton(label, action, ids = []) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `ghost-button compact-button${action === "reject" ? " danger" : ""}`;
+  button.textContent = label;
+  setHudTooltip(button, `${label} selected take proposal${ids.length === 1 ? "" : "s"}.`);
+  button.addEventListener("click", () => {
+    void actOnTakeProposals(action, ids);
+  });
+  return button;
+}
+
+function renderTakeReviewToolbar() {
+  const toolbar = document.createElement("div");
+  toolbar.className = "take-review-toolbar";
+
+  const status = document.createElement("select");
+  status.id = "takeReviewStatus";
+  ["pending", "accepted", "rejected", "deferred", "all"].forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    status.appendChild(option);
+  });
+  status.value = state.takeReview.filters.status || "pending";
+  status.addEventListener("change", () => {
+    state.takeReview.filters.status = status.value;
+    state.takeReview.filters.cursor = "";
+    void loadTakeReviewPage({ resetSelection: true });
+  });
+
+  const holder = document.createElement("input");
+  holder.id = "takeReviewHolder";
+  holder.placeholder = "holder/source";
+  holder.value = state.takeReview.filters.holder || "";
+  holder.addEventListener("change", () => {
+    state.takeReview.filters.holder = holder.value.trim();
+    state.takeReview.filters.cursor = "";
+    void loadTakeReviewPage({ resetSelection: true });
+  });
+
+  const query = document.createElement("input");
+  query.id = "takeReviewQuery";
+  query.placeholder = "search claims";
+  query.value = state.takeReview.filters.query || "";
+  query.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    state.takeReview.filters.query = query.value.trim();
+    state.takeReview.filters.cursor = "";
+    void loadTakeReviewPage({ resetSelection: true });
+  });
+
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "ghost-button compact-button";
+  refresh.textContent = "Refresh";
+  setHudTooltip(refresh, "Reload take proposals.");
+  refresh.addEventListener("click", () => {
+    state.takeReview.filters.query = query.value.trim();
+    void loadTakeReviewPage({ resetSelection: false });
+  });
+
+  const selectedIds = [...state.takeReview.selectedIds];
+  const acceptSelected = createTakeReviewButton("Accept selected", "accept", selectedIds);
+  const rejectSelected = createTakeReviewButton("Reject selected", "reject", selectedIds);
+  acceptSelected.disabled = selectedIds.length === 0;
+  rejectSelected.disabled = selectedIds.length === 0;
+
+  const pageIds = state.takeReview.proposals.map(takeProposalId).filter(Boolean);
+  const acceptPage = createTakeReviewButton("Accept page", "accept", pageIds);
+  const rejectPage = createTakeReviewButton("Reject page", "reject", pageIds);
+  acceptPage.disabled = pageIds.length === 0;
+  rejectPage.disabled = pageIds.length === 0;
+
+  toolbar.append(status, holder, query, refresh, acceptSelected, rejectSelected, acceptPage, rejectPage);
+  return toolbar;
+}
+
+function renderTakeReviewProposal(proposal) {
+  const id = takeProposalId(proposal);
+  const row = document.createElement("article");
+  row.className = "take-review-row";
+  row.dataset.proposalId = id;
+
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.checked = state.takeReview.selectedIds.has(id);
+  check.setAttribute("aria-label", `Select proposal ${id}`);
+  check.addEventListener("change", () => {
+    if (check.checked) state.takeReview.selectedIds.add(id);
+    else state.takeReview.selectedIds.delete(id);
+    renderTakeReviewContent();
+  });
+
+  const body = document.createElement("div");
+  body.className = "take-review-row-body";
+  const claim = document.createElement("strong");
+  claim.textContent = proposalField(proposal, ["claim", "claim_text", "text", "summary"], "(No claim text)");
+  const meta = document.createElement("p");
+  const holder = proposalField(proposal, ["holder", "who", "subject"], "unknown holder");
+  const kind = proposalField(proposal, ["kind", "domain"], "take");
+  const weight = proposalField(proposal, ["weight", "confidence", "probability"], "");
+  const source = proposalField(proposal, ["source_page_slug", "source_slug", "page_slug", "source"], "no source");
+  const exists = proposal.source_exists === false || proposal.source_missing === true ? "source missing" : "source available";
+  meta.textContent = [holder, kind, weight, source, exists].filter(Boolean).join(" · ");
+  const preview = document.createElement("p");
+  preview.className = "take-review-preview";
+  preview.textContent = proposalField(proposal, ["source_preview", "original_preview", "preview"], "No source preview available.");
+  body.append(claim, meta, preview);
+
+  const actions = document.createElement("div");
+  actions.className = "take-review-row-actions";
+  actions.append(
+    createTakeReviewButton("Accept", "accept", [id]),
+    createTakeReviewButton("Reject", "reject", [id]),
+    createTakeReviewButton("Defer", "defer", [id]),
+  );
+
+  row.append(check, body, actions);
+  return row;
+}
+
+function renderExistingTakes() {
+  const section = document.createElement("section");
+  section.className = "take-review-existing";
+  const title = document.createElement("h4");
+  title.textContent = "Existing takes";
+  section.appendChild(title);
+  if (!state.takeReview.takes.length) {
+    const empty = document.createElement("p");
+    empty.className = "take-review-empty";
+    empty.textContent = state.focusSlug ? "No existing takes returned for the selected node." : "Select a node to inspect existing takes.";
+    section.appendChild(empty);
+    return section;
+  }
+  state.takeReview.takes.slice(0, 12).forEach((take) => {
+    const item = document.createElement("p");
+    item.className = "take-review-take";
+    item.textContent = [
+      proposalField(take, ["holder", "who"], "unknown"),
+      proposalField(take, ["kind", "domain"], "take"),
+      proposalField(take, ["weight", "confidence"], ""),
+      proposalField(take, ["claim", "claim_text", "text"], "(No claim text)"),
+    ].filter(Boolean).join(" · ");
+    section.appendChild(item);
+  });
+  return section;
+}
+
+function renderTakeReviewContent() {
+  modalForm.innerHTML = "";
+  modalForm.appendChild(renderTakeReviewToolbar());
+
+  const statusLine = document.createElement("p");
+  statusLine.className = "take-review-status-line";
+  const counts = takeReviewStatusCounts(state.takeReview.counts);
+  statusLine.textContent = state.takeReview.message || counts || `${state.takeReview.proposals.length} proposals loaded`;
+  modalForm.appendChild(statusLine);
+
+  const list = document.createElement("div");
+  list.className = "take-review-list";
+  if (!state.takeReview.proposals.length) {
+    const empty = document.createElement("p");
+    empty.className = "take-review-empty";
+    empty.textContent = state.takeReview.loading ? "Loading proposals..." : "No proposals returned for the active filters.";
+    list.appendChild(empty);
+  } else {
+    state.takeReview.proposals.forEach((proposal) => list.appendChild(renderTakeReviewProposal(proposal)));
+  }
+  modalForm.appendChild(list);
+
+  const pager = document.createElement("div");
+  pager.className = "take-review-pager";
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost-button compact-button";
+  next.textContent = "Next page";
+  next.disabled = !state.takeReview.nextCursor;
+  next.addEventListener("click", () => {
+    state.takeReview.filters.cursor = state.takeReview.nextCursor;
+    void loadTakeReviewPage({ resetSelection: true });
+  });
+  pager.appendChild(next);
+  modalForm.appendChild(pager);
+  modalForm.appendChild(renderExistingTakes());
+}
+
+async function loadTakeReviewPage(options = {}) {
+  if (options.resetSelection) state.takeReview.selectedIds.clear();
+  state.takeReview.loading = true;
+  state.takeReview.message = "Loading take review queue...";
+  renderTakeReviewContent();
+  const params = new URLSearchParams();
+  params.set("status", state.takeReview.filters.status || "pending");
+  params.set("limit", String(TAKE_REVIEW_PAGE_SIZE));
+  if (state.takeReview.filters.holder) params.set("holder", state.takeReview.filters.holder);
+  if (state.takeReview.filters.query) params.set("q", state.takeReview.filters.query);
+  if (state.takeReview.filters.cursor) params.set("cursor", state.takeReview.filters.cursor);
+  const busyToken = beginBusyOperation("Loading take review");
+  try {
+    const [proposalResponse, takesResponse] = await Promise.all([
+      apiGet(`/api/take-proposals?${params.toString()}`),
+      state.focusSlug ? apiGet(`/api/takes?slug=${encodeURIComponent(state.focusSlug)}&limit=12`) : Promise.resolve({ ok: true, data: { takes: [] } }),
+    ]);
+    if (!proposalResponse.ok) throw new Error(proposalResponse.data?.error || `Proposal load failed with ${proposalResponse.status}`);
+    state.takeReview.proposals = proposalResponse.data.proposals || [];
+    state.takeReview.counts = proposalResponse.data.counts || {};
+    state.takeReview.nextCursor = proposalResponse.data.next_cursor || proposalResponse.data.nextCursor || "";
+    state.takeReview.takes = takesResponse.ok ? takesResponse.data.takes || [] : [];
+    state.takeReview.message = `${state.takeReview.proposals.length} proposals loaded${state.focusSlug ? ` · existing takes for ${state.focusSlug}` : ""}`;
+  } catch (error) {
+    state.takeReview.proposals = [];
+    state.takeReview.takes = [];
+    state.takeReview.message = error.message || String(error);
+  } finally {
+    state.takeReview.loading = false;
+    endBusyOperation(busyToken);
+    renderTakeReviewContent();
+  }
+}
+
+async function actOnTakeProposals(action, ids) {
+  const proposalIds = [...new Set((ids || []).map(String).filter(Boolean))];
+  if (!proposalIds.length) {
+    state.takeReview.message = "Select at least one proposal first.";
+    renderTakeReviewContent();
+    return;
+  }
+  const confirmKey = `${action}:${proposalIds.join(",")}`;
+  if (proposalIds.length > 10 && state.takeReview.pendingBulkConfirm !== confirmKey) {
+    state.takeReview.pendingBulkConfirm = confirmKey;
+    state.takeReview.message = `Press ${action} again to confirm ${proposalIds.length} proposals.`;
+    renderTakeReviewContent();
+    return;
+  }
+  state.takeReview.pendingBulkConfirm = null;
+  const busyToken = beginBusyOperation(`${action} take proposal`);
+  try {
+    let response;
+    if (proposalIds.length === 1) {
+      response = await apiPost(`/api/take-proposals/${encodeURIComponent(proposalIds[0])}/${action}`, {
+        acted_by: "memory-stargraph-ui",
+        idempotency_key: `${UI_VERSION}:${action}:${proposalIds[0]}`,
+      });
+    } else {
+      response = await apiPost("/api/take-proposals/bulk", {
+        action,
+        ids: proposalIds,
+        acted_by: "memory-stargraph-ui",
+        idempotency_key: `${UI_VERSION}:bulk:${action}:${proposalIds.join(",")}`,
+      });
+    }
+    if (!response.ok) throw new Error(response.data?.error || `${action} failed with ${response.status}`);
+    state.takeReview.selectedIds.clear();
+    state.takeReview.message = `${action} completed for ${proposalIds.length} proposal${proposalIds.length === 1 ? "" : "s"}.`;
+    await loadTakeReviewPage({ resetSelection: true });
+  } catch (error) {
+    state.takeReview.message = error.message || String(error);
+    renderTakeReviewContent();
+  } finally {
+    endBusyOperation(busyToken);
+  }
+}
+
 function closeModal() {
   operationModal.hidden = true;
   removeSlugSelectorPopups();
@@ -4373,6 +4673,25 @@ async function openNodeModal(action, slug = state.focusSlug) {
     setModalControlTooltips("Play", "Cancel");
     operationModal.hidden = false;
     modalForm.querySelector("input")?.focus();
+    return;
+  }
+
+  if (action === "take-review") {
+    state.modalAction = { action, slug: slug || state.focusSlug || "", label: "Take Review" };
+    modalTitle.textContent = "Take Review";
+    modalKicker.textContent = "GBrain proposals";
+    modalPrimaryButton.textContent = "Close";
+    modalCancelButton.hidden = true;
+    modalMessage.textContent = "Review pending take proposals and inspect existing takes for the selected node.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    operationModal.classList.remove("compact-modal");
+    setModalControlTooltips("Close", "");
+    operationModal.hidden = false;
+    state.takeReview.filters.holder = slug || "";
+    state.takeReview.filters.cursor = "";
+    await loadTakeReviewPage({ resetSelection: true });
+    modalForm.querySelector("#takeReviewQuery")?.focus();
     return;
   }
 
@@ -4753,7 +5072,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "media" || action === "result") {
+  if (action === "view" || action === "media" || action === "result" || action === "take-review") {
     closeModal();
     return;
   }
@@ -5304,6 +5623,12 @@ function bindEvents() {
     }
   });
 
+  navTakeReviewButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideFloatingPanels();
+    void openNodeModal("take-review", state.focusSlug || "");
+  });
+
   navAutopilotButton?.addEventListener("click", (event) => {
     event.stopPropagation();
     if (state.tour.active || state.tour.toolbarPinned) {
@@ -5428,6 +5753,21 @@ function bindEvents() {
     if (!link) return;
     event.preventDefault();
     void searchEntityLink(link.dataset.entityQuery);
+  });
+
+  modalForm.addEventListener("keydown", (event) => {
+    if (state.modalAction?.action !== "take-review" || event.target.matches("input, textarea, select")) return;
+    const ids = [...state.takeReview.selectedIds];
+    if (event.key === "a") {
+      event.preventDefault();
+      void actOnTakeProposals("accept", ids);
+    } else if (event.key === "r") {
+      event.preventDefault();
+      void actOnTakeProposals("reject", ids);
+    } else if (event.key === "d") {
+      event.preventDefault();
+      void actOnTakeProposals("defer", ids);
+    }
   });
 
   modalChat.addEventListener("click", (event) => {
