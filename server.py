@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.121"
+UI_VERSION = "V1.0.122"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
@@ -396,7 +396,15 @@ def extract_json_list(text):
 
 
 def gbrain_call_tool(tool_name, payload=None, timeout=30):
-    output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
+    try:
+        output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
+    except RuntimeError as exc:
+        message = str(exc)
+        for line in reversed(message.splitlines()):
+            cleaned = line.strip()
+            if cleaned.startswith("Unknown tool:"):
+                raise RuntimeError(f"GBrain backend does not expose {tool_name}: {cleaned}") from exc
+        raise
     parsed_object = extract_json_object(output)
     if parsed_object is not None:
         return parsed_object

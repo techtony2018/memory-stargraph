@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.121";
+const UI_VERSION = "V1.0.122";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 20;
 let tourNodeLoadTimeoutMs = 20 * 1000;

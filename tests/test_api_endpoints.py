@@ -3,6 +3,7 @@ import types
 import unittest
 from unittest import mock
 
+import server
 from server import MemoryStargraphHandler
 
 
@@ -433,6 +434,12 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["takes"][0]["claim"], "Existing take")
         self.assertEqual(fake_store.calls[-1][0], "list_takes")
         self.assertEqual(fake_store.calls[-1][1]["page_slug"], "people/tony-guan")
+
+    def test_gbrain_tool_proxy_collapses_unknown_tool_migration_noise(self):
+        noisy = "Schema version 1 -> 119\n  [69] take_proposals_v0_36...\nUnknown tool: take_proposals_list"
+        with mock.patch("server.run_gbrain", side_effect=RuntimeError(noisy)):
+            with self.assertRaisesRegex(RuntimeError, "GBrain backend does not expose take_proposals_list"):
+                server.gbrain_call_tool("take_proposals_list", {"limit": 2})
 
 
 if __name__ == "__main__":
