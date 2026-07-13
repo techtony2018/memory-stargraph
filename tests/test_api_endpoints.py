@@ -119,6 +119,19 @@ class FakeStore:
         return {"takes": takes}
 
 
+class SingleRowTakeStore(FakeStore):
+    def list_takes(self, filters=None):
+        self.calls.append(("list_takes", dict(filters or {})))
+        return {
+            "ok": True,
+            "id": 240,
+            "page_slug": "blogs/tony-guan/msn/20051115-28-e7b3f54e",
+            "claim": "Existing single-row take",
+            "kind": "take",
+            "holder": "people/tony-guan",
+        }
+
+
 class ApiEndpointTests(unittest.TestCase):
     def dispatch_post(self, path, payload=None):
         handler = object.__new__(MemoryStargraphHandler)
@@ -455,6 +468,18 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["limit"], 10)
         self.assertIsNone(data["next_offset"])
         self.assertEqual(data["previous_offset"], 0)
+
+    def test_existing_takes_endpoint_normalizes_single_row_response(self):
+        fake_store = SingleRowTakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/takes?holder=people%2Ftony-guan&status=all&limit=10&offset=0")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(len(data["takes"]), 1)
+        self.assertEqual(data["takes"][0]["claim"], "Existing single-row take")
+        self.assertEqual(data["holder_filter"], "people/tony-guan")
 
     def test_wildcard_holder_filters_are_expanded_for_takes(self):
         fake_store = FakeStore()
