@@ -499,6 +499,14 @@ class ApiEndpointTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "GBrain backend does not expose take_proposals_list"):
                 server.gbrain_call_tool("take_proposals_list", {"limit": 2})
 
+    def test_gbrain_tool_proxy_preserves_array_responses(self):
+        output = '[{"id": 1, "claim": "First"}, {"id": 2, "claim": "Second"}]'
+        with mock.patch("server.run_gbrain", return_value=output):
+            result = server.gbrain_call_tool("takes_list", {"limit": 2})
+
+        self.assertIsInstance(result, list)
+        self.assertEqual([row["id"] for row in result], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

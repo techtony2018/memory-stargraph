@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.128"
+UI_VERSION = "V1.0.129"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -406,12 +406,12 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
             if cleaned.startswith("Unknown tool:"):
                 raise RuntimeError(f"GBrain backend does not expose {tool_name}: {cleaned}") from exc
         raise
-    parsed_object = extract_json_object(output)
-    if parsed_object is not None:
-        return parsed_object
     parsed_list = extract_json_list(output)
     if parsed_list is not None:
         return parsed_list
+    parsed_object = extract_json_object(output)
+    if parsed_object is not None:
+        return parsed_object
     return {"output": output}
 
 
