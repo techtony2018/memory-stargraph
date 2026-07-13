@@ -129,6 +129,7 @@ class SingleRowTakeStore(FakeStore):
             "claim": "Existing single-row take",
             "kind": "take",
             "holder": "people/tony-guan",
+            "takes": [],
         }
 
 
