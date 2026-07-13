@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.129";
+const UI_VERSION = "V1.0.130";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -97,6 +97,7 @@ const state = {
     takesTotal: 0,
     takesNextOffset: null,
     takesPreviousOffset: null,
+    existingTakesExpanded: false,
     loading: false,
     message: "",
     pendingBulkConfirm: null,
@@ -4486,7 +4487,7 @@ function renderTakeReviewToolbar() {
 function renderTakeReviewProposal(proposal) {
   const id = takeProposalId(proposal);
   const row = document.createElement("article");
-  row.className = "take-review-row";
+  row.className = "take-review-row relationship-wiki-row";
   row.dataset.proposalId = id;
 
   const check = document.createElement("input");
@@ -4545,8 +4546,20 @@ function renderExistingTakes() {
     ? `${start}-${end} of ${state.takeReview.takesTotal}`
     : "0 takes";
   title.textContent = "Existing takes";
-  heading.append(title, range);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "ghost-button compact-button take-review-existing-toggle";
+  toggle.textContent = state.takeReview.existingTakesExpanded ? "Hide existing takes" : "Show existing takes";
+  setHudTooltip(toggle, state.takeReview.existingTakesExpanded ? "Hide accepted takes." : "Show accepted takes for this holder.");
+  toggle.addEventListener("click", () => {
+    state.takeReview.existingTakesExpanded = !state.takeReview.existingTakesExpanded;
+    renderTakeReviewContent();
+  });
+  heading.append(title, range, toggle);
   section.appendChild(heading);
+  if (!state.takeReview.existingTakesExpanded) {
+    return section;
+  }
   if (!state.takeReview.takes.length) {
     const empty = document.createElement("p");
     empty.className = "take-review-empty";
@@ -4554,19 +4567,31 @@ function renderExistingTakes() {
     section.appendChild(empty);
     return section;
   }
+  const list = document.createElement("div");
+  list.className = "take-review-existing-list relationship-wiki-list";
   state.takeReview.takes.forEach((take) => {
-    const item = document.createElement("p");
-    item.className = "take-review-take";
-    item.textContent = [
-      proposalField(take, ["holder", "who"], "unknown"),
+    const item = document.createElement("article");
+    item.className = "take-review-take relationship-wiki-row";
+    const claim = document.createElement("strong");
+    claim.className = "take-review-take-claim relationship-source-link";
+    claim.textContent = proposalField(take, ["claim", "claim_text", "text"], "(No claim text)");
+    const source = document.createElement("span");
+    source.className = "take-review-take-source relationship-type";
+    source.textContent = proposalField(take, ["page_slug", "source_slug", "source"], "unknown source");
+    const meta = document.createElement("span");
+    meta.className = "take-review-take-meta";
+    meta.textContent = [
       proposalField(take, ["kind", "domain"], "take"),
       proposalField(take, ["weight", "confidence"], ""),
-      proposalField(take, ["claim", "claim_text", "text"], "(No claim text)"),
     ].filter(Boolean).join(" · ");
-    section.appendChild(item);
+    item.append(claim, source, meta);
+    list.appendChild(item);
   });
+  section.appendChild(list);
   const pager = document.createElement("div");
-  pager.className = "take-review-existing-pager";
+  pager.className = "take-review-existing-pager relationship-pagination";
+  const currentPage = Math.floor(state.takeReview.takesOffset / TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(state.takeReview.takesTotal / TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE));
   const previous = document.createElement("button");
   previous.type = "button";
   previous.className = "ghost-button compact-button";
@@ -4576,6 +4601,26 @@ function renderExistingTakes() {
     state.takeReview.takesOffset = state.takeReview.takesPreviousOffset || 0;
     void loadTakeReviewPage({ resetSelection: false });
   });
+  pager.appendChild(previous);
+  const { startPage, endPage } = relationshipPageWindow(currentPage, totalPages);
+  for (let pageIndex = startPage; pageIndex < endPage; pageIndex += 1) {
+    const button = document.createElement("button");
+    button.className = "relationship-page-number take-review-existing-page-number";
+    button.type = "button";
+    button.textContent = String(pageIndex + 1);
+    button.setAttribute("aria-current", pageIndex === currentPage ? "page" : "false");
+    button.disabled = pageIndex === currentPage;
+    setHudTooltip(button, `Go to existing takes page ${pageIndex + 1}.`);
+    button.addEventListener("click", () => {
+      state.takeReview.takesOffset = pageIndex * TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE;
+      void loadTakeReviewPage({ resetSelection: false });
+    });
+    pager.appendChild(button);
+  }
+  const count = document.createElement("span");
+  count.className = "relationship-page-total take-review-existing-page-total";
+  count.textContent = `of ${totalPages}`;
+  pager.appendChild(count);
   const next = document.createElement("button");
   next.type = "button";
   next.className = "ghost-button compact-button";
@@ -4585,7 +4630,7 @@ function renderExistingTakes() {
     state.takeReview.takesOffset = state.takeReview.takesNextOffset || state.takeReview.takesOffset;
     void loadTakeReviewPage({ resetSelection: false });
   });
-  pager.append(previous, next);
+  pager.appendChild(next);
   section.appendChild(pager);
   return section;
 }
@@ -4600,9 +4645,17 @@ function renderTakeReviewContent() {
   const counts = takeReviewStatusCounts(state.takeReview.counts);
   statusLine.textContent = state.takeReview.message || counts || `${state.takeReview.proposals.length} proposals loaded`;
   modalForm.appendChild(statusLine);
+  modalForm.appendChild(renderExistingTakes());
+
+  const proposalHeading = document.createElement("div");
+  proposalHeading.className = "take-review-proposed-heading";
+  const proposalTitle = document.createElement("h4");
+  proposalTitle.textContent = "Proposed takes";
+  proposalHeading.appendChild(proposalTitle);
+  modalForm.appendChild(proposalHeading);
 
   const list = document.createElement("div");
-  list.className = "take-review-list";
+  list.className = "take-review-list relationship-wiki-list";
   if (!state.takeReview.proposals.length) {
     const empty = document.createElement("p");
     empty.className = "take-review-empty";
@@ -4639,7 +4692,6 @@ function renderTakeReviewContent() {
   });
   pager.append(previous, position, next);
   modalForm.appendChild(pager);
-  modalForm.appendChild(renderExistingTakes());
 }
 
 async function loadTakeReviewPage(options = {}) {
