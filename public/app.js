@@ -1,6 +1,7 @@
-const UI_VERSION = "V1.0.124";
+const UI_VERSION = "V1.0.125";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
+const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
@@ -92,6 +93,10 @@ const state = {
     selectedIds: new Set(),
     nextCursor: "",
     pageHistory: [],
+    takesOffset: 0,
+    takesTotal: 0,
+    takesNextOffset: null,
+    takesPreviousOffset: null,
     loading: false,
     message: "",
     pendingBulkConfirm: null,
@@ -4325,6 +4330,16 @@ function resetTakeReviewPagination() {
   state.takeReview.pageHistory = [];
 }
 
+function resetExistingTakesPagination() {
+  state.takeReview.takesOffset = 0;
+  state.takeReview.takesNextOffset = null;
+  state.takeReview.takesPreviousOffset = null;
+}
+
+function existingTakesHolderFilter() {
+  return state.takeReview.filters.holder || state.focusSlug || "";
+}
+
 function createTakeReviewSlugFilter({
   id,
   label,
@@ -4406,6 +4421,7 @@ function renderTakeReviewToolbar() {
     value: state.takeReview.filters.holder || "",
     onChange: (value, reload) => {
       state.takeReview.filters.holder = value;
+      resetExistingTakesPagination();
       if (reload) {
         resetTakeReviewPagination();
         void loadTakeReviewPage({ resetSelection: true });
@@ -4518,17 +4534,27 @@ function renderTakeReviewProposal(proposal) {
 function renderExistingTakes() {
   const section = document.createElement("section");
   section.className = "take-review-existing";
+  const heading = document.createElement("div");
+  heading.className = "take-review-existing-heading";
   const title = document.createElement("h4");
+  const range = document.createElement("span");
+  range.className = "take-review-existing-range";
+  const start = state.takeReview.takesTotal ? state.takeReview.takesOffset + 1 : 0;
+  const end = state.takeReview.takesOffset + state.takeReview.takes.length;
+  range.textContent = state.takeReview.takesTotal
+    ? `${start}-${end} of ${state.takeReview.takesTotal}`
+    : "0 takes";
   title.textContent = "Existing takes";
-  section.appendChild(title);
+  heading.append(title, range);
+  section.appendChild(heading);
   if (!state.takeReview.takes.length) {
     const empty = document.createElement("p");
     empty.className = "take-review-empty";
-    empty.textContent = state.focusSlug ? "No existing takes returned for the selected node." : "Select a node to inspect existing takes.";
+    empty.textContent = existingTakesHolderFilter() ? "No existing takes returned for the holder filter." : "Select a node or holder to inspect existing takes.";
     section.appendChild(empty);
     return section;
   }
-  state.takeReview.takes.slice(0, 12).forEach((take) => {
+  state.takeReview.takes.forEach((take) => {
     const item = document.createElement("p");
     item.className = "take-review-take";
     item.textContent = [
@@ -4539,6 +4565,28 @@ function renderExistingTakes() {
     ].filter(Boolean).join(" · ");
     section.appendChild(item);
   });
+  const pager = document.createElement("div");
+  pager.className = "take-review-existing-pager";
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "ghost-button compact-button";
+  previous.textContent = "Previous takes";
+  previous.disabled = state.takeReview.takesPreviousOffset === null;
+  previous.addEventListener("click", () => {
+    state.takeReview.takesOffset = state.takeReview.takesPreviousOffset || 0;
+    void loadTakeReviewPage({ resetSelection: false });
+  });
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "ghost-button compact-button";
+  next.textContent = "Next takes";
+  next.disabled = state.takeReview.takesNextOffset === null;
+  next.addEventListener("click", () => {
+    state.takeReview.takesOffset = state.takeReview.takesNextOffset || state.takeReview.takesOffset;
+    void loadTakeReviewPage({ resetSelection: false });
+  });
+  pager.append(previous, next);
+  section.appendChild(pager);
   return section;
 }
 
@@ -4608,15 +4656,22 @@ async function loadTakeReviewPage(options = {}) {
   if (state.takeReview.filters.cursor) params.set("cursor", state.takeReview.filters.cursor);
   const busyToken = beginBusyOperation("Loading take review");
   try {
+    const takesParams = new URLSearchParams();
+    takesParams.set("holder", existingTakesHolderFilter());
+    takesParams.set("limit", String(TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE));
+    takesParams.set("offset", String(state.takeReview.takesOffset));
     const [proposalResponse, takesResponse] = await Promise.all([
       apiGet(`/api/take-proposals?${params.toString()}`),
-      state.focusSlug ? apiGet(`/api/takes?slug=${encodeURIComponent(state.focusSlug)}&limit=12`) : Promise.resolve({ ok: true, data: { takes: [] } }),
+      existingTakesHolderFilter() ? apiGet(`/api/takes?${takesParams.toString()}`) : Promise.resolve({ ok: true, data: { takes: [], total: 0, next_offset: null, previous_offset: null } }),
     ]);
     if (!proposalResponse.ok) throw new Error(proposalResponse.data?.error || `Proposal load failed with ${proposalResponse.status}`);
     state.takeReview.proposals = proposalResponse.data.proposals || [];
     state.takeReview.counts = proposalResponse.data.counts || {};
     state.takeReview.nextCursor = proposalResponse.data.next_cursor || proposalResponse.data.nextCursor || "";
     state.takeReview.takes = takesResponse.ok ? takesResponse.data.takes || [] : [];
+    state.takeReview.takesTotal = takesResponse.ok ? takesResponse.data.total || state.takeReview.takes.length : 0;
+    state.takeReview.takesNextOffset = takesResponse.ok ? takesResponse.data.next_offset ?? null : null;
+    state.takeReview.takesPreviousOffset = takesResponse.ok ? takesResponse.data.previous_offset ?? null : null;
     state.takeReview.message = `${state.takeReview.proposals.length} proposals loaded${state.focusSlug ? ` · existing takes for ${state.focusSlug}` : ""}`;
   } catch (error) {
     state.takeReview.proposals = [];
@@ -4791,6 +4846,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     operationModal.hidden = false;
     state.takeReview.filters.holder = slug || "";
     state.takeReview.filters.cursor = "";
+    resetExistingTakesPagination();
     await loadTakeReviewPage({ resetSelection: true });
     modalForm.querySelector("#takeReviewQuery")?.focus();
     return;

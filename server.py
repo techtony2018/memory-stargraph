@@ -114,9 +114,10 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.124"
+UI_VERSION = "V1.0.125"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
+TAKES_VIEW_FETCH_LIMIT = 500
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
@@ -429,6 +430,58 @@ def first_query_value(query, key, default=""):
     return str(values[0] or "").strip()
 
 
+def parse_nonnegative_int(value, default=0):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def holder_filter_is_wildcard(value):
+    text = str(value or "").strip()
+    return text == "*" or "*" in text
+
+
+def wildcard_to_regex(value):
+    text = str(value or "").strip().lower()
+    escaped = re.escape(text).replace(r"\*", ".*")
+    return re.compile(f"^{escaped}$")
+
+
+def holder_matches_filter(holder, holder_filter):
+    text = str(holder or "").strip().lower()
+    pattern = str(holder_filter or "").strip().lower()
+    if not pattern or pattern == "*":
+        return True
+    matcher = wildcard_to_regex(pattern)
+    basename = text.rsplit("/", 1)[-1]
+    labelish = basename.replace("-", " ")
+    first = labelish.split(" ", 1)[0]
+    return any(matcher.match(candidate) for candidate in (text, basename, labelish, first))
+
+
+def collection_row_holder(row):
+    if not isinstance(row, dict):
+        return ""
+    return row.get("holder") or row.get("who") or row.get("subject") or ""
+
+
+def paginate_rows(rows, limit, offset):
+    bounded_limit = max(1, min(TAKE_REVIEW_MAX_LIMIT, int(limit or 20)))
+    bounded_offset = max(0, int(offset or 0))
+    total = len(rows)
+    page = rows[bounded_offset:bounded_offset + bounded_limit]
+    next_offset = bounded_offset + bounded_limit if bounded_offset + bounded_limit < total else None
+    previous_offset = max(0, bounded_offset - bounded_limit) if bounded_offset > 0 else None
+    return page, {
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+        "total": total,
+        "next_offset": next_offset,
+        "previous_offset": previous_offset,
+    }
+
+
 def normalize_take_collection(payload, collection_key):
     if isinstance(payload, list):
         return {collection_key: payload}
@@ -464,6 +517,29 @@ def take_review_filters_from_query(query):
         except ValueError:
             payload["offset"] = 0
     return payload
+
+
+def takes_filters_from_query(query):
+    holder = first_query_value(query, "holder")
+    limit = clamp_take_review_limit(first_query_value(query, "limit", "20"))
+    offset = parse_nonnegative_int(first_query_value(query, "offset"), 0)
+    payload = {
+        "page_slug": first_query_value(query, "page_slug") or first_query_value(query, "slug"),
+        "holder": holder,
+        "kind": first_query_value(query, "kind"),
+        "limit": TAKES_VIEW_FETCH_LIMIT,
+        "offset": 0,
+    }
+    if holder_filter_is_wildcard(holder):
+        payload.pop("holder", None)
+    for key in ("page_slug", "holder", "kind"):
+        if not payload.get(key):
+            payload.pop(key, None)
+    if first_query_value(query, "active"):
+        payload["active"] = first_query_value(query, "active").lower() == "true"
+    if first_query_value(query, "resolved"):
+        payload["resolved"] = first_query_value(query, "resolved").lower() == "true"
+    return payload, holder, limit, offset
 
 
 def take_review_action_payload(proposal_id, action, payload):
@@ -2755,9 +2831,7 @@ class GraphStore:
 
     def list_takes(self, filters=None):
         payload = dict(filters or {})
-        payload["limit"] = clamp_take_review_limit(payload.get("limit"))
-        if payload.get("page_slug") and not payload.get("holder"):
-            payload["holder"] = payload["page_slug"]
+        payload["limit"] = max(1, min(TAKES_VIEW_FETCH_LIMIT, int(payload.get("limit") or TAKES_VIEW_FETCH_LIMIT)))
         result = gbrain_call_tool("takes_list", payload, timeout=30)
         normalized = normalize_take_collection(result, "takes")
         normalized.setdefault("filters", payload)
@@ -2863,25 +2937,44 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json({"operations": NODE_OPERATION_ENDPOINTS})
         if parsed.path in ("/api/take-proposals", "/api/hosting/take-proposals"):
             filters = take_review_filters_from_query(parse_qs(parsed.query))
+            requested_holder = filters.get("holder", "")
+            requested_limit = filters.get("limit", 20)
+            requested_offset = parse_nonnegative_int(filters.get("offset"), 0)
+            if holder_filter_is_wildcard(requested_holder):
+                filters = dict(filters)
+                filters.pop("holder", None)
+                filters["limit"] = TAKE_REVIEW_MAX_LIMIT
+                filters["offset"] = 0
             try:
                 data = STORE.list_take_proposals(filters)
+                if holder_filter_is_wildcard(requested_holder):
+                    proposals = data.get("proposals") if isinstance(data, dict) else []
+                    if not isinstance(proposals, list):
+                        proposals = []
+                    proposals = [row for row in proposals if holder_matches_filter(collection_row_holder(row), requested_holder)]
+                    page, metadata = paginate_rows(proposals, requested_limit, requested_offset)
+                    data = dict(data)
+                    data["proposals"] = page
+                    data.update(metadata)
+                    data["holder_filter"] = requested_holder
                 return self.end_json({"ok": True, **data})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path in ("/api/takes", "/api/hosting/takes"):
-            query = parse_qs(parsed.query)
-            filters = {
-                "page_slug": first_query_value(query, "page_slug") or first_query_value(query, "slug"),
-                "holder": first_query_value(query, "holder"),
-                "kind": first_query_value(query, "kind"),
-                "limit": clamp_take_review_limit(first_query_value(query, "limit", "20")),
-            }
-            if first_query_value(query, "active"):
-                filters["active"] = first_query_value(query, "active").lower() == "true"
-            if first_query_value(query, "resolved"):
-                filters["resolved"] = first_query_value(query, "resolved").lower() == "true"
+            filters, holder_filter, limit, offset = takes_filters_from_query(parse_qs(parsed.query))
             try:
                 data = STORE.list_takes(filters)
+                rows = data.get("takes") if isinstance(data, dict) else []
+                if not isinstance(rows, list):
+                    rows = []
+                if holder_filter_is_wildcard(holder_filter):
+                    rows = [row for row in rows if holder_matches_filter(collection_row_holder(row), holder_filter)]
+                page, metadata = paginate_rows(rows, limit, offset)
+                data = dict(data)
+                data["takes"] = page
+                data.update(metadata)
+                data.setdefault("filters", filters)
+                data["holder_filter"] = holder_filter
                 return self.end_json({"ok": True, **data})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)

@@ -111,7 +111,12 @@ class FakeStore:
 
     def list_takes(self, filters=None):
         self.calls.append(("list_takes", dict(filters or {})))
-        return {"takes": [{"id": "take-1", "claim": "Existing take", "holder": filters.get("holder") or filters.get("page_slug")}]}
+        holder = filters.get("holder") or filters.get("page_slug") or "people/tony-guan"
+        takes = [
+            {"id": f"take-{index}", "claim": f"Existing take {index}", "holder": holder}
+            for index in range(1, 20)
+        ]
+        return {"takes": takes}
 
 
 class ApiEndpointTests(unittest.TestCase):
@@ -431,9 +436,37 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["takes"][0]["claim"], "Existing take")
+        self.assertEqual(data["takes"][0]["claim"], "Existing take 1")
         self.assertEqual(fake_store.calls[-1][0], "list_takes")
         self.assertEqual(fake_store.calls[-1][1]["page_slug"], "people/tony-guan")
+        self.assertEqual(fake_store.calls[-1][1]["limit"], 500)
+
+    def test_existing_takes_endpoint_paginates_and_returns_range_metadata(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/takes?holder=people%2Ftony-guan&limit=10&offset=10")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(len(data["takes"]), 9)
+        self.assertEqual(data["takes"][0]["id"], "take-11")
+        self.assertEqual(data["total"], 19)
+        self.assertEqual(data["offset"], 10)
+        self.assertEqual(data["limit"], 10)
+        self.assertIsNone(data["next_offset"])
+        self.assertEqual(data["previous_offset"], 0)
+
+    def test_wildcard_holder_filters_are_expanded_for_takes(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_get("/api/takes?holder=tony*&limit=10")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["total"], 19)
+        call = fake_store.calls[-1]
+        self.assertEqual(call[0], "list_takes")
+        self.assertNotIn("holder", call[1])
 
     def test_gbrain_tool_proxy_collapses_unknown_tool_migration_noise(self):
         noisy = "Schema version 1 -> 119\n  [69] take_proposals_v0_36...\nUnknown tool: take_proposals_list"
