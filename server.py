@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.127"
+UI_VERSION = "V1.0.128"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -494,7 +494,7 @@ def normalize_take_collection(payload, collection_key):
             if isinstance(normalized.get(key), list):
                 rows = normalized[key]
                 break
-    if (rows is None or rows == []) and normalized.get("ok") is True and ("claim" in normalized or "page_slug" in normalized):
+    if (rows is None or rows == []) and ("claim" in normalized or "page_slug" in normalized):
         rows = [dict(normalized)]
     normalized[collection_key] = rows if isinstance(rows, list) else []
     return normalized

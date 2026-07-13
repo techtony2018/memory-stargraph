@@ -123,7 +123,6 @@ class SingleRowTakeStore(FakeStore):
     def list_takes(self, filters=None):
         self.calls.append(("list_takes", dict(filters or {})))
         return {
-            "ok": True,
             "id": 240,
             "page_slug": "blogs/tony-guan/msn/20051115-28-e7b3f54e",
             "claim": "Existing single-row take",
