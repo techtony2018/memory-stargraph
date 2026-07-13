@@ -114,7 +114,7 @@ GBRAIN_FILE_STORE_ROOTS = [
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.130"
+UI_VERSION = "V1.0.131"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -2669,8 +2669,13 @@ class GraphStore:
         if agent_output:
             return {"output": agent_output, "source": "openclaw-agent", "timings": timings, "request_id": request_id, "diagnostics": diagnostics}
         fallback_text = f"Question: {question}\nSelected node: {slug}\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now."
+        try:
+            fallback_output = self.ask_gbrain(slug, question)
+        except Exception as exc:  # noqa: BLE001
+            fallback_output = f"Ask GBrain fallback unavailable: {exc}"
         return {
             "output": fallback_text or "I found no concise answer in the graph context for this question yet.",
+            "fallback_output": fallback_output,
             "source": "fallback",
             "timings": timings,
             "request_id": request_id,

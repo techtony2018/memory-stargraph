@@ -910,12 +910,22 @@ cover_image: companies/example-inc/logo.jpg
     def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
         store = GraphStore()
         with mock.patch("server.run_gbrain") as run, mock.patch("server.run_openclaw_agent", return_value=None):
-            run.side_effect = ["# Tony Guan\n\nEngineer", "direct graph", "fallback graph", "retrieved context"]
+            run.side_effect = [
+                "# Tony Guan\n\nEngineer",
+                "direct graph",
+                "backlink graph",
+                "retrieved context",
+                "fallback direct graph",
+                "fallback retrieved context",
+            ]
             result = store.ask_yoda("people/tony-guan", "What changed?", [{"role": "user", "content": "Earlier question"}])
 
         self.assertEqual(result["source"], "fallback")
         self.assertIn("Question: What changed?", result["output"])
         self.assertIn("Selected node: people/tony-guan", result["output"])
+        self.assertIn("fallback_output", result)
+        self.assertIn("Question-specific gbrain retrieval", result["fallback_output"])
+        self.assertIn("fallback retrieved context", result["fallback_output"])
         self.assertIn("timings", result)
         self.assertNotIn("OpenClaw agent unavailable", result["output"])
         self.assertNotIn("retrieved context", result["output"])
