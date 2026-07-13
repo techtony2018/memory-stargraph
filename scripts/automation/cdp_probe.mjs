@@ -51,16 +51,19 @@ try {
     focusSlug: window.__MEMORY_STARGRAPH__?.getState()?.focusSlug || "",
     mapYodaButtonPresent: Boolean(document.querySelector("#mapAskYodaButton")),
     autopilotToolbarOrder: [...document.querySelectorAll("#autopilotFlyout > button, #autopilotFlyout > span")].map((item) => item.id),
+    takeReviewNestedUnderAutopilot: Boolean(document.querySelector("#autopilotFlyout > #navTakeReviewButton")),
+    takeReviewTopLevelCount: document.querySelectorAll(".nav-rail > #navTakeReviewButton").length,
     nativeTitleCount: document.querySelectorAll("[title]").length,
     relationshipTypePopupCss: getComputedStyle(document.querySelector(".graph-panel")).getPropertyValue("--hud-border").trim(),
     noPlannedFlightRailButton: ![...document.querySelectorAll(".nav-rail-button")].some((item) => /planned flight/i.test(item.textContent || "")),
     expectedVersion,
   }), version);
   const assetVersion = version.replace(/^V/, "");
-  const expectedToolbar = ["autopilotModeIcon", "tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
+  const expectedToolbar = ["autopilotModeIcon", "tourPlanButton", "navTakeReviewButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
   if (probe.uiVersion !== version || probe.graphVersion !== version) throw new Error(`version mismatch: ${JSON.stringify(probe)}`);
   if (probe.scriptSrc !== `/app.js?v=${assetVersion}` || probe.cssHref !== `/styles.css?v=${assetVersion}`) throw new Error(`asset mismatch: ${JSON.stringify(probe)}`);
   if (expectedToolbar.some((id, index) => probe.autopilotToolbarOrder[index] !== id)) throw new Error(`autopilot toolbar order mismatch: ${JSON.stringify(probe)}`);
+  if (!probe.takeReviewNestedUnderAutopilot || probe.takeReviewTopLevelCount !== 0) throw new Error(`take review placement mismatch: ${JSON.stringify(probe)}`);
   if (probe.nativeTitleCount !== 0) throw new Error(`native title attributes remain: ${JSON.stringify(probe)}`);
   if (!probe.relationshipTypePopupCss) throw new Error(`HUD CSS variables missing: ${JSON.stringify(probe)}`);
   if (!probe.noPlannedFlightRailButton) throw new Error(`unexpected separate Planned Flight rail button: ${JSON.stringify(probe)}`);

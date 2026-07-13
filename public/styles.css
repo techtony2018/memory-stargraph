@@ -1416,9 +1416,19 @@ h2 {
 
 .take-review-toolbar {
   display: grid;
-  grid-template-columns: 128px minmax(120px, 1fr) minmax(160px, 1.4fr) repeat(5, auto);
+  grid-template-columns: 118px minmax(132px, 1fr) minmax(132px, 1fr) minmax(150px, 1.2fr) repeat(5, auto);
   gap: 8px;
   align-items: center;
+}
+
+.take-review-filter-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .take-review-toolbar input,
@@ -1467,6 +1477,30 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.take-review-status-badge {
+  width: fit-content;
+  padding: 2px 7px;
+  border: 1px solid rgba(136, 246, 255, 0.24);
+  border-radius: 999px;
+  color: #bff8ff;
+  background: rgba(34, 211, 238, 0.1);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.take-review-status-badge.is-accepted {
+  border-color: rgba(134, 239, 172, 0.34);
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.take-review-status-badge.is-rejected {
+  border-color: rgba(255, 156, 168, 0.34);
+  color: #fecdd3;
+  background: rgba(244, 63, 94, 0.12);
+}
+
 .take-review-row-body p {
   font-size: 12px;
 }
@@ -1477,6 +1511,17 @@ h2 {
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.take-review-page-position {
+  display: inline-grid;
+  place-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .take-review-existing h4 {
@@ -2861,6 +2906,17 @@ body::after {
   background: radial-gradient(circle at 50% 18%, rgba(34, 211, 238, 0.24), rgba(2, 8, 22, 0.5));
   box-shadow: 0 0 28px rgba(34, 211, 238, 0.22), inset 0 0 22px rgba(34, 211, 238, 0.1);
   animation: active-pulse 2.4s ease-in-out infinite;
+}
+
+.autopilot-takes-button {
+  min-width: 54px;
+  padding: 0 8px;
+}
+
+.autopilot-takes-button span {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 @keyframes active-pulse {

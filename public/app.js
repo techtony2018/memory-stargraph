@@ -1,6 +1,6 @@
-const UI_VERSION = "V1.0.122";
+const UI_VERSION = "V1.0.124";
 const RELATIONSHIP_PAGE_SIZE = 10;
-const TAKE_REVIEW_PAGE_SIZE = 20;
+const TAKE_REVIEW_PAGE_SIZE = 10;
 let tourNodeLoadTimeoutMs = 20 * 1000;
 const NODE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024;
 const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
@@ -88,9 +88,10 @@ const state = {
     proposals: [],
     takes: [],
     counts: {},
-    filters: { status: "pending", holder: "", query: "", cursor: "" },
+    filters: { status: "pending", holder: "", source: "", query: "", cursor: "" },
     selectedIds: new Set(),
     nextCursor: "",
+    pageHistory: [],
     loading: false,
     message: "",
     pendingBulkConfirm: null,
@@ -3426,6 +3427,7 @@ function chooseSlugSelectorOption(selector, node) {
   const { input } = selector;
   input.value = node.slug;
   input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
   hideSlugSelectorPopup(selector);
   input.focus();
 }
@@ -4318,6 +4320,67 @@ function createTakeReviewButton(label, action, ids = []) {
   return button;
 }
 
+function resetTakeReviewPagination() {
+  state.takeReview.filters.cursor = "";
+  state.takeReview.pageHistory = [];
+}
+
+function createTakeReviewSlugFilter({
+  id,
+  label,
+  value = "",
+  placeholder = "Type two characters; press Return for live search",
+  onChange,
+}) {
+  const wrap = document.createElement("label");
+  wrap.className = "take-review-filter-field";
+  const title = document.createElement("span");
+  title.textContent = label;
+  const input = document.createElement("input");
+  input.id = id;
+  input.value = value;
+  input.placeholder = placeholder;
+  input.autocomplete = "off";
+  const popup = document.createElement("div");
+  popup.className = "slug-selector-popup take-review-selector-popup";
+  popup.id = `${id}Popup`;
+  popup.hidden = true;
+  popup.setAttribute("role", "listbox");
+  document.body.appendChild(popup);
+  input.setAttribute("aria-controls", popup.id);
+  input.setAttribute("aria-autocomplete", "list");
+  const selector = { selectorId: id, input, popup, sourceSlug: "", statusTarget: modalMessage };
+  const applyValue = (reload = false) => {
+    if (onChange) onChange(input.value.trim(), reload);
+  };
+  input.addEventListener("input", () => {
+    renderSlugSelectorOptions(selector);
+    applyValue(false);
+  });
+  input.addEventListener("change", () => applyValue(true));
+  input.addEventListener("focus", () => renderSlugSelectorOptions(selector));
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => hideSlugSelectorPopup(selector), 80);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void runLiveSlugSelectorSearch(selector);
+    } else if (event.key === "Escape") {
+      hideSlugSelectorPopup(selector);
+    }
+  });
+  wrap.append(title, input);
+  return wrap;
+}
+
+function takeReviewStatusValue(proposal) {
+  return proposalField(proposal, ["status", "proposal_status", "review_status", "state"], "pending")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "pending";
+}
+
 function renderTakeReviewToolbar() {
   const toolbar = document.createElement("div");
   toolbar.className = "take-review-toolbar";
@@ -4333,18 +4396,34 @@ function renderTakeReviewToolbar() {
   status.value = state.takeReview.filters.status || "pending";
   status.addEventListener("change", () => {
     state.takeReview.filters.status = status.value;
-    state.takeReview.filters.cursor = "";
+    resetTakeReviewPagination();
     void loadTakeReviewPage({ resetSelection: true });
   });
 
-  const holder = document.createElement("input");
-  holder.id = "takeReviewHolder";
-  holder.placeholder = "holder/source";
-  holder.value = state.takeReview.filters.holder || "";
-  holder.addEventListener("change", () => {
-    state.takeReview.filters.holder = holder.value.trim();
-    state.takeReview.filters.cursor = "";
-    void loadTakeReviewPage({ resetSelection: true });
+  const holder = createTakeReviewSlugFilter({
+    id: "takeReviewHolder",
+    label: "Holder",
+    value: state.takeReview.filters.holder || "",
+    onChange: (value, reload) => {
+      state.takeReview.filters.holder = value;
+      if (reload) {
+        resetTakeReviewPagination();
+        void loadTakeReviewPage({ resetSelection: true });
+      }
+    },
+  });
+
+  const source = createTakeReviewSlugFilter({
+    id: "takeReviewSource",
+    label: "Source",
+    value: state.takeReview.filters.source || "",
+    onChange: (value, reload) => {
+      state.takeReview.filters.source = value;
+      if (reload) {
+        resetTakeReviewPagination();
+        void loadTakeReviewPage({ resetSelection: true });
+      }
+    },
   });
 
   const query = document.createElement("input");
@@ -4355,7 +4434,7 @@ function renderTakeReviewToolbar() {
     if (event.key !== "Enter") return;
     event.preventDefault();
     state.takeReview.filters.query = query.value.trim();
-    state.takeReview.filters.cursor = "";
+    resetTakeReviewPagination();
     void loadTakeReviewPage({ resetSelection: true });
   });
 
@@ -4365,7 +4444,10 @@ function renderTakeReviewToolbar() {
   refresh.textContent = "Refresh";
   setHudTooltip(refresh, "Reload take proposals.");
   refresh.addEventListener("click", () => {
+    state.takeReview.filters.holder = toolbar.querySelector("#takeReviewHolder")?.value.trim() || "";
+    state.takeReview.filters.source = toolbar.querySelector("#takeReviewSource")?.value.trim() || "";
     state.takeReview.filters.query = query.value.trim();
+    resetTakeReviewPagination();
     void loadTakeReviewPage({ resetSelection: false });
   });
 
@@ -4381,7 +4463,7 @@ function renderTakeReviewToolbar() {
   acceptPage.disabled = pageIds.length === 0;
   rejectPage.disabled = pageIds.length === 0;
 
-  toolbar.append(status, holder, query, refresh, acceptSelected, rejectSelected, acceptPage, rejectPage);
+  toolbar.append(status, holder, source, query, refresh, acceptSelected, rejectSelected, acceptPage, rejectPage);
   return toolbar;
 }
 
@@ -4405,6 +4487,10 @@ function renderTakeReviewProposal(proposal) {
   body.className = "take-review-row-body";
   const claim = document.createElement("strong");
   claim.textContent = proposalField(proposal, ["claim", "claim_text", "text", "summary"], "(No claim text)");
+  const statusValue = takeReviewStatusValue(proposal);
+  const statusBadge = document.createElement("span");
+  statusBadge.className = `take-review-status-badge is-${statusValue}`;
+  statusBadge.textContent = statusValue;
   const meta = document.createElement("p");
   const holder = proposalField(proposal, ["holder", "who", "subject"], "unknown holder");
   const kind = proposalField(proposal, ["kind", "domain"], "take");
@@ -4415,7 +4501,7 @@ function renderTakeReviewProposal(proposal) {
   const preview = document.createElement("p");
   preview.className = "take-review-preview";
   preview.textContent = proposalField(proposal, ["source_preview", "original_preview", "preview"], "No source preview available.");
-  body.append(claim, meta, preview);
+  body.append(claim, statusBadge, meta, preview);
 
   const actions = document.createElement("div");
   actions.className = "take-review-row-actions";
@@ -4457,6 +4543,7 @@ function renderExistingTakes() {
 }
 
 function renderTakeReviewContent() {
+  document.querySelectorAll("#takeReviewHolderPopup, #takeReviewSourcePopup").forEach((popup) => popup.remove());
   modalForm.innerHTML = "";
   modalForm.appendChild(renderTakeReviewToolbar());
 
@@ -4474,22 +4561,35 @@ function renderTakeReviewContent() {
     empty.textContent = state.takeReview.loading ? "Loading proposals..." : "No proposals returned for the active filters.";
     list.appendChild(empty);
   } else {
-    state.takeReview.proposals.forEach((proposal) => list.appendChild(renderTakeReviewProposal(proposal)));
+    state.takeReview.proposals.slice(0, TAKE_REVIEW_PAGE_SIZE).forEach((proposal) => list.appendChild(renderTakeReviewProposal(proposal)));
   }
   modalForm.appendChild(list);
 
   const pager = document.createElement("div");
   pager.className = "take-review-pager";
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "ghost-button compact-button";
+  previous.textContent = "Previous page";
+  previous.disabled = !state.takeReview.pageHistory.length;
+  previous.addEventListener("click", () => {
+    state.takeReview.filters.cursor = state.takeReview.pageHistory.pop() || "";
+    void loadTakeReviewPage({ resetSelection: true });
+  });
+  const position = document.createElement("span");
+  position.className = "take-review-page-position";
+  position.textContent = `Page ${state.takeReview.pageHistory.length + 1}${state.takeReview.nextCursor ? "+" : ""}`;
   const next = document.createElement("button");
   next.type = "button";
   next.className = "ghost-button compact-button";
   next.textContent = "Next page";
   next.disabled = !state.takeReview.nextCursor;
   next.addEventListener("click", () => {
+    state.takeReview.pageHistory.push(state.takeReview.filters.cursor || "");
     state.takeReview.filters.cursor = state.takeReview.nextCursor;
     void loadTakeReviewPage({ resetSelection: true });
   });
-  pager.appendChild(next);
+  pager.append(previous, position, next);
   modalForm.appendChild(pager);
   modalForm.appendChild(renderExistingTakes());
 }
@@ -4503,6 +4603,7 @@ async function loadTakeReviewPage(options = {}) {
   params.set("status", state.takeReview.filters.status || "pending");
   params.set("limit", String(TAKE_REVIEW_PAGE_SIZE));
   if (state.takeReview.filters.holder) params.set("holder", state.takeReview.filters.holder);
+  if (state.takeReview.filters.source) params.set("source_slug", state.takeReview.filters.source);
   if (state.takeReview.filters.query) params.set("q", state.takeReview.filters.query);
   if (state.takeReview.filters.cursor) params.set("cursor", state.takeReview.filters.cursor);
   const busyToken = beginBusyOperation("Loading take review");
