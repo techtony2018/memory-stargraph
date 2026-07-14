@@ -1,0 +1,1 @@
+Run the scheduled Memory Stargraph Daily Learning Intake now in this persistent worker task. Read and follow `automations/memory-stargraph-daily-learning-intake/prompt.md` as the current source of truth. Report the Run, TODO, and Learning evidence back in this task.

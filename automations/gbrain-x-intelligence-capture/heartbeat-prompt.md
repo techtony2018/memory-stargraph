@@ -1,0 +1,1 @@
+Run the scheduled GBrain X Intelligence Capture now in this persistent worker task. Read and follow `automations/gbrain-x-intelligence-capture/prompt.md` as the current source of truth. Report the Run and Learning evidence back in this task.

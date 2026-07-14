@@ -1,0 +1,1 @@
+Run the scheduled Memory Stargraph Wish to Reallity implementation cycle now in this persistent worktree task. First sync remote HEAD while preserving unrelated changes, then read and follow `automations/memory-stargraph-wish-to-reallity/prompt.md` as the current source of truth. Report implementation, tests, deployment, Run, and Learning evidence back in this task.

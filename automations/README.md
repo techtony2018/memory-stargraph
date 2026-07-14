@@ -9,8 +9,9 @@ ${CODEX_HOME:-$HOME/.codex}/automations/<automation-id>/automation.toml
 
 The tracked definitions intentionally exclude runtime timestamps, automation
 memory, logs, credentials, private deployment coordinates, and local service
-configuration. Replace `{{PROJECT_ROOT}}` with the local Memory Stargraph
-checkout before restoring a definition through the Codex automation UI/API.
+configuration. Worker schedules use heartbeats so every run returns to one
+persistent task instead of creating a new task. Replace the documented
+placeholders before restoring a definition through the Codex automation UI/API.
 
 ## Pipeline
 
@@ -20,8 +21,9 @@ checkout before restoring a definition through the Codex automation UI/API.
 | Daily 1:00 AM | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs. |
 | Daily 2:00 AM | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
 | Sunday 4:00 AM | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
+| Daily 7:00 AM | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated steward thread. |
 
-All four automations work toward the persistent GBrain goal:
+All five automations work toward the persistent GBrain goal:
 
 ```text
 goals/memory-stargraph-continuous-learning-local-knowledge-os
@@ -31,8 +33,11 @@ goals/memory-stargraph-continuous-learning-local-knowledge-os
 
 Each automation directory contains:
 
-- `automation.toml`: portable metadata and schedule.
-- `prompt.md`: the complete checked-in prompt.
+- `automation.toml`: portable metadata, schedule, and persistent-task placeholder.
+- `heartbeat-prompt.md`: the short message delivered to the persistent task on schedule.
+- `prompt.md`: the complete worker instructions read by the task for each run.
+- `thread-bootstrap.md`: initialization prompt for recreating a persistent worker task.
+- `steward-thread-prompt.md`, when present: bootstrap context for recreating the dedicated owner thread.
 
 The repository definition records the intended active state. The Codex app may
 temporarily pause a runtime automation without changing this source definition.
@@ -42,9 +47,13 @@ together in the same task.
 ## Restore Checklist
 
 1. Open the matching `automation.toml` and `prompt.md`.
-2. Replace `{{PROJECT_ROOT}}` with the absolute local checkout path.
-3. Create or update the automation through the Codex automation UI/API.
-4. Verify its id, schedule, model, reasoning effort, execution environment, and
-   active/paused status in `${CODEX_HOME:-$HOME/.codex}/automations`.
-5. Keep deployment targets in the private local file documented in
+2. Create the persistent task from `thread-bootstrap.md` or
+   `steward-thread-prompt.md`. Use a project-local task for evidence/review
+   workers and a dedicated worktree task for Wish to Reallity.
+3. Replace the automation-specific `{{..._THREAD_ID}}` placeholder with the
+   resulting task id.
+4. Create or update the heartbeat automation through the Codex automation UI/API.
+5. Verify its id, schedule, destination task, and active/paused status in
+   `${CODEX_HOME:-$HOME/.codex}/automations`.
+6. Keep deployment targets in the private local file documented in
    `docs/automation-runbook.md`; never add them to these definitions.

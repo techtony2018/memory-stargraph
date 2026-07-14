@@ -1,0 +1,1 @@
+Run the scheduled Memory Stargraph Divergent Product Discovery now in this persistent worker task. Read and follow `automations/memory-stargraph-divergent-product-discovery/prompt.md` as the current source of truth. Report opportunities, evidence, promoted TODOs, Run, and Learning records back in this task.
