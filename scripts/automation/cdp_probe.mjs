@@ -61,7 +61,7 @@ try {
   }), version);
   const assetVersion = version.replace(/^V/, "");
   const expectedToolbar = ["autopilotModeIcon", "tourPlanButton", "tourButton", "tourPrevButton", "tourNextButton", "tourStopButton", "tourCounter"];
-  const expectedNavOrder = ["navStargraphButton", "navSearchButton", "navAutopilotButton", "navTakeReviewButton", "navSettingsButton"];
+  const expectedNavOrder = ["navStargraphButton", "navSearchButton", "navAutopilotButton", "navTakeReviewButton", "navResolverButton", "navSettingsButton"];
   if (probe.uiVersion !== version || probe.graphVersion !== version) throw new Error(`version mismatch: ${JSON.stringify(probe)}`);
   if (probe.scriptSrc !== `/app.js?v=${assetVersion}` || probe.cssHref !== `/styles.css?v=${assetVersion}`) throw new Error(`asset mismatch: ${JSON.stringify(probe)}`);
   if (expectedToolbar.some((id, index) => probe.autopilotToolbarOrder[index] !== id)) throw new Error(`autopilot toolbar order mismatch: ${JSON.stringify(probe)}`);
