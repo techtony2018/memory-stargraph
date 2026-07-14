@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.131";
+const UI_VERSION = "V1.0.133";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -207,6 +207,7 @@ const modalYodaDepth = document.getElementById("modalYodaDepth");
 const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
 const modalYodaLogButton = document.getElementById("modalYodaLogButton");
 const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
+const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -3276,6 +3277,8 @@ function formatYodaDiagnosticEntry(slug, log, index) {
     `depth: ${diagnostics.depth || state.yodaDepth}`,
     `source: ${diagnostics.source || log.source || "unknown"}`,
     `fallback_used: ${Boolean(diagnostics.fallback_used || log.source === "fallback")}`,
+    `model_backend: ${diagnostics.model_backend || "unknown"}`,
+    `model_name: ${diagnostics.model_name || "default"}`,
     `model_status: ${diagnostics.model_status || "unknown"}`,
     `openclaw_status: ${diagnostics.openclaw_status || "unknown"}`,
     "timing phases:",
@@ -3495,9 +3498,13 @@ async function runLiveSlugSelectorSearch(selector) {
   const busyToken = beginBusyOperation(`Searching targets for ${query}`);
   try {
     const response = await apiGet(`/api/search?q=${encodeURIComponent(query)}`);
-    const nodes = response.ok ? response.data.graph?.nodes || [] : [];
+    const graph = response.ok ? response.data.graph || {} : {};
+    const nodes = graph.nodes || [];
+    const searchSlugs = graph.source?.coverage?.search_slugs || [];
+    const liveRank = new Map(searchSlugs.map((slug, index) => [slug, index]));
     selectorData.liveOptions = nodes
       .filter((node) => node.slug && node.slug !== sourceSlug)
+      .sort((left, right) => (liveRank.get(left.slug) ?? 9999) - (liveRank.get(right.slug) ?? 9999))
       .map((node) => ({ node, source: "live" }));
     renderSlugSelectorOptions(selector);
     if (statusTarget) statusTarget.textContent = nodes.length ? "Live GBrain search results merged into target list." : "No live GBrain matches found.";
@@ -3553,6 +3560,73 @@ function createSlugSelector({
     }
   });
   return { input, popup, selector };
+}
+
+function renderYodaModelForm(config = {}) {
+  modalForm.innerHTML = "";
+  const backendSelect = document.createElement("select");
+  backendSelect.id = "operationYodaBackend";
+  const backends = config.backends || ["gbrain_think", "ollama", "openai", "openai_compatible", "openclaw"];
+  backends.forEach((backend) => {
+    const option = document.createElement("option");
+    option.value = backend;
+    option.textContent = backend.replace(/_/g, " ");
+    backendSelect.appendChild(option);
+  });
+  backendSelect.value = config.backend || "openclaw";
+
+  const modelInput = document.createElement("input");
+  modelInput.id = "operationYodaModel";
+  modelInput.placeholder = "provider/model or model id";
+  modelInput.value = config.model || "";
+
+  const baseUrlInput = document.createElement("input");
+  baseUrlInput.id = "operationYodaBaseUrl";
+  baseUrlInput.placeholder = "https://api.openai.com/v1 or local endpoint";
+  baseUrlInput.value = config.base_url || "";
+
+  const apiKeyEnvInput = document.createElement("input");
+  apiKeyEnvInput.id = "operationYodaApiKeyEnv";
+  apiKeyEnvInput.placeholder = "OPENAI_API_KEY";
+  apiKeyEnvInput.value = config.api_key_env || "OPENAI_API_KEY";
+
+  const agentInput = document.createElement("input");
+  agentInput.id = "operationYodaAgent";
+  agentInput.placeholder = "OpenClaw agent id";
+  agentInput.value = config.agent || "";
+
+  const timeoutInput = document.createElement("input");
+  timeoutInput.id = "operationYodaTimeout";
+  timeoutInput.type = "number";
+  timeoutInput.min = "5";
+  timeoutInput.max = "300";
+  timeoutInput.step = "5";
+  timeoutInput.value = String(config.timeout_seconds || 45);
+
+  const status = document.createElement("p");
+  status.className = "operation-summary yoda-model-status";
+
+  appendField(modalForm, "Backend", backendSelect);
+  appendField(modalForm, "Model", modelInput);
+  appendField(modalForm, "Base URL", baseUrlInput);
+  appendField(modalForm, "API key env", apiKeyEnvInput);
+  appendField(modalForm, "OpenClaw agent", agentInput);
+  appendField(modalForm, "Timeout seconds", timeoutInput);
+  modalForm.appendChild(status);
+
+  const updateStatus = () => {
+    const backend = backendSelect.value;
+    const keyState = config.api_key_available ? "key env is available" : "key env is not visible to the service";
+    const needsBase = backend === "openai_compatible" || backend === "ollama";
+    baseUrlInput.closest("label").hidden = !needsBase && backend !== "openai";
+    apiKeyEnvInput.closest("label").hidden = !["openai", "openai_compatible"].includes(backend);
+    agentInput.closest("label").hidden = backend !== "openclaw";
+    status.textContent = backend === "openclaw"
+      ? "OpenClaw backend uses the configured agent/default model unless Model is set here."
+      : `${backend.replace(/_/g, " ")} backend uses this model directly; ${keyState}.`;
+  };
+  [backendSelect, modelInput, baseUrlInput, apiKeyEnvInput, agentInput, timeoutInput].forEach((input) => input.addEventListener("input", updateStatus));
+  updateStatus();
 }
 
 function relationshipTypeSelectorState(selectorId) {
@@ -4820,7 +4894,7 @@ function closeModal() {
 
 async function openNodeModal(action, slug = state.focusSlug) {
   hideContextMenu();
-  if (!["new-node", "tour-plan"].includes(action) && !slug) return;
+  if (!["new-node", "tour-plan", "yoda-model"].includes(action) && !slug) return;
   const node = state.nodeMap.get(slug);
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
@@ -4901,6 +4975,34 @@ async function openNodeModal(action, slug = state.focusSlug) {
     resetExistingTakesPagination();
     await loadTakeReviewPage({ resetSelection: true });
     modalForm.querySelector("#takeReviewQuery")?.focus();
+    return;
+  }
+
+  if (action === "yoda-model") {
+    state.modalAction = { action, slug: state.focusSlug || "", label: "Yoda Model" };
+    modalTitle.textContent = "Yoda Model";
+    modalKicker.textContent = "Settings";
+    modalPrimaryButton.hidden = false;
+    modalPrimaryButton.disabled = false;
+    modalCancelButton.hidden = false;
+    modalCancelButton.disabled = false;
+    modalPrimaryButton.textContent = "Save";
+    modalCancelButton.textContent = "Cancel";
+    modalMessage.textContent = "Choose how Ask Yoda calls a model. API keys stay in the service environment; this UI stores only the env var name.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    operationModal.classList.add("compact-modal");
+    setModalControlTooltips("Save Yoda model settings", "Cancel");
+    operationModal.hidden = false;
+    renderYodaModelForm({});
+    try {
+      const response = await apiGet("/api/yoda-model-config");
+      if (!response.ok) throw new Error(response.data?.error || `Config load failed with ${response.status}`);
+      renderYodaModelForm(response.data);
+      modalForm.querySelector("#operationYodaBackend")?.focus();
+    } catch (error) {
+      modalMessage.textContent = error.message || String(error);
+    }
     return;
   }
 
@@ -5326,6 +5428,7 @@ async function runModalPrimaryAction() {
     "graph-query": "Running graph query",
     "attach-file": "Attaching file",
     embed: "Refreshing embedding",
+    "yoda-model": "Saving Yoda model",
   };
   const busyToken = beginBusyOperation(busyLabels[action] || "Working");
   if (action === "attach-file") {
@@ -5356,6 +5459,21 @@ async function runModalPrimaryAction() {
       closeModal();
       applyGraphPayload(response.data.graph, response.data.slug);
       await loadEntity(response.data.slug, { source: "system" });
+      return;
+    }
+    if (action === "yoda-model") {
+      const payload = {
+        backend: modalForm.querySelector("#operationYodaBackend")?.value || "openclaw",
+        model: modalForm.querySelector("#operationYodaModel")?.value.trim() || "",
+        base_url: modalForm.querySelector("#operationYodaBaseUrl")?.value.trim() || "",
+        api_key_env: modalForm.querySelector("#operationYodaApiKeyEnv")?.value.trim() || "OPENAI_API_KEY",
+        agent: modalForm.querySelector("#operationYodaAgent")?.value.trim() || "",
+        timeout_seconds: modalForm.querySelector("#operationYodaTimeout")?.value || "45",
+      };
+      const response = await apiPost("/api/yoda-model-config", payload);
+      if (!response.ok) throw new Error(response.data?.error || `Yoda model save failed with ${response.status}`);
+      modalMessage.textContent = `Ask Yoda model saved: ${response.data.backend}${response.data.model ? ` · ${response.data.model}` : ""}`;
+      closeModal();
       return;
     }
     if (action === "delete") {
@@ -5896,6 +6014,9 @@ function bindEvents() {
   });
   settingsYodaLogButton?.addEventListener("click", () => {
     openYodaLogWindow({ scope: "global" });
+  });
+  settingsYodaModelButton?.addEventListener("click", () => {
+    void openNodeModal("yoda-model", state.focusSlug || "");
   });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);

@@ -1219,6 +1219,17 @@ h2 {
   flex-wrap: wrap;
 }
 
+.settings-yoda-row .compact-button {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+.yoda-model-status {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .cache-action-row .cache-usage-label {
   flex: 1 1 auto;
   min-width: 92px;

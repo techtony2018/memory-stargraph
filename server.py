@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 from urllib.parse import parse_qs
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 APP_NAME = "Memory Stargraph"
@@ -42,6 +42,12 @@ DEFAULT_CONFIG = {
     "gbrain_file_store_roots": [],
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
+    "yoda_backend": "openclaw",
+    "yoda_agent": "",
+    "yoda_model": "",
+    "yoda_base_url": "",
+    "yoda_api_key_env": "OPENAI_API_KEY",
+    "yoda_timeout_seconds": 45,
 }
 
 
@@ -64,6 +70,25 @@ def load_config():
             raise RuntimeError(f"Config must be a JSON object: {path}")
         config.update({key: value for key, value in loaded.items() if value is not None})
     return config
+
+
+def read_local_config_file():
+    path = config_path()
+    if not path.exists():
+        return {}
+    with path.open() as handle:
+        loaded = json.load(handle)
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"Config must be a JSON object: {path}")
+    return loaded
+
+
+def write_local_config_file(config):
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        json.dump(config, handle, indent=2)
+        handle.write("\n")
 
 
 CONFIG = load_config()
@@ -113,8 +138,9 @@ GBRAIN_FILE_STORE_ROOTS = [
 ] or [resolve_project_path(root) for root in CONFIG.get("gbrain_file_store_roots", [])]
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
+YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.131"
+UI_VERSION = "V1.0.133"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -611,8 +637,202 @@ def safe_preview(value, limit=600):
     return text[:limit]
 
 
-def run_openclaw_agent(prompt, timeout=45, return_details=False):
-    agent_ref = str(CONFIG.get("yoda_agent") or os.environ.get("MEMORY_STARGRAPH_YODA_AGENT") or "").strip()
+def yoda_runtime_config():
+    config = load_config()
+    backend = str(os.environ.get("MEMORY_STARGRAPH_YODA_BACKEND") or config.get("yoda_backend") or "openclaw").strip().lower()
+    if backend not in YODA_BACKENDS:
+        backend = "openclaw"
+    model = str(os.environ.get("MEMORY_STARGRAPH_YODA_MODEL") or config.get("yoda_model") or "").strip()
+    base_url = str(os.environ.get("MEMORY_STARGRAPH_YODA_BASE_URL") or config.get("yoda_base_url") or "").strip()
+    api_key_env = str(os.environ.get("MEMORY_STARGRAPH_YODA_API_KEY_ENV") or config.get("yoda_api_key_env") or "OPENAI_API_KEY").strip()
+    agent_ref = str(config.get("yoda_agent") or os.environ.get("MEMORY_STARGRAPH_YODA_AGENT") or "").strip()
+    try:
+        timeout = max(5, int(os.environ.get("MEMORY_STARGRAPH_YODA_TIMEOUT_SECONDS") or config.get("yoda_timeout_seconds") or 45))
+    except (TypeError, ValueError):
+        timeout = 45
+    return {
+        "backend": backend,
+        "model": model,
+        "base_url": base_url,
+        "api_key_env": api_key_env,
+        "agent": agent_ref,
+        "timeout": timeout,
+    }
+
+
+def public_yoda_model_config():
+    config = yoda_runtime_config()
+    return {
+        "backend": config["backend"],
+        "model": config["model"],
+        "base_url": config["base_url"],
+        "api_key_env": config["api_key_env"],
+        "agent": config["agent"],
+        "timeout_seconds": config["timeout"],
+        "api_key_available": bool(os.environ.get(config["api_key_env"])) if config["api_key_env"] else False,
+        "backends": sorted(YODA_BACKENDS),
+    }
+
+
+def save_yoda_model_config(payload):
+    backend = str(payload.get("backend") or "openclaw").strip().lower()
+    if backend not in YODA_BACKENDS:
+        raise ValueError(f"backend must be one of: {', '.join(sorted(YODA_BACKENDS))}")
+    model = str(payload.get("model") or "").strip()
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key_env = str(payload.get("api_key_env") or "OPENAI_API_KEY").strip() or "OPENAI_API_KEY"
+    agent = str(payload.get("agent") or "").strip()
+    try:
+        timeout_seconds = max(5, min(300, int(payload.get("timeout_seconds") or 45)))
+    except (TypeError, ValueError):
+        timeout_seconds = 45
+    if backend in {"openai", "openai_compatible", "ollama", "gbrain_think"} and not model:
+        raise ValueError("model is required for the selected Yoda backend")
+    if backend == "openai_compatible" and not base_url:
+        raise ValueError("base_url is required for openai_compatible")
+
+    config = read_local_config_file()
+    config.update({
+        "yoda_backend": backend,
+        "yoda_model": model,
+        "yoda_base_url": base_url,
+        "yoda_api_key_env": api_key_env,
+        "yoda_agent": agent,
+        "yoda_timeout_seconds": timeout_seconds,
+    })
+    write_local_config_file(config)
+    return public_yoda_model_config()
+
+
+def yoda_details(backend, model="", timeout=45):
+    return {
+        "backend": backend,
+        "model": model,
+        "openclaw_status": "not_used" if backend != "openclaw" else "unknown",
+        "model_status": "unknown",
+        "fallback_used": False,
+        "stdout_preview": "",
+        "stderr_preview": "",
+        "error_summary": "",
+        "timeout_seconds": timeout,
+    }
+
+
+def chat_completion_url(base_url):
+    base = (base_url or "https://api.openai.com/v1").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
+def run_openai_compatible_yoda(prompt, config, return_details=False):
+    backend = config["backend"]
+    model = config["model"] or ("gpt-5.2" if backend == "openai" else "")
+    details = yoda_details(backend, model, config["timeout"])
+    if not model:
+        details.update({"model_status": "unavailable", "error_summary": "Yoda model is not configured"})
+        return {"output": None, **details} if return_details else None
+    api_key = os.environ.get(config["api_key_env"] or "")
+    if not api_key:
+        details.update({"model_status": "unavailable", "error_summary": f"{config['api_key_env']} is not set in the service environment"})
+        return {"output": None, **details} if return_details else None
+    base_url = config["base_url"] or "https://api.openai.com/v1"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(
+        chat_completion_url(base_url),
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=config["timeout"]) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as exc:  # noqa: BLE001
+        details.update({"model_status": "api_error", "error_summary": str(exc)})
+        return {"output": None, **details} if return_details else None
+    answer = ""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+        answer = str(message.get("content") or "").strip() if isinstance(message, dict) else ""
+    if not answer and isinstance(data, dict):
+        answer = str(data.get("output_text") or data.get("text") or "").strip()
+    details["model_status"] = "answered" if answer else "empty_output"
+    return {"output": answer or None, **details} if return_details else (answer or None)
+
+
+def run_ollama_yoda(prompt, config, return_details=False):
+    model = config["model"]
+    details = yoda_details("ollama", model, config["timeout"])
+    if not model:
+        details.update({"model_status": "unavailable", "error_summary": "Yoda model is not configured"})
+        return {"output": None, **details} if return_details else None
+    base_url = (config["base_url"] or "http://127.0.0.1:11434").rstrip("/")
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    request = Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=config["timeout"]) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as exc:  # noqa: BLE001
+        details.update({"model_status": "api_error", "error_summary": str(exc)})
+        return {"output": None, **details} if return_details else None
+    message = data.get("message") if isinstance(data, dict) else {}
+    answer = str(message.get("content") or data.get("response") or "").strip() if isinstance(message, dict) else ""
+    details["model_status"] = "answered" if answer else "empty_output"
+    return {"output": answer or None, **details} if return_details else (answer or None)
+
+
+def run_gbrain_think_yoda(prompt, config, return_details=False):
+    model = config["model"]
+    details = yoda_details("gbrain_think", model, config["timeout"])
+    command = ["think", prompt]
+    if model:
+        command.extend(["--model", model])
+    try:
+        answer = run_gbrain(*command, timeout=config["timeout"])
+    except Exception as exc:  # noqa: BLE001
+        details.update({"model_status": "api_error", "error_summary": str(exc)})
+        return {"output": None, **details} if return_details else None
+    details["model_status"] = "answered" if answer else "empty_output"
+    return {"output": answer or None, **details} if return_details else (answer or None)
+
+
+def run_yoda_model(prompt, return_details=False):
+    config = yoda_runtime_config()
+    if config["backend"] == "openclaw":
+        return run_openclaw_agent(prompt, config=config, return_details=return_details)
+    if config["backend"] in {"openai", "openai_compatible"}:
+        return run_openai_compatible_yoda(prompt, config, return_details=return_details)
+    if config["backend"] == "ollama":
+        return run_ollama_yoda(prompt, config, return_details=return_details)
+    if config["backend"] == "gbrain_think":
+        return run_gbrain_think_yoda(prompt, config, return_details=return_details)
+    details = yoda_details(config["backend"], config["model"], config["timeout"])
+    details.update({"model_status": "unavailable", "error_summary": f"Unsupported Yoda backend: {config['backend']}"})
+    return {"output": None, **details} if return_details else None
+
+
+def run_openclaw_agent(prompt, timeout=45, return_details=False, config=None):
+    config = config or yoda_runtime_config()
+    timeout = int(config.get("timeout") or timeout or 45)
+    agent_ref = str(config.get("agent") or "").strip()
     command = [
         "openclaw",
         "agent",
@@ -627,17 +847,12 @@ def run_openclaw_agent(prompt, timeout=45, return_details=False):
     ]
     if agent_ref:
         command.extend(["--agent", agent_ref])
+    if str(config.get("model") or "").strip():
+        command.extend(["--model", str(config.get("model")).strip()])
     env = os.environ.copy()
     bun_bin = Path.home() / ".bun" / "bin"
     env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
-    details = {
-        "openclaw_status": "unknown",
-        "model_status": "unknown",
-        "fallback_used": False,
-        "stdout_preview": "",
-        "stderr_preview": "",
-        "error_summary": "",
-    }
+    details = yoda_details("openclaw", str(config.get("model") or ""), timeout)
     try:
         result = subprocess.run(
             command,
@@ -2645,7 +2860,7 @@ class GraphStore:
         prompt = self.build_yoda_prompt(slug, question, history, yoda_depth)
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
-        agent_result = run_openclaw_agent(prompt, return_details=True)
+        agent_result = run_yoda_model(prompt, return_details=True)
         agent_output = agent_result.get("output") if isinstance(agent_result, dict) else agent_result
         model_ms = int((time.perf_counter() - model_started_at) * 1000)
         timings = {
@@ -2658,16 +2873,18 @@ class GraphStore:
             "selected_slug": slug,
             "depth": yoda_depth,
             "timings": timings,
-            "source": "openclaw-agent" if agent_output else "fallback",
+            "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else "fallback",
             "fallback_used": not bool(agent_output),
             "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",
             "openclaw_status": agent_result.get("openclaw_status", "unknown") if isinstance(agent_result, dict) else "unknown",
+            "model_backend": agent_result.get("backend", "unknown") if isinstance(agent_result, dict) else "unknown",
+            "model_name": agent_result.get("model", "") if isinstance(agent_result, dict) else "",
             "error_summary": agent_result.get("error_summary", "") if isinstance(agent_result, dict) else "",
             "stdout_preview": agent_result.get("stdout_preview", "") if isinstance(agent_result, dict) else "",
             "stderr_preview": agent_result.get("stderr_preview", "") if isinstance(agent_result, dict) else "",
         }
         if agent_output:
-            return {"output": agent_output, "source": "openclaw-agent", "timings": timings, "request_id": request_id, "diagnostics": diagnostics}
+            return {"output": agent_output, "source": diagnostics["source"], "timings": timings, "request_id": request_id, "diagnostics": diagnostics}
         fallback_text = f"Question: {question}\nSelected node: {slug}\n\nI gathered selected-node, graph, backlink, search, and source-node context, but the Ask Yoda model is unavailable right now."
         try:
             fallback_output = self.ask_gbrain(slug, question)
@@ -2942,6 +3159,11 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json({"slugs": sorted(read_hidden_slugs())})
         if parsed.path == "/api/node-operations":
             return self.end_json({"operations": NODE_OPERATION_ENDPOINTS})
+        if parsed.path == "/api/yoda-model-config":
+            try:
+                return self.end_json({"ok": True, **public_yoda_model_config()})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path in ("/api/take-proposals", "/api/hosting/take-proposals"):
             filters = take_review_filters_from_query(parse_qs(parsed.query))
             requested_holder = filters.get("holder", "")
@@ -3037,6 +3259,14 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
+        if parsed.path == "/api/yoda-model-config":
+            try:
+                payload = self.read_json_body()
+                return self.end_json({"ok": True, **save_yoda_model_config(payload)})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         take_action_match = re.match(r"^/api/(?:hosting/)?take-proposals/([^/]+)/(accept|reject|defer)$", parsed.path)
         if take_action_match:
             proposal_id = unquote(take_action_match.group(1)).strip()

@@ -12,6 +12,28 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
+## GBrain Capture Quality Gate
+
+Use this before completing any GBrain capture/import work, including WeChat, LinkedIn, X/Twitter, web pages, PDFs/text extraction, and personal notes.
+
+1. Keep identity and display separate:
+   - Stable slugs may use source IDs, dates, activity IDs, WeChat `tid` values, or hashes.
+   - Visible node titles must be plain human content from the captured body, not generic labels such as `LinkedIn Post <id>`, `Tony WeChat Post <date>`, `X Post <id>`, or `Untitled` when meaningful content exists.
+2. Sanitize title candidates before writing frontmatter `title:` or an H1:
+   - Strip leading frontmatter fences and YAML-looking metadata such as `---`, `title:`, `tags:`, `type:`, `slug:`, source/platform/date fields, and YAML list-marker metadata.
+   - Normal markdown/frontmatter metadata may still exist in the page; the rule is that metadata text must not leak into the node title.
+3. Preserve provenance explicitly:
+   - Keep source URLs, source IDs, timestamps, platform fields, and typed graph links in metadata or body sections.
+   - Do not encode provenance by making the title a source ID.
+4. Verify representative generated pages before import or final report:
+
+```bash
+rg -n "^# (LinkedIn Post|Tony WeChat Post|WeChat Post|X Post|Twitter Post|Untitled)" <generated-pages-dir>
+rg -n "^(title: [\"\x27]?(---|title:|tags:|type:|slug:)|# (---|title:|tags:|type:|slug:))" <generated-pages-dir>
+```
+
+Both commands should return no matches for newly generated capture pages. Also spot-check at least one content-rich page and one low/no-text fallback page.
+
 ## Deployment Targets
 
 Keep deployment target details in local Codex memory/config and GBrain, not in tracked GitHub files. The deploy helper reads:

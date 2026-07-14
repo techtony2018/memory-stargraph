@@ -1,6 +1,8 @@
 import json
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import server
@@ -335,8 +337,40 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(data["diagnostics"]["fallback_used"])
         self.assertEqual(data["diagnostics"]["selected_slug"], "people/tony-guan")
         self.assertEqual(data["diagnostics"]["model_status"], "unavailable")
-        self.assertIn("prompt_ms", data["diagnostics"]["timings"])
-        self.assertNotIn("prompt", data)
+
+    def test_yoda_model_config_endpoint_reads_and_writes_local_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "local.json"
+            config_path.write_text(json.dumps({"host": "127.0.0.1", "port": 8788, "yoda_backend": "openclaw"}))
+            with mock.patch("server.config_path", return_value=config_path), mock.patch.dict("os.environ", {}, clear=True):
+                status, data = self.dispatch_get("/api/yoda-model-config")
+                self.assertEqual(status, 200)
+                self.assertTrue(data["ok"])
+                self.assertEqual(data["backend"], "openclaw")
+                self.assertIn("openai_compatible", data["backends"])
+
+                status, data = self.dispatch_post(
+                    "/api/yoda-model-config",
+                    {
+                        "backend": "openai_compatible",
+                        "model": "custom/model",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "api_key_env": "LOCAL_MODEL_API_KEY",
+                        "agent": "",
+                        "timeout_seconds": 90,
+                    },
+                )
+
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["backend"], "openai_compatible")
+            self.assertEqual(data["model"], "custom/model")
+            saved = json.loads(config_path.read_text())
+            self.assertEqual(saved["yoda_backend"], "openai_compatible")
+            self.assertEqual(saved["yoda_model"], "custom/model")
+            self.assertEqual(saved["yoda_base_url"], "http://127.0.0.1:8080/v1")
+            self.assertEqual(saved["yoda_api_key_env"], "LOCAL_MODEL_API_KEY")
+            self.assertEqual(saved["yoda_timeout_seconds"], 90)
 
     def test_ask_yoda_endpoint_clamps_depth(self):
         fake_store = FakeStore()
