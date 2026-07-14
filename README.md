@@ -254,6 +254,7 @@ Safety:
 - `tests/browser_smoke.mjs` - Playwright end-to-end smoke test
 - `scripts/automation/` - preflight, deployment, Chrome CDP, and retrospective helpers for daily automation runs
 - `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
+- `docs/resolver-feedback-loop-runbook.md` - Codex/OpenClaw resolver telemetry, human approval, release distribution, nightly learning, backup, and rollback
 - `dashboard-integration.json` - All Things Codex Dashboard launcher metadata
 
 ## Verification

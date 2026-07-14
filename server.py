@@ -11,6 +11,7 @@ import re
 import shutil
 import ssl
 import subprocess
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -146,7 +147,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.135"
+UI_VERSION = "V1.0.136"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -634,12 +635,51 @@ def update_resolver_proposal(proposal_id, updater):
     raise ValueError(f"Unknown resolver proposal: {proposal_id}")
 
 
-def validate_resolver_proposal(_proposal):
-    try:
-        run_gbrain("check-resolvable", "--strict", timeout=30)
-        return {"gbrain_check_resolvable": "passed"}
-    except Exception as exc:  # noqa: BLE001
-        return {"gbrain_check_resolvable": "skipped", "reason": sanitize_text_summary(exc, 300)}
+def validate_resolver_release(proposal, approved_route):
+    cluster_key = sanitize_text_summary(proposal.get("cluster_key"), 200).strip()
+    route = sanitize_text_summary(approved_route, 160).strip()
+    if not cluster_key or not route:
+        raise ValueError("Resolver release requires a cluster key and approved route")
+    trigger = re.sub(r"[|`\r\n]+", " ", cluster_key).strip()
+    with tempfile.TemporaryDirectory(prefix="stargraph-resolver-validation-") as temp_dir:
+        skills_dir = Path(temp_dir) / "skills"
+        skill_dir = skills_dir / "approved-resolver-route"
+        skill_dir.mkdir(parents=True)
+        write_json_file(skills_dir / "manifest.json", {
+            "skills": [{"name": "approved-resolver-route", "path": "approved-resolver-route/SKILL.md"}],
+        })
+        (skills_dir / "RESOLVER.md").write_text(
+            "\n".join([
+                "# Resolver release validation",
+                "",
+                "| Trigger | Skill |",
+                "|---------|-------|",
+                f'| "{trigger}" | `skills/approved-resolver-route/SKILL.md` |',
+                "",
+            ]),
+            encoding="utf-8",
+        )
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: approved-resolver-route\n---\n\n"
+            f"Approved route: {route}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "routing-eval.jsonl").write_text(
+            json.dumps({
+                "intent": f"Please handle this {trigger} request now",
+                "expected_skill": "approved-resolver-route",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        run_gbrain("check-resolvable", "--strict", "--skills-dir", str(skills_dir), timeout=30)
+        run_gbrain("routing-eval", "--skills-dir", str(skills_dir), timeout=30)
+    return {
+        "check_resolvable": "passed",
+        "routing_tests": "passed",
+        "checked_at": iso_now(),
+        "cluster_key": cluster_key,
+        "approved_route": route,
+    }
 
 
 def run_resolver_dream_phase(enabled=True):
@@ -838,9 +878,17 @@ def resolver_update_proposal(proposal_id, action, payload=None):
 
 def resolver_apply_proposal(proposal_id, payload=None):
     request_payload = dict(payload or {})
+    listed = resolver_list_proposals("accepted", 200)
+    proposals = listed.get("proposals", []) if isinstance(listed, dict) else []
+    proposal = next((row for row in proposals if row.get("id") == proposal_id), None)
+    if not proposal:
+        raise ValueError(f"Accepted resolver proposal not found: {proposal_id}")
+    approved_route = str(request_payload.get("approved_route") or "gbrain-hybrid-search")
     request_payload["proposal_id"] = proposal_id
     request_payload.setdefault("approved_by", "memory-stargraph")
+    request_payload["approved_route"] = approved_route
     request_payload.setdefault("environments", ["codex", "openclaw"])
+    request_payload["validation"] = validate_resolver_release(proposal, approved_route)
     return gbrain_call_tool("resolver_releases_apply", request_payload, timeout=60)
 
 

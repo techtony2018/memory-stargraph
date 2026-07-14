@@ -653,6 +653,7 @@ class ApiEndpointTests(unittest.TestCase):
                 {"created": 1, "events_scanned": 3, "proposals": [{"id": "rp-1"}], "auto_applied": 0},
                 {"proposals": [{"id": "rp-1", "kind": "resolver_route_update", "impact": {}}], "total": 1},
                 {"proposal": {"id": "rp-1", "status": "accepted"}},
+                {"proposals": [{"id": "rp-1", "cluster_key": "gbrain resolver lookup"}]},
                 {"release": {"version": "resolver-20260714T000000Z", "active": True}, "distribution": [{"environment": "codex"}, {"environment": "openclaw"}]},
                 {"proposal": {"id": "rp-1"}, "impact": {"after": {"success": 1}}},
                 {"events_24h": 2, "proposal_counts": {"pending": 1}, "scheduled_loop": "observed"},
@@ -670,9 +671,11 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(accepted["proposal"]["status"], "accepted")
 
-            status, applied = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/apply", {})
+            with mock.patch("server.run_gbrain", return_value="ok") as validate_command:
+                status, applied = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/apply", {})
             self.assertEqual(status, 200)
             self.assertTrue(applied["release"]["active"])
+            self.assertEqual(validate_command.call_count, 2)
 
             status, impact = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/impact", {})
             self.assertEqual(status, 200)
@@ -686,10 +689,14 @@ class ApiEndpointTests(unittest.TestCase):
             "resolver_proposals_generate",
             "resolver_proposals_list",
             "resolver_proposals_update",
+            "resolver_proposals_list",
             "resolver_releases_apply",
             "resolver_impact_measure",
             "resolver_feedback_health",
         ])
+        apply_payload = fake_gbrain_call.call_args_list[4].args[1]
+        self.assertEqual(apply_payload["validation"]["check_resolvable"], "passed")
+        self.assertEqual(apply_payload["validation"]["routing_tests"], "passed")
 
     def test_resolver_dream_phase_generates_summary_without_apply(self):
         with tempfile.TemporaryDirectory() as tmpdir:
