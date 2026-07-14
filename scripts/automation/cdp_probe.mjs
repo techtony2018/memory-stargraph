@@ -41,6 +41,8 @@ page.on("console", (message) => {
 
 try {
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  // Verify the deployed build after a real browser refresh, not a stale tab.
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__MEMORY_STARGRAPH__?.getState().graph, null, { timeout: 120000 });
   await page.waitForTimeout(750);
   const probe = await page.evaluate((expectedVersion) => ({
