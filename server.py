@@ -2,6 +2,7 @@
 import argparse
 import email
 import email.policy
+import hashlib
 import json
 import math
 import mimetypes
@@ -97,6 +98,11 @@ DATA_DIR = resolve_project_path(CONFIG["data_dir"])
 CACHE_PATH = DATA_DIR / "graph_cache.json"
 DELETED_PATH = DATA_DIR / "deleted_entities.json"
 HIDDEN_PATH = DATA_DIR / "hidden_entities.json"
+YODA_LOG_PATH = DATA_DIR / "yoda_logs.json"
+YODA_SETTINGS_PATH = DATA_DIR / "yoda_settings.json"
+RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
+RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
+RESOLVER_DREAM_LOG_PATH = DATA_DIR / "resolver_dream_runs.json"
 GBRAIN = Path(str(CONFIG["gbrain_path"])).expanduser()
 MAX_LIST_PAGES = int(CONFIG["max_list_pages"])
 GRAPH_DEPTH = int(CONFIG["graph_depth"])
@@ -140,7 +146,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.133"
+UI_VERSION = "V1.0.134"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -178,7 +184,33 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "take-review-defer", "method": "POST", "endpoint": "/api/take-proposals/<id>/defer", "mutates_gbrain": True},
     {"action": "take-review-bulk", "method": "POST", "endpoint": "/api/take-proposals/bulk", "mutates_gbrain": True},
     {"action": "takes", "method": "GET", "endpoint": "/api/takes", "mutates_gbrain": False},
+    {"action": "yoda-system-prompt", "method": "GET", "endpoint": "/api/yoda-system-prompt", "mutates_gbrain": False},
+    {"action": "yoda-system-prompt-save", "method": "POST", "endpoint": "/api/yoda-system-prompt", "mutates_gbrain": False},
+    {"action": "yoda-logs", "method": "GET", "endpoint": "/api/yoda-logs", "mutates_gbrain": False},
+    {"action": "resolver-events", "method": "GET", "endpoint": "/api/resolver/events", "mutates_gbrain": False},
+    {"action": "resolver-event-log", "method": "POST", "endpoint": "/api/resolver/events", "mutates_gbrain": False},
+    {"action": "resolver-proposals", "method": "GET", "endpoint": "/api/resolver/proposals", "mutates_gbrain": False},
+    {"action": "resolver-proposal-generate", "method": "POST", "endpoint": "/api/resolver/proposals/generate", "mutates_gbrain": False},
+    {"action": "resolver-proposal-accept", "method": "POST", "endpoint": "/api/resolver/proposals/<id>/accept", "mutates_gbrain": False},
+    {"action": "resolver-proposal-reject", "method": "POST", "endpoint": "/api/resolver/proposals/<id>/reject", "mutates_gbrain": False},
+    {"action": "resolver-proposal-apply", "method": "POST", "endpoint": "/api/resolver/proposals/<id>/apply", "mutates_gbrain": False},
+    {"action": "resolver-dream", "method": "POST", "endpoint": "/api/resolver/dream", "mutates_gbrain": False},
 ]
+
+DEFAULT_YODA_SYSTEM_PROMPT = """You are Ask Yoda inside Memory Stargraph.
+Answer from GBrain evidence. Start with the selected node when useful, then use graph expansion, backlinks, targeted search, and direct source-node reads.
+Be concise, cite relevant slugs or source node names, and say when the graph does not contain enough evidence.
+
+Before traversing the graph, classify the question intent. For writing, post, note, article, or publication questions, prefer typed/container enumeration over broad expansion. Enumerate publication, platform, collection, or feed nodes through has_member/member_of, has_post/has_entry, authored_by, and similar typed edges. Verify candidate writing evidence with author or holder relationships and container membership before treating a title/content hit as relevant.
+
+avoid unconstrained graph-query --depth 4 --direction both from high-degree hub nodes. If broad traversal times out or the selected node has large fanout, explain the hub fanout and retry with constrained typed traversals such as --type authored_by --direction in --depth 1, has_member/member_of, has_post/has_entry, or topic-filtered container scans.
+
+Cite evidence from backlinks and relationships. Distinguish direct content/title matches from noisy metadata or frontmatter matches."""
+
+MAX_YODA_LOGS = 200
+MAX_YODA_LOGS_PER_SLUG = 20
+MAX_RESOLVER_EVENTS = 500
+MAX_RESOLVER_PROPOSALS = 200
 
 MEDIA_EXTENSIONS = {
     "image": {".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"},
@@ -323,6 +355,315 @@ DEMO_GRAPH = {
 
 def ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def read_json_file(path, default):
+    try:
+        if not path.exists():
+            return default
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if data is not None else default
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def write_json_file(path, data):
+    ensure_data_dir()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    temp_path.replace(path)
+
+
+SECRET_RE = re.compile(r"(?i)(\bsk-[a-z0-9_-]+|token[=:]\s*\S+|api[_-]?key[=:]\s*\S+|password[=:]\s*\S+)")
+
+
+def sanitize_text_summary(value, limit=220):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = SECRET_RE.sub("[redacted]", text)
+    text = text.rstrip("?!")
+    return text[:limit]
+
+
+def yoda_system_prompt_state():
+    data = read_json_file(YODA_SETTINGS_PATH, {})
+    prompt = str(data.get("system_prompt") or "").strip() if isinstance(data, dict) else ""
+    if prompt:
+        return {"prompt": prompt, "default_prompt": DEFAULT_YODA_SYSTEM_PROMPT, "override": True}
+    return {"prompt": DEFAULT_YODA_SYSTEM_PROMPT, "default_prompt": DEFAULT_YODA_SYSTEM_PROMPT, "override": False}
+
+
+def save_yoda_system_prompt(prompt):
+    clean = str(prompt or "").strip()
+    if not clean:
+        return reset_yoda_system_prompt()
+    if len(clean) > 20000:
+        raise ValueError("system prompt must be 20000 characters or less")
+    data = read_json_file(YODA_SETTINGS_PATH, {})
+    if not isinstance(data, dict):
+        data = {}
+    data["system_prompt"] = clean
+    data["updated_at"] = iso_now()
+    write_json_file(YODA_SETTINGS_PATH, data)
+    return yoda_system_prompt_state()
+
+
+def reset_yoda_system_prompt():
+    data = read_json_file(YODA_SETTINGS_PATH, {})
+    if not isinstance(data, dict):
+        data = {}
+    data.pop("system_prompt", None)
+    data["updated_at"] = iso_now()
+    write_json_file(YODA_SETTINGS_PATH, data)
+    return yoda_system_prompt_state()
+
+
+def yoda_log_entries(slug=None, limit=20):
+    rows = read_json_file(YODA_LOG_PATH, [])
+    if not isinstance(rows, list):
+        rows = []
+    if slug:
+        rows = [row for row in rows if row.get("slug") == slug]
+    try:
+        bounded_limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        bounded_limit = 20
+    return rows[:bounded_limit]
+
+
+def append_yoda_log(slug, entry):
+    if not slug or not isinstance(entry, dict):
+        return None
+    rows = read_json_file(YODA_LOG_PATH, [])
+    if not isinstance(rows, list):
+        rows = []
+    safe_entry = {
+        "slug": str(slug),
+        "captured_at": entry.get("captured_at") or iso_now(),
+        "request_id": str(entry.get("request_id") or ""),
+        "source": sanitize_text_summary(entry.get("source"), 80),
+        "timings": entry.get("timings") if isinstance(entry.get("timings"), dict) else {},
+        "diagnostics": sanitize_diagnostics(entry.get("diagnostics") if isinstance(entry.get("diagnostics"), dict) else {}),
+    }
+    rows.insert(0, safe_entry)
+    per_slug_seen = defaultdict(int)
+    bounded = []
+    for row in rows:
+        row_slug = row.get("slug")
+        if per_slug_seen[row_slug] >= MAX_YODA_LOGS_PER_SLUG:
+            continue
+        per_slug_seen[row_slug] += 1
+        bounded.append(row)
+        if len(bounded) >= MAX_YODA_LOGS:
+            break
+    write_json_file(YODA_LOG_PATH, bounded)
+    return safe_entry
+
+
+def sanitize_diagnostics(diagnostics):
+    allowed = {
+        "request_id",
+        "selected_slug",
+        "depth",
+        "source",
+        "fallback_used",
+        "model_status",
+        "openclaw_status",
+        "model_backend",
+        "model_name",
+        "error_summary",
+        "stdout_preview",
+        "stderr_preview",
+        "timings",
+    }
+    safe = {}
+    for key, value in diagnostics.items():
+        if key not in allowed:
+            continue
+        if isinstance(value, dict):
+            safe[key] = {str(k): v for k, v in value.items() if isinstance(v, (int, float, str, bool)) or v is None}
+        elif isinstance(value, (int, float, bool)) or value is None:
+            safe[key] = value
+        else:
+            safe[key] = sanitize_text_summary(value, 600)
+    return safe
+
+
+def iso_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def resolver_event_id(payload):
+    seed = json.dumps(payload, sort_keys=True, default=str)
+    return "re-" + hashlib.sha1(f"{time.time()}:{seed}".encode("utf-8")).hexdigest()[:14]
+
+
+def normalize_resolver_status(value, fallback_used=False):
+    status = str(value or "").strip().lower()
+    if status in {"success", "ok", "answered", "passed"}:
+        return "success"
+    if status in {"timeout", "timed_out"}:
+        return "timeout"
+    if status in {"no_match", "missing", "not_found"}:
+        return "no_match"
+    if status in {"error", "failed", "api_error"}:
+        return "error"
+    return "fallback" if fallback_used else (status or "unknown")
+
+
+def resolver_cluster_key(intent_summary):
+    words = re.findall(r"[a-z0-9]+", str(intent_summary or "").lower())
+    stop = {"the", "and", "for", "with", "that", "this", "from", "about", "find", "show", "what", "which"}
+    useful = [word for word in words if word not in stop][:8]
+    return "-".join(useful) or "general"
+
+
+def append_resolver_event(payload):
+    event = {
+        "id": resolver_event_id(payload),
+        "created_at": iso_now(),
+        "surface": sanitize_text_summary(payload.get("surface") or payload.get("source") or "Stargraph UI", 80),
+        "intent_summary": sanitize_text_summary(payload.get("intent_summary") or payload.get("user_intent"), 180),
+        "selected_skill": sanitize_text_summary(payload.get("selected_skill"), 120),
+        "selected_context": sanitize_text_summary(payload.get("selected_context") or payload.get("related_slug"), 180),
+        "candidate_skills": [sanitize_text_summary(item, 120) for item in payload.get("candidate_skills", [])[:10]] if isinstance(payload.get("candidate_skills"), list) else [],
+        "candidate_contexts": [sanitize_text_summary(item, 180) for item in payload.get("candidate_contexts", [])[:10]] if isinstance(payload.get("candidate_contexts"), list) else [],
+        "confidence": payload.get("confidence") if isinstance(payload.get("confidence"), (int, float)) else None,
+        "fallback_used": bool(payload.get("fallback_used")),
+        "operation": sanitize_text_summary(payload.get("operation") or payload.get("tool_path"), 160),
+        "result_status": normalize_resolver_status(payload.get("result_status"), bool(payload.get("fallback_used"))),
+        "error_class": sanitize_text_summary(payload.get("error_class") or payload.get("error_timeout_class"), 120),
+        "correction_signal": sanitize_text_summary(payload.get("correction_signal"), 160),
+        "related_node_slug": sanitize_text_summary(payload.get("related_node_slug") or payload.get("related_slug"), 180),
+    }
+    events = read_json_file(RESOLVER_EVENTS_PATH, [])
+    if not isinstance(events, list):
+        events = []
+    events.insert(0, event)
+    write_json_file(RESOLVER_EVENTS_PATH, events[:MAX_RESOLVER_EVENTS])
+    return event
+
+
+def resolver_events(limit=50):
+    try:
+        bounded_limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        bounded_limit = 50
+    rows = read_json_file(RESOLVER_EVENTS_PATH, [])
+    return rows[:bounded_limit] if isinstance(rows, list) else []
+
+
+def resolver_proposals():
+    rows = read_json_file(RESOLVER_PROPOSALS_PATH, [])
+    return rows if isinstance(rows, list) else []
+
+
+def write_resolver_proposals(rows):
+    write_json_file(RESOLVER_PROPOSALS_PATH, rows[:MAX_RESOLVER_PROPOSALS])
+
+
+def proposal_id_for(cluster_key, kind):
+    return "rp-" + hashlib.sha1(f"{kind}:{cluster_key}".encode("utf-8")).hexdigest()[:14]
+
+
+def proposal_impact(events):
+    statuses = [normalize_resolver_status(event.get("result_status"), event.get("fallback_used")) for event in events]
+    return {
+        "event_count": len(events),
+        "fallback_count": sum(1 for event in events if event.get("fallback_used")),
+        "timeout_count": statuses.count("timeout"),
+        "no_match_count": statuses.count("no_match"),
+        "success_count": statuses.count("success"),
+    }
+
+
+def generate_resolver_proposals():
+    events = resolver_events(MAX_RESOLVER_EVENTS)
+    groups = defaultdict(list)
+    for event in events:
+        status = normalize_resolver_status(event.get("result_status"), event.get("fallback_used"))
+        if status not in {"timeout", "no_match", "fallback", "error"} and not event.get("correction_signal"):
+            continue
+        groups[resolver_cluster_key(event.get("intent_summary"))].append(event)
+    existing = resolver_proposals()
+    existing_ids = {row.get("id") for row in existing}
+    created = []
+    for cluster_key, group in sorted(groups.items()):
+        if len(group) < 2:
+            continue
+        statuses = {normalize_resolver_status(event.get("result_status"), event.get("fallback_used")) for event in group}
+        kind = "add_trigger" if statuses & {"no_match", "fallback", "timeout"} else "add_routing_eval"
+        proposal_id = proposal_id_for(cluster_key, kind)
+        if proposal_id in existing_ids:
+            continue
+        examples = [event.get("intent_summary") for event in group[:5] if event.get("intent_summary")]
+        proposal = {
+            "id": proposal_id,
+            "kind": kind,
+            "status": "pending",
+            "cluster_key": cluster_key,
+            "confidence": min(0.9, 0.45 + (0.1 * len(group))),
+            "target": "resolver/routing-eval",
+            "created_at": iso_now(),
+            "event_ids": [event.get("id") for event in group[:20] if event.get("id")],
+            "example_intents": examples,
+            "proposed_change": f"Add resolver routing coverage for repeated intents matching `{cluster_key}`.",
+            "proposed_markdown_diff": f"- Add trigger/eval for `{cluster_key}` based on {len(group)} resolver events.",
+            "evidence": [{"event_id": event.get("id"), "intent_summary": event.get("intent_summary"), "result_status": event.get("result_status")} for event in group[:5]],
+            "impact": {"before": proposal_impact(group), "after": {}, "follow_up_status": "pending"},
+        }
+        existing.insert(0, proposal)
+        existing_ids.add(proposal_id)
+        created.append(proposal)
+    write_resolver_proposals(existing)
+    return {"created": len(created), "proposals": created, "events_scanned": len(events), "clusters_found": len(groups)}
+
+
+def update_resolver_proposal(proposal_id, updater):
+    rows = resolver_proposals()
+    for index, row in enumerate(rows):
+        if row.get("id") != proposal_id:
+            continue
+        updated = updater(dict(row))
+        rows[index] = updated
+        write_resolver_proposals(rows)
+        return updated
+    raise ValueError(f"Unknown resolver proposal: {proposal_id}")
+
+
+def validate_resolver_proposal(_proposal):
+    try:
+        run_gbrain("check-resolvable", "--strict", timeout=30)
+        return {"gbrain_check_resolvable": "passed"}
+    except Exception as exc:  # noqa: BLE001
+        return {"gbrain_check_resolvable": "skipped", "reason": sanitize_text_summary(exc, 300)}
+
+
+def run_resolver_dream_phase(enabled=True):
+    if not enabled:
+        summary = {"enabled": False, "events_scanned": 0, "clusters_found": 0, "proposals_created": 0, "duplicates_skipped": 0, "applied": 0, "errors": []}
+    else:
+        before = len(resolver_proposals())
+        generated = generate_resolver_proposals()
+        after = len(resolver_proposals())
+        summary = {
+            "enabled": True,
+            "events_scanned": generated["events_scanned"],
+            "clusters_found": generated["clusters_found"],
+            "proposals_created": generated["created"],
+            "duplicates_skipped": max(0, before + generated["created"] - after),
+            "applied": 0,
+            "errors": [],
+        }
+    runs = read_json_file(RESOLVER_DREAM_LOG_PATH, [])
+    if not isinstance(runs, list):
+        runs = []
+    runs.insert(0, {"created_at": iso_now(), "summary": summary})
+    write_json_file(RESOLVER_DREAM_LOG_PATH, runs[:100])
+    return summary
 
 
 def normalize_slug(value):
@@ -2794,10 +3135,9 @@ class GraphStore:
     def build_yoda_prompt(self, slug, question, history=None, depth="4"):
         history = history or []
         yoda_depth = clamp_yoda_depth(depth)
+        prompt_state = yoda_system_prompt_state()
         lines = [
-            "You are Ask Yoda inside Memory Stargraph.",
-            "Answer from GBrain evidence. Start with the selected node when useful, then use graph expansion, backlinks, targeted search, and direct source-node reads.",
-            "Be concise, cite relevant slugs or source node names, and say when the graph does not contain enough evidence.",
+            prompt_state["prompt"],
             "",
             f"Selected node: {slug}",
             f"Question: {question}",
@@ -2873,7 +3213,7 @@ class GraphStore:
             "selected_slug": slug,
             "depth": yoda_depth,
             "timings": timings,
-            "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else "fallback",
+            "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
             "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",
             "openclaw_status": agent_result.get("openclaw_status", "unknown") if isinstance(agent_result, dict) else "unknown",
@@ -3164,6 +3504,27 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json({"ok": True, **public_yoda_model_config()})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/yoda-system-prompt":
+            try:
+                return self.end_json({"ok": True, **yoda_system_prompt_state()})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/yoda-logs":
+            query = parse_qs(parsed.query)
+            slug = (query.get("slug") or [""])[0].strip()
+            limit = (query.get("limit") or ["20"])[0]
+            return self.end_json({"ok": True, "slug": slug, "entries": yoda_log_entries(slug or None, limit)})
+        if parsed.path == "/api/resolver/events":
+            query = parse_qs(parsed.query)
+            limit = (query.get("limit") or ["50"])[0]
+            return self.end_json({"ok": True, "events": resolver_events(limit)})
+        if parsed.path == "/api/resolver/proposals":
+            query = parse_qs(parsed.query)
+            status_filter = (query.get("status") or [""])[0].strip()
+            rows = resolver_proposals()
+            if status_filter:
+                rows = [row for row in rows if row.get("status") == status_filter]
+            return self.end_json({"ok": True, "proposals": rows, "total": len(rows)})
         if parsed.path in ("/api/take-proposals", "/api/hosting/take-proposals"):
             filters = take_review_filters_from_query(parse_qs(parsed.query))
             requested_holder = filters.get("holder", "")
@@ -3265,6 +3626,75 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json({"ok": True, **save_yoda_model_config(payload)})
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/yoda-system-prompt":
+            try:
+                payload = self.read_json_body()
+                if payload.get("reset"):
+                    return self.end_json({"ok": True, **reset_yoda_system_prompt()})
+                return self.end_json({"ok": True, **save_yoda_system_prompt(payload.get("prompt"))})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/resolver/events":
+            try:
+                payload = self.read_json_body()
+                event = append_resolver_event(payload)
+                return self.end_json({"ok": True, "event": event})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/resolver/proposals/generate":
+            try:
+                return self.end_json({"ok": True, **generate_resolver_proposals()})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/resolver/dream":
+            try:
+                payload = self.read_json_body()
+                summary = run_resolver_dream_phase(bool(payload.get("enabled", True)))
+                return self.end_json({"ok": True, "summary": summary})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        resolver_action_match = re.match(r"^/api/resolver/proposals/([^/]+)/(accept|reject|apply|impact)$", parsed.path)
+        if resolver_action_match:
+            proposal_id = unquote(resolver_action_match.group(1)).strip()
+            action = resolver_action_match.group(2)
+            try:
+                payload = self.read_json_body()
+
+                def update(row):
+                    row["updated_at"] = iso_now()
+                    if action == "accept":
+                        row["status"] = "accepted"
+                        row["accept_reason"] = sanitize_text_summary(payload.get("reason"), 300)
+                    elif action == "reject":
+                        row["status"] = "rejected"
+                        row["reject_reason"] = sanitize_text_summary(payload.get("reason"), 300)
+                    elif action == "apply":
+                        validation = validate_resolver_proposal(row)
+                        if validation.get("gbrain_check_resolvable") == "passed":
+                            row["status"] = "applied"
+                            row["applied_at"] = iso_now()
+                        else:
+                            row["status"] = "failed"
+                        row["validation"] = validation
+                    elif action == "impact":
+                        impact = row.get("impact") if isinstance(row.get("impact"), dict) else {}
+                        after_events = payload.get("after_events") if isinstance(payload.get("after_events"), list) else []
+                        impact["after"] = proposal_impact(after_events)
+                        impact["follow_up_status"] = "measured"
+                        row["impact"] = impact
+                    return row
+
+                proposal = update_resolver_proposal(proposal_id, update)
+                payload = {"ok": True, "proposal": proposal}
+                if action == "apply":
+                    payload["validation"] = proposal.get("validation", {})
+                return self.end_json(payload)
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         take_action_match = re.match(r"^/api/(?:hosting/)?take-proposals/([^/]+)/(accept|reject|defer)$", parsed.path)
@@ -3404,6 +3834,23 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 if not question:
                     return self.end_json({"error": "question is required"}, status=HTTPStatus.BAD_REQUEST)
                 result = sanitize_yoda_result(STORE.ask_yoda(slug, question, history, depth))
+                append_yoda_log(slug, {
+                    "request_id": result.get("request_id"),
+                    "source": result.get("source"),
+                    "timings": result.get("timings"),
+                    "diagnostics": result.get("diagnostics"),
+                })
+                append_resolver_event({
+                    "surface": "Ask Yoda",
+                    "user_intent": question,
+                    "selected_skill": "Ask Yoda",
+                    "selected_context": slug,
+                    "operation": "/api/entity-ask-yoda",
+                    "result_status": result.get("diagnostics", {}).get("model_status") or result.get("source"),
+                    "fallback_used": result.get("diagnostics", {}).get("fallback_used") or result.get("source") == "fallback",
+                    "related_slug": slug,
+                    "error_class": result.get("diagnostics", {}).get("error_summary"),
+                })
                 return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
                 request_id = f"yoda-{int(time.time() * 1000)}"

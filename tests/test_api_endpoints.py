@@ -541,6 +541,146 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual([row["id"] for row in result], [1, 2])
 
+    def test_yoda_system_prompt_api_persists_and_resets_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with mock.patch("server.DATA_DIR", data_dir), mock.patch("server.YODA_SETTINGS_PATH", data_dir / "yoda_settings.json"):
+                status, data = self.dispatch_get("/api/yoda-system-prompt")
+                self.assertEqual(status, 200)
+                self.assertFalse(data["override"])
+                self.assertIn("classify the question intent", data["prompt"])
+
+                status, data = self.dispatch_post("/api/yoda-system-prompt", {"prompt": "Custom resolver prompt"})
+                self.assertEqual(status, 200)
+                self.assertTrue(data["override"])
+                self.assertEqual(data["prompt"], "Custom resolver prompt")
+
+                status, data = self.dispatch_post("/api/yoda-system-prompt", {"reset": True})
+                self.assertEqual(status, 200)
+                self.assertFalse(data["override"])
+                self.assertIn("avoid unconstrained graph-query --depth 4", data["prompt"])
+
+    def test_yoda_log_store_is_bounded_and_read_by_slug(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with mock.patch("server.DATA_DIR", data_dir), mock.patch("server.YODA_LOG_PATH", data_dir / "yoda_logs.json"):
+                for index in range(25):
+                    server.append_yoda_log("people/tony-guan", {"request_id": f"r-{index}", "diagnostics": {"source": "fallback"}})
+
+                status, data = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=8")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["slug"], "people/tony-guan")
+        self.assertEqual(len(data["entries"]), 8)
+        self.assertEqual(data["entries"][0]["request_id"], "r-24")
+        self.assertEqual(data["entries"][-1]["request_id"], "r-17")
+
+    def test_ask_yoda_endpoint_logs_resolver_event_and_persistent_log(self):
+        fake_store = FakeStore()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with (
+                mock.patch("server.DATA_DIR", data_dir),
+                mock.patch("server.YODA_LOG_PATH", data_dir / "yoda_logs.json"),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.STORE", fake_store),
+            ):
+                status, data = self.dispatch_post(
+                    "/api/entity-ask-yoda/people%2Ftony-guan",
+                    {"question": "Which ACA7 writing matters?", "depth": 4},
+                )
+                logs_status, logs = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=2")
+                events_status, events = self.dispatch_get("/api/resolver/events?limit=2")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(logs_status, 200)
+        self.assertEqual(logs["entries"][0]["request_id"], data["request_id"])
+        self.assertEqual(events_status, 200)
+        self.assertEqual(events["events"][0]["surface"], "Ask Yoda")
+        self.assertEqual(events["events"][0]["selected_context"], "people/tony-guan")
+        self.assertIn("ACA7", events["events"][0]["intent_summary"])
+        self.assertNotIn("Which ACA7 writing matters?", json.dumps(events["events"][0]))
+
+    def test_resolver_events_api_sanitizes_and_bounds_records(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with mock.patch("server.DATA_DIR", data_dir), mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"):
+                for index in range(3):
+                    status, data = self.dispatch_post(
+                        "/api/resolver/events",
+                        {
+                            "surface": "Stargraph UI",
+                            "user_intent": "token sk-secret should not be stored in full",
+                            "selected_skill": "Ask Yoda",
+                            "result_status": "timeout",
+                            "fallback_used": True,
+                            "related_slug": "people/tony-guan",
+                        },
+                    )
+                    self.assertEqual(status, 200)
+                    self.assertTrue(data["ok"])
+                status, data = self.dispatch_get("/api/resolver/events?limit=2")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["events"]), 2)
+        serialized = json.dumps(data["events"])
+        self.assertNotIn("sk-secret", serialized)
+        self.assertIn("[redacted]", serialized)
+
+    def test_resolver_proposal_generation_review_apply_and_impact(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with (
+                mock.patch("server.DATA_DIR", data_dir),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
+                mock.patch("server.run_gbrain", return_value="ok"),
+            ):
+                for intent in ["find ACA7 writing", "find ACA7 writing", "find ACA7 writing"]:
+                    server.append_resolver_event({"surface": "Ask Yoda", "user_intent": intent, "result_status": "timeout", "fallback_used": True})
+                status, generated = self.dispatch_post("/api/resolver/proposals/generate", {})
+                self.assertEqual(status, 200)
+                self.assertEqual(generated["created"], 1)
+
+                status, listed = self.dispatch_get("/api/resolver/proposals?status=pending")
+                self.assertEqual(status, 200)
+                proposal = listed["proposals"][0]
+                self.assertEqual(proposal["kind"], "add_trigger")
+                self.assertIn("impact", proposal)
+
+                status, accepted = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/accept", {"reason": "looks useful"})
+                self.assertEqual(status, 200)
+                self.assertEqual(accepted["proposal"]["status"], "accepted")
+
+                status, applied = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/apply", {})
+                self.assertEqual(status, 200)
+                self.assertEqual(applied["proposal"]["status"], "applied")
+                self.assertEqual(applied["validation"]["gbrain_check_resolvable"], "passed")
+
+                status, impact = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/impact", {"after_events": [{"result_status": "success"}]})
+                self.assertEqual(status, 200)
+                self.assertEqual(impact["proposal"]["impact"]["after"]["success_count"], 1)
+
+    def test_resolver_dream_phase_generates_summary_without_apply(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with (
+                mock.patch("server.DATA_DIR", data_dir),
+                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
+                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
+                mock.patch("server.RESOLVER_DREAM_LOG_PATH", data_dir / "resolver_dream_runs.json"),
+            ):
+                server.append_resolver_event({"surface": "Ask Yoda", "user_intent": "manual skill for tax writing", "result_status": "no_match"})
+                server.append_resolver_event({"surface": "Ask Yoda", "user_intent": "manual skill for tax writing", "result_status": "no_match"})
+                status, data = self.dispatch_post("/api/resolver/dream", {"enabled": True})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["summary"]["events_scanned"], 2)
+        self.assertEqual(data["summary"]["proposals_created"], 1)
+        self.assertEqual(data["summary"]["applied"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

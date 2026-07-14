@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.133";
+const UI_VERSION = "V1.0.134";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -102,6 +102,11 @@ const state = {
     message: "",
     pendingBulkConfirm: null,
   },
+  resolverReview: {
+    proposals: [],
+    loading: false,
+    message: "",
+  },
   busyOperations: new Map(),
   busyOperationId: 0,
   animationTick: 0,
@@ -124,6 +129,7 @@ const graphTooltip = document.getElementById("graphTooltip");
 const navStargraphButton = document.getElementById("navStargraphButton");
 const navSearchButton = document.getElementById("navSearchButton");
 const navTakeReviewButton = document.getElementById("navTakeReviewButton");
+const navResolverButton = document.getElementById("navResolverButton");
 const navAutopilotButton = document.getElementById("navAutopilotButton");
 const navSettingsButton = document.getElementById("navSettingsButton");
 const searchFlyout = document.getElementById("searchFlyout");
@@ -206,13 +212,21 @@ const modalChatInput = document.getElementById("modalChatInput");
 const modalYodaDepth = document.getElementById("modalYodaDepth");
 const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
 const modalYodaLogButton = document.getElementById("modalYodaLogButton");
+const modalYodaModelButton = document.getElementById("modalYodaModelButton");
 const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
+const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
 const busyIndicator = document.getElementById("busyIndicator");
 const busyIndicatorLabel = document.getElementById("busyIndicatorLabel");
+const resolverReviewModal = document.getElementById("resolverReviewModal");
+const resolverReviewCloseButton = document.getElementById("resolverReviewCloseButton");
+const resolverReviewMessage = document.getElementById("resolverReviewMessage");
+const resolverGenerateButton = document.getElementById("resolverGenerateButton");
+const resolverRefreshButton = document.getElementById("resolverRefreshButton");
+const resolverProposalList = document.getElementById("resolverProposalList");
 
 const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
@@ -3266,6 +3280,28 @@ function rememberYodaLog(slug, entry) {
   state.askYodaLogs.set(slug, entries.slice(0, 20));
 }
 
+function mergePersistentYodaLogs(entries = []) {
+  entries.forEach((entry) => {
+    const slug = entry.slug || entry.diagnostics?.selected_slug;
+    if (!slug) return;
+    const existing = yodaLogEntries(slug);
+    const requestId = entry.request_id || entry.diagnostics?.request_id || "";
+    if (requestId && existing.some((item) => (item.request_id || item.diagnostics?.request_id) === requestId)) return;
+    existing.push(entry);
+    existing.sort((left, right) => String(right.captured_at || "").localeCompare(String(left.captured_at || "")));
+    state.askYodaLogs.set(slug, existing.slice(0, 20));
+  });
+}
+
+async function loadPersistentYodaLogs(slug = "") {
+  const params = new URLSearchParams();
+  if (slug) params.set("slug", slug);
+  params.set("limit", slug ? "20" : "80");
+  const response = await apiGet(`/api/yoda-logs?${params.toString()}`);
+  if (!response.ok) return;
+  mergePersistentYodaLogs(response.data.entries || []);
+}
+
 function formatYodaDiagnosticEntry(slug, log, index) {
   const diagnostics = log.diagnostics || {};
   const timings = diagnostics.timings || log.timings || {};
@@ -3327,6 +3363,56 @@ function openYodaLogWindow(options = {}) {
   modalMarkdown.appendChild(pre);
   operationModal.hidden = false;
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
+}
+
+async function openYodaModelWindow() {
+  await openNodeModal("yoda-model", state.focusSlug || "");
+}
+
+async function openYodaPromptWindow() {
+  state.modalAction = { action: "yoda-prompt", slug: state.focusSlug || "", label: "Yoda System Prompt" };
+  modalTitle.textContent = "Yoda System Prompt";
+  modalKicker.textContent = "Settings";
+  modalPrimaryButton.hidden = false;
+  modalPrimaryButton.disabled = false;
+  modalCancelButton.hidden = false;
+  modalCancelButton.disabled = false;
+  modalPrimaryButton.textContent = "Save";
+  modalCancelButton.textContent = "Cancel";
+  modalMessage.textContent = "Edit the system prompt used by Ask Yoda. Reset restores the source-controlled default.";
+  modalEditor.hidden = false;
+  modalEditor.readOnly = false;
+  modalEditor.disabled = false;
+  modalEditor.classList.add("yoda-prompt-editor");
+  modalForm.hidden = false;
+  modalForm.innerHTML = "";
+  modalMarkdown.hidden = true;
+  modalChat.hidden = true;
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.className = "ghost-button compact-button";
+  resetButton.textContent = "Reset default";
+  resetButton.addEventListener("click", async () => {
+    const response = await apiPost("/api/yoda-system-prompt", { reset: true });
+    if (!response.ok) {
+      modalMessage.textContent = response.data?.error || `Reset failed with ${response.status}`;
+      return;
+    }
+    modalEditor.value = response.data.prompt || "";
+    modalMessage.textContent = "Default prompt restored. Save to keep it active.";
+  });
+  modalForm.appendChild(resetButton);
+  operationModal.classList.add("compact-modal");
+  setModalControlTooltips("Save Yoda system prompt", "Cancel");
+  operationModal.hidden = false;
+  try {
+    const response = await apiGet("/api/yoda-system-prompt");
+    if (!response.ok) throw new Error(response.data?.error || `Prompt load failed with ${response.status}`);
+    modalEditor.value = response.data.prompt || "";
+    modalEditor.focus();
+  } catch (error) {
+    modalMessage.textContent = error.message || String(error);
+  }
 }
 
 async function returnFromYodaLog() {
@@ -4853,6 +4939,131 @@ async function actOnTakeProposals(action, ids) {
   }
 }
 
+function resolverProposalMeta(proposal) {
+  const confidence = typeof proposal.confidence === "number" ? `${Math.round(proposal.confidence * 100)}%` : "unknown confidence";
+  return [proposal.kind || "proposal", proposal.status || "pending", confidence, proposal.target || ""].filter(Boolean).join(" · ");
+}
+
+function renderResolverProposalRows() {
+  if (!resolverProposalList) return;
+  resolverProposalList.innerHTML = "";
+  if (resolverReviewMessage) {
+    resolverReviewMessage.textContent = state.resolverReview.message || `${state.resolverReview.proposals.length} resolver proposals loaded`;
+  }
+  if (!state.resolverReview.proposals.length) {
+    const empty = document.createElement("p");
+    empty.className = "take-review-empty";
+    empty.textContent = state.resolverReview.loading ? "Loading resolver proposals..." : "No resolver proposals returned.";
+    resolverProposalList.appendChild(empty);
+    return;
+  }
+  state.resolverReview.proposals.forEach((proposal) => {
+    const card = document.createElement("article");
+    card.className = "resolver-proposal-card";
+    const title = document.createElement("strong");
+    title.textContent = proposal.proposed_change || proposal.cluster_key || proposal.id;
+    const meta = document.createElement("p");
+    meta.className = "resolver-proposal-meta";
+    meta.textContent = resolverProposalMeta(proposal);
+    const evidence = document.createElement("p");
+    evidence.className = "resolver-proposal-evidence";
+    const examples = proposal.example_intents || [];
+    evidence.textContent = examples.length ? examples.slice(0, 3).join(" / ") : "No examples attached.";
+    const impact = document.createElement("div");
+    impact.className = "resolver-impact-grid";
+    const before = proposal.impact?.before || {};
+    const after = proposal.impact?.after || {};
+    [
+      ["Before fallback", before.fallback_count ?? 0],
+      ["Before timeout", before.timeout_count ?? 0],
+      ["After success", after.success_count ?? 0],
+    ].forEach(([label, value]) => {
+      const item = document.createElement("span");
+      item.textContent = `${label}: ${value}`;
+      impact.appendChild(item);
+    });
+    const actions = document.createElement("div");
+    actions.className = "resolver-proposal-actions";
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.className = "ghost-button compact-button";
+    accept.textContent = "Accept";
+    accept.disabled = !["pending", "rejected"].includes(proposal.status || "pending");
+    accept.addEventListener("click", () => acceptResolverProposal(proposal.id));
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "ghost-button compact-button";
+    reject.textContent = "Reject";
+    reject.disabled = proposal.status === "rejected";
+    reject.addEventListener("click", () => rejectResolverProposal(proposal.id));
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "ghost-button compact-button";
+    apply.textContent = "Apply";
+    apply.disabled = !["accepted", "failed"].includes(proposal.status || "");
+    apply.addEventListener("click", () => applyResolverProposal(proposal.id));
+    actions.append(accept, reject, apply);
+    card.append(title, meta, evidence, impact, actions);
+    resolverProposalList.appendChild(card);
+  });
+}
+
+async function loadResolverProposals() {
+  state.resolverReview.loading = true;
+  state.resolverReview.message = "Loading resolver proposals...";
+  renderResolverProposalRows();
+  const response = await apiGet("/api/resolver/proposals?status=pending");
+  state.resolverReview.loading = false;
+  if (!response.ok) {
+    state.resolverReview.proposals = [];
+    state.resolverReview.message = response.data?.error || `Resolver proposals failed with ${response.status}`;
+  } else {
+    state.resolverReview.proposals = response.data.proposals || [];
+    state.resolverReview.message = `${state.resolverReview.proposals.length} pending resolver proposals`;
+  }
+  renderResolverProposalRows();
+}
+
+async function generateResolverProposals() {
+  state.resolverReview.message = "Generating resolver proposals...";
+  renderResolverProposalRows();
+  const response = await apiPost("/api/resolver/proposals/generate", {});
+  state.resolverReview.message = response.ok
+    ? `Generated ${response.data.created || 0} resolver proposals from ${response.data.events_scanned || 0} events.`
+    : response.data?.error || `Generate failed with ${response.status}`;
+  await loadResolverProposals();
+}
+
+async function actOnResolverProposal(id, action, payload = {}) {
+  const response = await apiPost(`/api/resolver/proposals/${encodeURIComponent(id)}/${action}`, payload);
+  state.resolverReview.message = response.ok
+    ? `${action} completed for ${id}.`
+    : response.data?.error || `${action} failed with ${response.status}`;
+  await loadResolverProposals();
+}
+
+function acceptResolverProposal(id) {
+  void actOnResolverProposal(id, "accept", { reason: "accepted from Memory Stargraph" });
+}
+
+function rejectResolverProposal(id) {
+  void actOnResolverProposal(id, "reject", { reason: "rejected from Memory Stargraph" });
+}
+
+function applyResolverProposal(id) {
+  void actOnResolverProposal(id, "apply", {});
+}
+
+function openResolverReviewModal() {
+  if (!resolverReviewModal) return;
+  resolverReviewModal.hidden = false;
+  void loadResolverProposals();
+}
+
+function closeResolverReviewModal() {
+  if (resolverReviewModal) resolverReviewModal.hidden = true;
+}
+
 function closeModal() {
   operationModal.hidden = true;
   removeSlugSelectorPopups();
@@ -4871,6 +5082,7 @@ function closeModal() {
   modalEditor.readOnly = false;
   modalEditor.disabled = false;
   modalEditor.hidden = false;
+  modalEditor.classList.remove("yoda-prompt-editor");
   modalAttach.hidden = true;
   modalAttachDescription.value = "";
   modalAttachDescription.disabled = false;
@@ -5476,6 +5688,13 @@ async function runModalPrimaryAction() {
       closeModal();
       return;
     }
+    if (action === "yoda-prompt") {
+      const response = await apiPost("/api/yoda-system-prompt", { prompt: modalEditor.value || "" });
+      if (!response.ok) throw new Error(response.data?.error || `Yoda prompt save failed with ${response.status}`);
+      modalMessage.textContent = response.data.override ? "Ask Yoda system prompt saved." : "Ask Yoda system prompt reset to default.";
+      closeModal();
+      return;
+    }
     if (action === "delete") {
       const response = await apiPost(`/api/entity-delete/${encodeURIComponent(slug)}`, { confirm_label: modalConfirmInput.value });
       if (!response.ok) throw new Error(response.data?.error || `Delete failed with ${response.status}`);
@@ -5970,6 +6189,10 @@ function bindEvents() {
     event.stopPropagation();
     toggleFloatingPanel(settingsFlyout, navSettingsButton);
   });
+  navResolverButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openResolverReviewModal();
+  });
 
   navSearchButton?.addEventListener("mouseenter", () => {
     showFloatingPanel(searchFlyout, navSearchButton);
@@ -6012,11 +6235,24 @@ function bindEvents() {
   modalYodaLogButton?.addEventListener("click", () => {
     openYodaLogWindow({ scope: "node", slug: yodaLogSlug() });
   });
+  modalYodaModelButton?.addEventListener("click", () => {
+    void openYodaModelWindow();
+  });
   settingsYodaLogButton?.addEventListener("click", () => {
     openYodaLogWindow({ scope: "global" });
   });
   settingsYodaModelButton?.addEventListener("click", () => {
-    void openNodeModal("yoda-model", state.focusSlug || "");
+    void openYodaModelWindow();
+  });
+  settingsYodaPromptButton?.addEventListener("click", () => {
+    void openYodaPromptWindow();
+  });
+  resolverReviewCloseButton?.addEventListener("click", closeResolverReviewModal);
+  resolverRefreshButton?.addEventListener("click", () => {
+    void loadResolverProposals();
+  });
+  resolverGenerateButton?.addEventListener("click", () => {
+    void generateResolverProposals();
   });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
@@ -6591,6 +6827,7 @@ async function init() {
   updateCacheSettingsView();
   setZoom(state.zoom);
   await fetchHidden();
+  await loadPersistentYodaLogs();
   await fetchGraph();
   if (!state.animationHandle) {
     requestRender();

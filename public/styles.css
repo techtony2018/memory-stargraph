@@ -1230,6 +1230,12 @@ h2 {
   font-size: 12px;
 }
 
+.yoda-prompt-editor {
+  min-height: min(420px, 52vh);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  line-height: 1.45;
+}
+
 .cache-action-row .cache-usage-label {
   flex: 1 1 auto;
   min-width: 92px;
@@ -1407,6 +1413,10 @@ h2 {
   overflow: hidden;
 }
 
+.resolver-review-panel {
+  width: min(980px, 100%);
+}
+
 .modal-panel:has(.take-review-list) .operation-form {
   overflow-y: auto;
   padding-right: 4px;
@@ -1550,6 +1560,59 @@ h2 {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.resolver-review-actions,
+.resolver-proposal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.resolver-proposal-list {
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.resolver-proposal-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid rgba(136, 246, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(6, 12, 28, 0.72);
+}
+
+.resolver-proposal-card strong,
+.resolver-proposal-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.resolver-proposal-meta,
+.resolver-proposal-evidence {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resolver-impact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.resolver-impact-grid span {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid rgba(143, 168, 255, 0.16);
+  border-radius: 6px;
+  color: var(--accent);
+  background: rgba(2, 8, 22, 0.52);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .take-review-existing h4 {
