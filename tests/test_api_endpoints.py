@@ -358,11 +358,15 @@ class ApiEndpointTests(unittest.TestCase):
                         "api_key_env": "LOCAL_MODEL_API_KEY",
                         "agent": "",
                         "timeout_seconds": 90,
+                        "graph_query_timeout_seconds": 25,
                     },
                 )
 
             self.assertEqual(status, 200)
             self.assertTrue(data["ok"])
+            self.assertEqual(data["graph_query_timeout_seconds"], 25)
+            saved = json.loads(config_path.read_text())
+            self.assertEqual(saved["yoda_graph_query_timeout_seconds"], 25)
             self.assertEqual(data["backend"], "openai_compatible")
             self.assertEqual(data["model"], "custom/model")
             saved = json.loads(config_path.read_text())
@@ -574,6 +578,46 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(len(data["entries"]), 8)
         self.assertEqual(data["entries"][0]["request_id"], "r-24")
         self.assertEqual(data["entries"][-1]["request_id"], "r-17")
+
+    def test_yoda_chat_history_persists_and_clears_without_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            chat_path = data_dir / "yoda_chats.json"
+            log_path = data_dir / "yoda_logs.json"
+            with (
+                mock.patch("server.DATA_DIR", data_dir),
+                mock.patch("server.YODA_CHAT_PATH", chat_path),
+                mock.patch("server.YODA_LOG_PATH", log_path),
+            ):
+                server.append_yoda_log("people/tony-guan", {"request_id": "diag-1", "diagnostics": {"source": "fallback"}})
+                status, data = self.dispatch_post(
+                    "/api/yoda-chat/people%2Ftony-guan",
+                    {
+                        "messages": [
+                            {"role": "system", "content": "Ask Yoda about Tony", "timestamp": "now"},
+                            {"role": "user", "content": "hello", "timestamp": "now"},
+                            {"role": "assistant", "content": "answer", "fallbackOutput": "raw graph output", "timestamp": "now"},
+                            {"role": "assistant", "content": "Thinking", "pending": True},
+                        ]
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(data["messages"]), 3)
+
+                status, data = self.dispatch_get("/api/yoda-chat/people%2Ftony-guan")
+                self.assertEqual(status, 200)
+                self.assertEqual([item["role"] for item in data["messages"]], ["system", "user", "assistant"])
+                self.assertEqual(data["messages"][-1]["fallbackOutput"], "raw graph output")
+
+                status, data = self.dispatch_post("/api/yoda-chat/people%2Ftony-guan", {"clear": True})
+                self.assertEqual(status, 200)
+                self.assertEqual(data["messages"], [])
+
+                status, data = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=5")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["entries"]), 1)
+        self.assertEqual(data["entries"][0]["request_id"], "diag-1")
 
     def test_ask_yoda_endpoint_logs_resolver_event_and_persistent_log(self):
         fake_store = FakeStore()

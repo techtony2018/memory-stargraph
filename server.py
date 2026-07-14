@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "yoda_base_url": "",
     "yoda_api_key_env": "OPENAI_API_KEY",
     "yoda_timeout_seconds": 45,
+    "yoda_graph_query_timeout_seconds": 30,
 }
 
 
@@ -100,6 +101,7 @@ CACHE_PATH = DATA_DIR / "graph_cache.json"
 DELETED_PATH = DATA_DIR / "deleted_entities.json"
 HIDDEN_PATH = DATA_DIR / "hidden_entities.json"
 YODA_LOG_PATH = DATA_DIR / "yoda_logs.json"
+YODA_CHAT_PATH = DATA_DIR / "yoda_chats.json"
 YODA_SETTINGS_PATH = DATA_DIR / "yoda_settings.json"
 RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
 RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
@@ -147,7 +149,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.137"
+UI_VERSION = "V1.0.138"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -210,6 +212,8 @@ Cite evidence from backlinks and relationships. Distinguish direct content/title
 
 MAX_YODA_LOGS = 200
 MAX_YODA_LOGS_PER_SLUG = 20
+MAX_YODA_CHAT_MESSAGES = 80
+MAX_YODA_CHAT_SLUGS = 80
 MAX_RESOLVER_EVENTS = 500
 MAX_RESOLVER_PROPOSALS = 200
 
@@ -462,6 +466,67 @@ def append_yoda_log(slug, entry):
             break
     write_json_file(YODA_LOG_PATH, bounded)
     return safe_entry
+
+
+def sanitize_chat_message(message):
+    if not isinstance(message, dict):
+        return None
+    if message.get("pending"):
+        return None
+    role = str(message.get("role") or "").strip().lower()
+    if role not in {"system", "user", "assistant"}:
+        return None
+    content = SECRET_RE.sub("[redacted]", str(message.get("content") or "").strip())[:5000]
+    if not content:
+        return None
+    safe = {
+        "role": role,
+        "content": sanitize_text_summary(content, 5000),
+        "timestamp": sanitize_text_summary(message.get("timestamp") or iso_now(), 80),
+    }
+    fallback_output = str(message.get("fallbackOutput") or message.get("fallback_output") or "").strip()
+    if fallback_output:
+        safe["fallbackOutput"] = SECRET_RE.sub("[redacted]", fallback_output)[:12000]
+    return safe
+
+
+def yoda_chat_rows():
+    rows = read_json_file(YODA_CHAT_PATH, {})
+    return rows if isinstance(rows, dict) else {}
+
+
+def yoda_chat_history(slug):
+    rows = yoda_chat_rows()
+    history = rows.get(str(slug), [])
+    if not isinstance(history, list):
+        history = []
+    return [item for item in (sanitize_chat_message(message) for message in history) if item]
+
+
+def save_yoda_chat_history(slug, messages):
+    clean_slug = str(slug or "").strip()
+    if not clean_slug:
+        raise ValueError("slug is required")
+    if not isinstance(messages, list):
+        raise ValueError("messages must be a list")
+    rows = yoda_chat_rows()
+    sanitized = [item for item in (sanitize_chat_message(message) for message in messages) if item]
+    rows[clean_slug] = sanitized[-MAX_YODA_CHAT_MESSAGES:]
+    if len(rows) > MAX_YODA_CHAT_SLUGS:
+        ordered = sorted(
+            rows.items(),
+            key=lambda item: str((item[1][-1] if isinstance(item[1], list) and item[1] else {}).get("timestamp") or ""),
+            reverse=True,
+        )
+        rows = dict(ordered[:MAX_YODA_CHAT_SLUGS])
+    write_json_file(YODA_CHAT_PATH, rows)
+    return rows[clean_slug]
+
+
+def clear_yoda_chat_history(slug):
+    rows = yoda_chat_rows()
+    rows.pop(str(slug or "").strip(), None)
+    write_json_file(YODA_CHAT_PATH, rows)
 
 
 def sanitize_diagnostics(diagnostics):
@@ -1112,6 +1177,10 @@ def yoda_runtime_config():
         timeout = max(5, int(os.environ.get("MEMORY_STARGRAPH_YODA_TIMEOUT_SECONDS") or config.get("yoda_timeout_seconds") or 45))
     except (TypeError, ValueError):
         timeout = 45
+    try:
+        graph_query_timeout = max(5, min(300, int(os.environ.get("MEMORY_STARGRAPH_YODA_GRAPH_QUERY_TIMEOUT_SECONDS") or config.get("yoda_graph_query_timeout_seconds") or 30)))
+    except (TypeError, ValueError):
+        graph_query_timeout = 30
     return {
         "backend": backend,
         "model": model,
@@ -1119,6 +1188,7 @@ def yoda_runtime_config():
         "api_key_env": api_key_env,
         "agent": agent_ref,
         "timeout": timeout,
+        "graph_query_timeout": graph_query_timeout,
     }
 
 
@@ -1131,6 +1201,7 @@ def public_yoda_model_config():
         "api_key_env": config["api_key_env"],
         "agent": config["agent"],
         "timeout_seconds": config["timeout"],
+        "graph_query_timeout_seconds": config["graph_query_timeout"],
         "api_key_available": bool(os.environ.get(config["api_key_env"])) if config["api_key_env"] else False,
         "backends": sorted(YODA_BACKENDS),
     }
@@ -1148,6 +1219,10 @@ def save_yoda_model_config(payload):
         timeout_seconds = max(5, min(300, int(payload.get("timeout_seconds") or 45)))
     except (TypeError, ValueError):
         timeout_seconds = 45
+    try:
+        graph_query_timeout_seconds = max(5, min(300, int(payload.get("graph_query_timeout_seconds") or 30)))
+    except (TypeError, ValueError):
+        graph_query_timeout_seconds = 30
     if backend in {"openai", "openai_compatible", "ollama", "gbrain_think"} and not model:
         raise ValueError("model is required for the selected Yoda backend")
     if backend == "openai_compatible" and not base_url:
@@ -1161,6 +1236,7 @@ def save_yoda_model_config(payload):
         "yoda_api_key_env": api_key_env,
         "yoda_agent": agent,
         "yoda_timeout_seconds": timeout_seconds,
+        "yoda_graph_query_timeout_seconds": graph_query_timeout_seconds,
     })
     write_local_config_file(config)
     return public_yoda_model_config()
@@ -3234,7 +3310,7 @@ class GraphStore:
                 sections.append("Detected media:\nNo media references were found on this node.")
 
         try:
-            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1")
+            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1", timeout=yoda_runtime_config()["graph_query_timeout"])
             sections.append("Direct relationship context:\n" + str(graph_output or ""))
         except Exception as exc:  # noqa: BLE001
             sections.append(f"Direct relationship context unavailable: {exc}")
@@ -3275,7 +3351,15 @@ class GraphStore:
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
         try:
-            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", str(yoda_depth))
+            graph_output = run_gbrain(
+                "graph-query",
+                slug,
+                "--direction",
+                "both",
+                "--depth",
+                str(yoda_depth),
+                timeout=yoda_runtime_config()["graph_query_timeout"],
+            )
         except Exception as exc:  # noqa: BLE001
             graph_output = f"Direct relationship context unavailable: {exc}"
         lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
@@ -3635,6 +3719,9 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             slug = (query.get("slug") or [""])[0].strip()
             limit = (query.get("limit") or ["20"])[0]
             return self.end_json({"ok": True, "slug": slug, "entries": yoda_log_entries(slug or None, limit)})
+        if parsed.path.startswith("/api/yoda-chat/"):
+            slug = unquote(parsed.path.split("/api/yoda-chat/", 1)[1]).strip("/")
+            return self.end_json({"ok": True, "slug": slug, "messages": yoda_chat_history(slug)})
         if parsed.path == "/api/resolver/events":
             query = parse_qs(parsed.query)
             limit = (query.get("limit") or ["50"])[0]
@@ -3767,6 +3854,19 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 if payload.get("reset"):
                     return self.end_json({"ok": True, **reset_yoda_system_prompt()})
                 return self.end_json({"ok": True, **save_yoda_system_prompt(payload.get("prompt"))})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path.startswith("/api/yoda-chat/"):
+            slug = unquote(parsed.path.split("/api/yoda-chat/", 1)[1]).strip("/")
+            try:
+                payload = self.read_json_body()
+                if payload.get("clear"):
+                    clear_yoda_chat_history(slug)
+                    return self.end_json({"ok": True, "slug": slug, "messages": []})
+                messages = save_yoda_chat_history(slug, payload.get("messages") or [])
+                return self.end_json({"ok": True, "slug": slug, "messages": messages})
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001

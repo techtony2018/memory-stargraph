@@ -889,10 +889,10 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("tag", "people/tony-guan", "java"),
                 mock.call("untag", "people/tony-guan", "old"),
                 mock.call("timeline-add", "people/tony-guan", "2026-06-29", "Updated graph operations", "--detail", "Details", "--source", "memory-stargraph"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4", timeout=30),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
@@ -953,7 +953,7 @@ cover_image: companies/example-inc/logo.jpg
         run.assert_has_calls(
             [
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5"),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5", timeout=30),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What does White Swan connect to? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("get", "notes/tai-chi/white-swan"),

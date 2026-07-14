@@ -1408,6 +1408,14 @@ h2 {
   width: min(380px, 100%);
 }
 
+.modal-backdrop.ask-yoda-modal .modal-panel {
+  max-height: min(700px, calc(100vh - 72px));
+}
+
+.modal-backdrop.ask-yoda-modal .modal-actions {
+  padding-top: 4px;
+}
+
 .modal-panel:has(.take-review-list) {
   width: min(1080px, 100%);
   overflow: hidden;
@@ -1949,6 +1957,11 @@ h2 {
   background: rgba(5, 8, 22, 0.72);
 }
 
+.modal-backdrop.ask-yoda-modal .chat-log {
+  min-height: 220px;
+  max-height: min(38vh, 420px);
+}
+
 .chat-depth-control {
   display: inline-flex;
   align-items: center;
@@ -2090,6 +2103,10 @@ h2 {
   color: var(--text);
   padding: 12px;
   font: 14px/1.45 Inter, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.modal-backdrop.ask-yoda-modal .chat-input-wrap textarea {
+  min-height: 68px;
 }
 
 .chat-input-wrap textarea:focus {
@@ -4221,6 +4238,35 @@ body::after {
 }
 
 @media (max-width: 720px) {
+  .modal-backdrop.ask-yoda-modal {
+    padding: 12px;
+  }
+
+  .modal-backdrop.ask-yoda-modal .modal-panel {
+    max-height: calc(100vh - 24px);
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .modal-backdrop.ask-yoda-modal .chat-depth-control {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .modal-backdrop.ask-yoda-modal .chat-log {
+    min-height: 180px;
+    max-height: 32vh;
+  }
+
+  .modal-backdrop.ask-yoda-modal .chat-input-wrap textarea {
+    min-height: 58px;
+  }
+
+  .modal-backdrop.ask-yoda-modal .modal-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .workspace > .detail-panel:not(.is-map-overlay) {
     display: none;
   }

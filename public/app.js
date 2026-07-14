@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.137";
+const UI_VERSION = "V1.0.138";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -76,6 +76,7 @@ const state = {
   askYodaChats: new Map(),
   askYodaLogs: new Map(),
   yodaLogReturn: null,
+  yodaModelReturn: null,
   slugSelectorSearch: new Map(),
   relationshipTargetSearch: { loading: false, liveOptions: [] },
   relationshipTypeSearch: { loading: false, liveOptions: [] },
@@ -214,6 +215,7 @@ const modalYodaDepth = document.getElementById("modalYodaDepth");
 const modalYodaDepthWrap = document.getElementById("modalYodaDepthWrap");
 const modalYodaLogButton = document.getElementById("modalYodaLogButton");
 const modalYodaModelButton = document.getElementById("modalYodaModelButton");
+const modalYodaClearHistoryButton = document.getElementById("modalYodaClearHistoryButton");
 const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
@@ -411,6 +413,14 @@ function cacheSet(url, data) {
   store.entries = store.entries || {};
   store.entries[url] = { data, lastAccessed: Date.now() };
   enforceCacheLimit(store);
+  updateCacheSettingsView();
+}
+
+function cacheDelete(url) {
+  const store = cacheStore();
+  if (!store.entries || !store.entries[url]) return;
+  delete store.entries[url];
+  saveCacheStore(store);
   updateCacheSettingsView();
 }
 
@@ -3169,6 +3179,60 @@ function chatHistoryFor(slug, label, options = {}) {
   return store.get(slug);
 }
 
+function yodaChatUrl(slug) {
+  return `/api/yoda-chat/${encodeURIComponent(slug)}`;
+}
+
+function normalizeYodaChatMessages(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((message) => message && !message.pending && ["system", "user", "assistant"].includes(message.role) && String(message.content || "").trim())
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || ""),
+      timestamp: message.timestamp || chatTimestamp(),
+      ...(message.fallbackOutput ? { fallbackOutput: String(message.fallbackOutput) } : {}),
+    }));
+}
+
+function persistYodaChat(slug) {
+  const history = state.askYodaChats.get(slug);
+  if (!slug || !history) return Promise.resolve();
+  const messages = normalizeYodaChatMessages(history);
+  cacheDelete(yodaChatUrl(slug));
+  return apiPost(yodaChatUrl(slug), { messages }).then((response) => {
+    return response;
+  });
+}
+
+async function loadYodaChatHistory(slug, label) {
+  const fallback = chatHistoryFor(slug, label, { mode: "yoda" });
+  try {
+    const response = await apiGet(yodaChatUrl(slug));
+    if (response.ok && Array.isArray(response.data.messages) && response.data.messages.length) {
+      state.askYodaChats.set(slug, normalizeYodaChatMessages(response.data.messages));
+    }
+  } catch {
+    state.askYodaChats.set(slug, fallback);
+  }
+  return chatHistoryFor(slug, label, { mode: "yoda" });
+}
+
+async function clearYodaChatHistory(slug, label) {
+  const nextHistory = [
+    {
+      role: "system",
+      content: `Ask Yoda about ${label}. Answers use an agent when available and fall back to GBrain context.`,
+      timestamp: chatTimestamp(),
+    },
+  ];
+  state.askYodaChats.set(slug, nextHistory);
+  cacheDelete(yodaChatUrl(slug));
+  const response = await apiPost(yodaChatUrl(slug), { clear: true });
+  if (!response.ok) throw new Error(response.data?.error || `Clear history failed with ${response.status}`);
+  renderAskChat(slug, label, { mode: "yoda" });
+  modalMessage.textContent = "Ask Yoda chat history cleared.";
+}
+
 function chatTimestamp() {
   return new Date().toLocaleString([], {
     month: "short",
@@ -3367,7 +3431,36 @@ function openYodaLogWindow(options = {}) {
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
 }
 
+function captureYodaModelReturn() {
+  if (!operationModal.hidden && state.modalAction?.action && state.modalAction.action !== "yoda-model") {
+    return { surface: "modal", action: state.modalAction.action, slug: state.modalAction.slug || state.focusSlug || "" };
+  }
+  if (settingsFlyout && !settingsFlyout.hidden) {
+    return { surface: "settings" };
+  }
+  return null;
+}
+
+async function returnFromYodaModel() {
+  const target = state.yodaModelReturn;
+  state.yodaModelReturn = null;
+  if (target?.surface === "modal" && target.action && target.slug) {
+    await openNodeModal(target.action, target.slug);
+    return;
+  }
+  if (target?.surface === "settings") {
+    closeModal();
+    window.setTimeout(() => {
+      state.settingsPinned = true;
+      showFloatingPanel(settingsFlyout, navSettingsButton);
+    }, 0);
+    return;
+  }
+  closeModal();
+}
+
 async function openYodaModelWindow() {
+  state.yodaModelReturn = captureYodaModelReturn();
   await openNodeModal("yoda-model", state.focusSlug || "");
 }
 
@@ -3428,6 +3521,10 @@ async function returnFromYodaLog() {
 }
 
 function closeModalFromControl() {
+  if (state.modalAction?.action === "yoda-model" && state.yodaModelReturn) {
+    void returnFromYodaModel();
+    return;
+  }
   if (state.modalAction?.action === "yoda-log" && state.yodaLogReturn) {
     void returnFromYodaLog();
     return;
@@ -3691,6 +3788,14 @@ function renderYodaModelForm(config = {}) {
   timeoutInput.step = "5";
   timeoutInput.value = String(config.timeout_seconds || 45);
 
+  const graphQueryTimeoutInput = document.createElement("input");
+  graphQueryTimeoutInput.id = "operationYodaGraphQueryTimeout";
+  graphQueryTimeoutInput.type = "number";
+  graphQueryTimeoutInput.min = "5";
+  graphQueryTimeoutInput.max = "300";
+  graphQueryTimeoutInput.step = "5";
+  graphQueryTimeoutInput.value = String(config.graph_query_timeout_seconds || 30);
+
   const status = document.createElement("p");
   status.className = "operation-summary yoda-model-status";
 
@@ -3700,6 +3805,7 @@ function renderYodaModelForm(config = {}) {
   appendField(modalForm, "API key env", apiKeyEnvInput);
   appendField(modalForm, "OpenClaw agent", agentInput);
   appendField(modalForm, "Timeout seconds", timeoutInput);
+  appendField(modalForm, "Graph query timeout seconds", graphQueryTimeoutInput);
   modalForm.appendChild(status);
 
   const updateStatus = () => {
@@ -3713,7 +3819,7 @@ function renderYodaModelForm(config = {}) {
       ? "OpenClaw backend uses the configured agent/default model unless Model is set here."
       : `${backend.replace(/_/g, " ")} backend uses this model directly; ${keyState}.`;
   };
-  [backendSelect, modelInput, baseUrlInput, apiKeyEnvInput, agentInput, timeoutInput].forEach((input) => input.addEventListener("input", updateStatus));
+  [backendSelect, modelInput, baseUrlInput, apiKeyEnvInput, agentInput, timeoutInput, graphQueryTimeoutInput].forEach((input) => input.addEventListener("input", updateStatus));
   updateStatus();
 }
 
@@ -5105,8 +5211,10 @@ function closeModal() {
   operationModal.hidden = true;
   removeSlugSelectorPopups();
   operationModal.classList.remove("compact-modal");
+  operationModal.classList.remove("ask-yoda-modal");
   state.modalAction = null;
   state.yodaLogReturn = null;
+  state.yodaModelReturn = null;
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
   modalConfirmInput.dataset.expected = "";
@@ -5148,6 +5256,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
   operationModal.classList.toggle("compact-modal", ["add-link", "remove-link", "tags"].includes(action));
+  operationModal.classList.toggle("ask-yoda-modal", action === "ask-yoda");
   modalTitle.textContent = label;
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
@@ -5358,6 +5467,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     if (modalYodaLogButton) modalYodaLogButton.disabled = false;
     syncYodaDepthControl();
     modalChatInput.value = "";
+    await loadYodaChatHistory(slug, label);
     renderAskChat(slug, label, { mode: "yoda" });
     setModalControlTooltips("Send", "Cancel");
     operationModal.hidden = false;
@@ -5718,11 +5828,12 @@ async function runModalPrimaryAction() {
         api_key_env: modalForm.querySelector("#operationYodaApiKeyEnv")?.value.trim() || "OPENAI_API_KEY",
         agent: modalForm.querySelector("#operationYodaAgent")?.value.trim() || "",
         timeout_seconds: modalForm.querySelector("#operationYodaTimeout")?.value || "45",
+        graph_query_timeout_seconds: modalForm.querySelector("#operationYodaGraphQueryTimeout")?.value || "30",
       };
       const response = await apiPost("/api/yoda-model-config", payload);
       if (!response.ok) throw new Error(response.data?.error || `Yoda model save failed with ${response.status}`);
       modalMessage.textContent = `Ask Yoda model saved: ${response.data.backend}${response.data.model ? ` · ${response.data.model}` : ""}`;
-      closeModal();
+      await returnFromYodaModel();
       return;
     }
     if (action === "yoda-prompt") {
@@ -5825,6 +5936,7 @@ async function runModalPrimaryAction() {
       history.push({ role: "user", content: question, timestamp: chatTimestamp() });
       history.push({ role: "assistant", content: "Thinking", pending: true, timestamp: chatTimestamp() });
       renderAskChat(slug, label, { mode: "yoda" });
+      await persistYodaChat(slug);
       modalChatInput.value = "";
       modalChatInput.disabled = true;
       modalMessage.textContent = "Asking Yoda...";
@@ -5840,6 +5952,7 @@ async function runModalPrimaryAction() {
       if (modalYodaLogButton) modalYodaLogButton.disabled = false;
       history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", fallbackOutput: response.data.fallback_output || "", timestamp: chatTimestamp() };
       renderAskChat(slug, label, { mode: "yoda" });
+      await persistYodaChat(slug);
       const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
       modalMessage.textContent = `Ask another question or close the chat.${timing}`;
       modalChatInput.disabled = false;
@@ -6275,6 +6388,14 @@ function bindEvents() {
   modalYodaModelButton?.addEventListener("click", () => {
     void openYodaModelWindow();
   });
+  modalYodaClearHistoryButton?.addEventListener("click", () => {
+    const slug = state.modalAction?.action === "ask-yoda" ? state.modalAction.slug : state.focusSlug;
+    const label = state.modalAction?.label || state.nodeMap.get(slug)?.label || slug;
+    if (!slug) return;
+    void clearYodaChatHistory(slug, label).catch((error) => {
+      modalMessage.textContent = error.message || String(error);
+    });
+  });
   settingsYodaLogButton?.addEventListener("click", () => {
     openYodaLogWindow({ scope: "global" });
   });
@@ -6503,6 +6624,10 @@ function bindEvents() {
 
   modalCloseButton.addEventListener("click", closeModalFromControl);
   modalCancelButton.addEventListener("click", () => {
+    if (state.modalAction?.action === "yoda-model" && state.yodaModelReturn) {
+      void returnFromYodaModel();
+      return;
+    }
     if (state.modalAction?.action === "yoda-log" && state.yodaLogReturn) {
       void returnFromYodaLog();
       return;
