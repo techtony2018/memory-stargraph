@@ -2,6 +2,15 @@
 
 Use this runbook for daily GBrain TODO implementation automation and any follow-up work that touches the user-facing Memory Stargraph services.
 
+## Tracked Automation Definitions
+
+Portable definitions for the Memory Stargraph/GBrain automation pipeline live
+under `automations/`. They are the Git-tracked source of truth for prompts,
+schedules, models, and execution environments. Runtime timestamps, memory,
+private deployment configuration, and credentials remain local-only.
+
+See `automations/README.md` for the pipeline order and restore checklist.
+
 ## Required Preflight
 
 Run this before implementation work:

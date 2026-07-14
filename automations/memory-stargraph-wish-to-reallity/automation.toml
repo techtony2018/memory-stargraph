@@ -1,0 +1,12 @@
+version = 1
+id = "memory-stargraph-wish-to-reallity"
+kind = "cron"
+name = "Memory Stargraph Wish to Reallity"
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0"
+timezone = "America/Los_Angeles"
+model = "gpt-5.5"
+reasoning_effort = "medium"
+execution_environment = "worktree"
+project_root = "{{PROJECT_ROOT}}"
+prompt_file = "prompt.md"

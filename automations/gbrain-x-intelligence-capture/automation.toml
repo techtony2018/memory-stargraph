@@ -1,0 +1,12 @@
+version = 1
+id = "gbrain-x-intelligence-capture"
+kind = "cron"
+name = "GBrain X Intelligence Capture"
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=0;BYMINUTE=15;BYSECOND=0"
+timezone = "America/Los_Angeles"
+model = "gpt-5.5"
+reasoning_effort = "medium"
+execution_environment = "local"
+project_root = "{{PROJECT_ROOT}}"
+prompt_file = "prompt.md"
