@@ -1577,6 +1577,35 @@ h2 {
   padding-right: 4px;
 }
 
+.resolver-health-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(136, 246, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(2, 8, 22, 0.6);
+}
+
+.resolver-health-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.resolver-health-item span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.resolver-health-item strong {
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .resolver-proposal-card {
   display: grid;
   gap: 7px;

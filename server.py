@@ -146,7 +146,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.134"
+UI_VERSION = "V1.0.135"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -780,6 +780,72 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
     if parsed_object is not None:
         return parsed_object
     return {"output": output}
+
+
+def resolver_submit_event(payload):
+    event_payload = {
+        "event_id": str(payload.get("event_id") or f"stargraph-{int(time.time() * 1000)}"),
+        "producer": str(payload.get("producer") or "stargraph"),
+        "resolver_version": str(payload.get("resolver_version") or UI_VERSION),
+        "intent_summary": sanitize_text_summary(payload.get("intent_summary") or payload.get("user_intent"), 500),
+        "candidate_resolvers": payload.get("candidate_resolvers") or payload.get("candidate_skills") or [],
+        "selected_route": sanitize_text_summary(payload.get("selected_route") or payload.get("selected_skill"), 160),
+        "confidence": payload.get("confidence"),
+        "related_node_slug": sanitize_text_summary(payload.get("related_node_slug") or payload.get("related_slug") or payload.get("selected_context"), 220),
+        "outcome": normalize_resolver_status(payload.get("outcome") or payload.get("result_status"), bool(payload.get("fallback_used"))),
+        "correction_signal": sanitize_text_summary(payload.get("correction_signal"), 160),
+        "operation_path": sanitize_text_summary(payload.get("operation_path") or payload.get("operation"), 160),
+        "client_timestamp": iso_now(),
+    }
+    return gbrain_call_tool("resolver_events_submit", event_payload, timeout=20)
+
+
+def resolver_list_events(limit=50, producer=None, outcome=None):
+    payload = {"limit": limit}
+    if producer:
+        payload["producer"] = producer
+    if outcome:
+        payload["outcome"] = outcome
+    return gbrain_call_tool("resolver_events_list", payload, timeout=20)
+
+
+def resolver_list_proposals(status_filter="", limit=100):
+    payload = {"limit": limit}
+    if status_filter:
+        payload["status"] = status_filter
+    return gbrain_call_tool("resolver_proposals_list", payload, timeout=30)
+
+
+def resolver_generate_proposals(payload=None):
+    request_payload = dict(payload or {})
+    request_payload.setdefault("min_evidence", 2)
+    request_payload.setdefault("run_source", "memory-stargraph")
+    return gbrain_call_tool("resolver_proposals_generate", request_payload, timeout=60)
+
+
+def resolver_update_proposal(proposal_id, action, payload=None):
+    request_payload = dict(payload or {})
+    request_payload["proposal_id"] = proposal_id
+    request_payload["action"] = action
+    return gbrain_call_tool("resolver_proposals_update", request_payload, timeout=30)
+
+
+def resolver_apply_proposal(proposal_id, payload=None):
+    request_payload = dict(payload or {})
+    request_payload["proposal_id"] = proposal_id
+    request_payload.setdefault("approved_by", "memory-stargraph")
+    request_payload.setdefault("environments", ["codex", "openclaw"])
+    return gbrain_call_tool("resolver_releases_apply", request_payload, timeout=60)
+
+
+def resolver_measure_impact(proposal_id, payload=None):
+    request_payload = dict(payload or {})
+    request_payload["proposal_id"] = proposal_id
+    return gbrain_call_tool("resolver_impact_measure", request_payload, timeout=30)
+
+
+def resolver_feedback_health():
+    return gbrain_call_tool("resolver_feedback_health", {}, timeout=20)
 
 
 def clamp_take_review_limit(value):
@@ -3517,14 +3583,26 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/resolver/events":
             query = parse_qs(parsed.query)
             limit = (query.get("limit") or ["50"])[0]
-            return self.end_json({"ok": True, "events": resolver_events(limit)})
+            producer = (query.get("producer") or [""])[0].strip()
+            outcome = (query.get("outcome") or [""])[0].strip()
+            try:
+                data = resolver_list_events(limit, producer or None, outcome or None)
+                return self.end_json({"ok": True, **data})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/resolver/health":
+            try:
+                return self.end_json({"ok": True, **resolver_feedback_health()})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/resolver/proposals":
             query = parse_qs(parsed.query)
             status_filter = (query.get("status") or [""])[0].strip()
-            rows = resolver_proposals()
-            if status_filter:
-                rows = [row for row in rows if row.get("status") == status_filter]
-            return self.end_json({"ok": True, "proposals": rows, "total": len(rows)})
+            limit = parse_nonnegative_int((query.get("limit") or ["100"])[0], 100)
+            try:
+                return self.end_json({"ok": True, **resolver_list_proposals(status_filter, limit)})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path in ("/api/take-proposals", "/api/hosting/take-proposals"):
             filters = take_review_filters_from_query(parse_qs(parsed.query))
             requested_holder = filters.get("holder", "")
@@ -3641,20 +3719,23 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/resolver/events":
             try:
                 payload = self.read_json_body()
-                event = append_resolver_event(payload)
-                return self.end_json({"ok": True, "event": event})
+                data = resolver_submit_event(payload)
+                return self.end_json({"ok": True, **data})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/resolver/proposals/generate":
             try:
-                return self.end_json({"ok": True, **generate_resolver_proposals()})
+                payload = self.read_json_body()
+                return self.end_json({"ok": True, **resolver_generate_proposals(payload)})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/resolver/dream":
             try:
                 payload = self.read_json_body()
-                summary = run_resolver_dream_phase(bool(payload.get("enabled", True)))
-                return self.end_json({"ok": True, "summary": summary})
+                if payload.get("enabled") is False:
+                    return self.end_json({"ok": True, "summary": {"enabled": False, "auto_applied": 0}})
+                data = resolver_generate_proposals({"run_source": "memory-stargraph-dream", "min_evidence": payload.get("min_evidence", 2)})
+                return self.end_json({"ok": True, "summary": data.get("dream_run", data)})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         resolver_action_match = re.match(r"^/api/resolver/proposals/([^/]+)/(accept|reject|apply|impact)$", parsed.path)
@@ -3663,38 +3744,14 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             action = resolver_action_match.group(2)
             try:
                 payload = self.read_json_body()
-
-                def update(row):
-                    row["updated_at"] = iso_now()
-                    if action == "accept":
-                        row["status"] = "accepted"
-                        row["accept_reason"] = sanitize_text_summary(payload.get("reason"), 300)
-                    elif action == "reject":
-                        row["status"] = "rejected"
-                        row["reject_reason"] = sanitize_text_summary(payload.get("reason"), 300)
-                    elif action == "apply":
-                        validation = validate_resolver_proposal(row)
-                        if validation.get("gbrain_check_resolvable") == "passed":
-                            row["status"] = "applied"
-                            row["applied_at"] = iso_now()
-                        else:
-                            row["status"] = "failed"
-                        row["validation"] = validation
-                    elif action == "impact":
-                        impact = row.get("impact") if isinstance(row.get("impact"), dict) else {}
-                        after_events = payload.get("after_events") if isinstance(payload.get("after_events"), list) else []
-                        impact["after"] = proposal_impact(after_events)
-                        impact["follow_up_status"] = "measured"
-                        row["impact"] = impact
-                    return row
-
-                proposal = update_resolver_proposal(proposal_id, update)
-                payload = {"ok": True, "proposal": proposal}
                 if action == "apply":
-                    payload["validation"] = proposal.get("validation", {})
-                return self.end_json(payload)
-            except ValueError as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+                    data = resolver_apply_proposal(proposal_id, payload)
+                    return self.end_json({"ok": True, **data})
+                if action == "impact":
+                    data = resolver_measure_impact(proposal_id, payload)
+                    return self.end_json({"ok": True, **data})
+                data = resolver_update_proposal(proposal_id, action, payload)
+                return self.end_json({"ok": True, **data})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         take_action_match = re.match(r"^/api/(?:hosting/)?take-proposals/([^/]+)/(accept|reject|defer)$", parsed.path)
@@ -3840,17 +3897,22 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "timings": result.get("timings"),
                     "diagnostics": result.get("diagnostics"),
                 })
-                append_resolver_event({
-                    "surface": "Ask Yoda",
-                    "user_intent": question,
-                    "selected_skill": "Ask Yoda",
-                    "selected_context": slug,
-                    "operation": "/api/entity-ask-yoda",
-                    "result_status": result.get("diagnostics", {}).get("model_status") or result.get("source"),
-                    "fallback_used": result.get("diagnostics", {}).get("fallback_used") or result.get("source") == "fallback",
-                    "related_slug": slug,
-                    "error_class": result.get("diagnostics", {}).get("error_summary"),
-                })
+                try:
+                    resolver_submit_event({
+                        "event_id": result.get("request_id") or f"ask-yoda:{slug}:{hashlib.sha1(question.encode('utf-8')).hexdigest()[:12]}",
+                        "producer": "stargraph",
+                        "resolver_version": UI_VERSION,
+                        "user_intent": question,
+                        "selected_skill": "Ask Yoda",
+                        "selected_context": slug,
+                        "operation": "/api/entity-ask-yoda",
+                        "result_status": result.get("diagnostics", {}).get("model_status") or result.get("source"),
+                        "fallback_used": result.get("diagnostics", {}).get("fallback_used") or result.get("source") == "fallback",
+                        "related_slug": slug,
+                        "error_class": result.get("diagnostics", {}).get("error_summary"),
+                    })
+                except Exception:
+                    pass
                 return self.end_json({"ok": True, "slug": slug, **result})
             except Exception as exc:  # noqa: BLE001
                 request_id = f"yoda-{int(time.time() * 1000)}"

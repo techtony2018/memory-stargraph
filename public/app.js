@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.134";
+const UI_VERSION = "V1.0.135";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -104,6 +104,7 @@ const state = {
   },
   resolverReview: {
     proposals: [],
+    health: null,
     loading: false,
     message: "",
   },
@@ -227,6 +228,7 @@ const resolverReviewMessage = document.getElementById("resolverReviewMessage");
 const resolverGenerateButton = document.getElementById("resolverGenerateButton");
 const resolverRefreshButton = document.getElementById("resolverRefreshButton");
 const resolverProposalList = document.getElementById("resolverProposalList");
+const resolverHealthPanel = document.getElementById("resolverHealthPanel");
 
 const metricNodes = document.getElementById("metricNodes");
 const metricEdges = document.getElementById("metricEdges");
@@ -4941,12 +4943,41 @@ async function actOnTakeProposals(action, ids) {
 
 function resolverProposalMeta(proposal) {
   const confidence = typeof proposal.confidence === "number" ? `${Math.round(proposal.confidence * 100)}%` : "unknown confidence";
-  return [proposal.kind || "proposal", proposal.status || "pending", confidence, proposal.target || ""].filter(Boolean).join(" · ");
+  return [proposal.kind || "proposal", proposal.status || "pending", confidence, proposal.target_ref || proposal.target || ""].filter(Boolean).join(" · ");
+}
+
+function renderResolverHealth() {
+  if (!resolverHealthPanel) return;
+  resolverHealthPanel.innerHTML = "";
+  const health = state.resolverReview.health || {};
+  const counts = health.proposal_counts || {};
+  const lastRun = health.last_dream_run || {};
+  const items = [
+    ["Loop", health.scheduled_loop || "unknown"],
+    ["Events 24h", health.events_24h ?? 0],
+    ["Pending", counts.pending ?? 0],
+    ["Applied/Failed", `${counts.applied ?? 0}/${counts.failed ?? 0}`],
+    ["Last run", lastRun.completed_at || lastRun.started_at || "none"],
+    ["Run status", lastRun.status || "unknown"],
+    ["Duration", typeof lastRun.duration_ms === "number" ? `${lastRun.duration_ms}ms` : "n/a"],
+    ["Auto apply", lastRun.auto_applied ?? 0],
+  ];
+  items.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.className = "resolver-health-item";
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    const valueEl = document.createElement("strong");
+    valueEl.textContent = String(value);
+    item.append(labelEl, valueEl);
+    resolverHealthPanel.appendChild(item);
+  });
 }
 
 function renderResolverProposalRows() {
   if (!resolverProposalList) return;
   resolverProposalList.innerHTML = "";
+  renderResolverHealth();
   if (resolverReviewMessage) {
     resolverReviewMessage.textContent = state.resolverReview.message || `${state.resolverReview.proposals.length} resolver proposals loaded`;
   }
@@ -5012,8 +5043,14 @@ async function loadResolverProposals() {
   state.resolverReview.loading = true;
   state.resolverReview.message = "Loading resolver proposals...";
   renderResolverProposalRows();
-  const response = await apiGet("/api/resolver/proposals?status=pending");
+  const [healthResponse, response] = await Promise.all([
+    apiGet("/api/resolver/health"),
+    apiGet("/api/resolver/proposals?status=pending"),
+  ]);
   state.resolverReview.loading = false;
+  if (healthResponse.ok) {
+    state.resolverReview.health = healthResponse.data;
+  }
   if (!response.ok) {
     state.resolverReview.proposals = [];
     state.resolverReview.message = response.data?.error || `Resolver proposals failed with ${response.status}`;

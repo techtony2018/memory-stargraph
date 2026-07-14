@@ -582,104 +582,120 @@ class ApiEndpointTests(unittest.TestCase):
             with (
                 mock.patch("server.DATA_DIR", data_dir),
                 mock.patch("server.YODA_LOG_PATH", data_dir / "yoda_logs.json"),
-                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
                 mock.patch("server.STORE", fake_store),
+                mock.patch("server.gbrain_call_tool") as fake_gbrain_call,
             ):
+                fake_gbrain_call.return_value = {"event": {"event_id": "evt-1"}, "idempotent": False}
                 status, data = self.dispatch_post(
                     "/api/entity-ask-yoda/people%2Ftony-guan",
                     {"question": "Which ACA7 writing matters?", "depth": 4},
                 )
                 logs_status, logs = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=2")
-                events_status, events = self.dispatch_get("/api/resolver/events?limit=2")
 
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         self.assertEqual(logs_status, 200)
         self.assertEqual(logs["entries"][0]["request_id"], data["request_id"])
-        self.assertEqual(events_status, 200)
-        self.assertEqual(events["events"][0]["surface"], "Ask Yoda")
-        self.assertEqual(events["events"][0]["selected_context"], "people/tony-guan")
-        self.assertIn("ACA7", events["events"][0]["intent_summary"])
-        self.assertNotIn("Which ACA7 writing matters?", json.dumps(events["events"][0]))
+        fake_gbrain_call.assert_called_with(
+            "resolver_events_submit",
+            mock.ANY,
+            timeout=20,
+        )
+        submitted = fake_gbrain_call.call_args.args[1]
+        self.assertEqual(submitted["producer"], "stargraph")
+        self.assertEqual(submitted["selected_route"], "Ask Yoda")
+        self.assertEqual(submitted["related_node_slug"], "people/tony-guan")
+        self.assertIn("ACA7", submitted["intent_summary"])
 
-    def test_resolver_events_api_sanitizes_and_bounds_records(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            data_dir = Path(tmpdir)
-            with mock.patch("server.DATA_DIR", data_dir), mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"):
-                for index in range(3):
-                    status, data = self.dispatch_post(
-                        "/api/resolver/events",
-                        {
-                            "surface": "Stargraph UI",
-                            "user_intent": "token sk-secret should not be stored in full",
-                            "selected_skill": "Ask Yoda",
-                            "result_status": "timeout",
-                            "fallback_used": True,
-                            "related_slug": "people/tony-guan",
-                        },
-                    )
-                    self.assertEqual(status, 200)
-                    self.assertTrue(data["ok"])
-                status, data = self.dispatch_get("/api/resolver/events?limit=2")
+    def test_resolver_events_api_proxies_to_hosted_gbrain(self):
+        with mock.patch("server.gbrain_call_tool") as fake_gbrain_call:
+            fake_gbrain_call.side_effect = [
+                {"event": {"event_id": "stargraph-1"}, "idempotent": False},
+                {"events": [{"event_id": "stargraph-1", "producer": "stargraph"}], "limit": 2},
+            ]
+            status, data = self.dispatch_post(
+                "/api/resolver/events",
+                {
+                    "event_id": "stargraph-1",
+                    "producer": "stargraph",
+                    "user_intent": "token sk-secret should not be stored in full",
+                    "selected_skill": "Ask Yoda",
+                    "result_status": "timeout",
+                    "fallback_used": True,
+                    "related_slug": "people/tony-guan",
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            status, data = self.dispatch_get("/api/resolver/events?limit=2&producer=stargraph")
 
         self.assertEqual(status, 200)
-        self.assertEqual(len(data["events"]), 2)
-        serialized = json.dumps(data["events"])
-        self.assertNotIn("sk-secret", serialized)
-        self.assertIn("[redacted]", serialized)
+        self.assertEqual(data["events"][0]["event_id"], "stargraph-1")
+        self.assertEqual(fake_gbrain_call.call_args_list[0].args[0], "resolver_events_submit")
+        self.assertEqual(fake_gbrain_call.call_args_list[1].args[0], "resolver_events_list")
 
-    def test_resolver_proposal_generation_review_apply_and_impact(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            data_dir = Path(tmpdir)
-            with (
-                mock.patch("server.DATA_DIR", data_dir),
-                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
-                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
-                mock.patch("server.run_gbrain", return_value="ok"),
-            ):
-                for intent in ["find ACA7 writing", "find ACA7 writing", "find ACA7 writing"]:
-                    server.append_resolver_event({"surface": "Ask Yoda", "user_intent": intent, "result_status": "timeout", "fallback_used": True})
-                status, generated = self.dispatch_post("/api/resolver/proposals/generate", {})
-                self.assertEqual(status, 200)
-                self.assertEqual(generated["created"], 1)
+    def test_resolver_proposal_generation_review_apply_and_health_proxy(self):
+        with mock.patch("server.gbrain_call_tool") as fake_gbrain_call:
+            fake_gbrain_call.side_effect = [
+                {"created": 1, "events_scanned": 3, "proposals": [{"id": "rp-1"}], "auto_applied": 0},
+                {"proposals": [{"id": "rp-1", "kind": "resolver_route_update", "impact": {}}], "total": 1},
+                {"proposal": {"id": "rp-1", "status": "accepted"}},
+                {"release": {"version": "resolver-20260714T000000Z", "active": True}, "distribution": [{"environment": "codex"}, {"environment": "openclaw"}]},
+                {"proposal": {"id": "rp-1"}, "impact": {"after": {"success": 1}}},
+                {"events_24h": 2, "proposal_counts": {"pending": 1}, "scheduled_loop": "observed"},
+            ]
+            status, generated = self.dispatch_post("/api/resolver/proposals/generate", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(generated["created"], 1)
 
-                status, listed = self.dispatch_get("/api/resolver/proposals?status=pending")
-                self.assertEqual(status, 200)
-                proposal = listed["proposals"][0]
-                self.assertEqual(proposal["kind"], "add_trigger")
-                self.assertIn("impact", proposal)
+            status, listed = self.dispatch_get("/api/resolver/proposals?status=pending")
+            self.assertEqual(status, 200)
+            proposal = listed["proposals"][0]
+            self.assertEqual(proposal["kind"], "resolver_route_update")
 
-                status, accepted = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/accept", {"reason": "looks useful"})
-                self.assertEqual(status, 200)
-                self.assertEqual(accepted["proposal"]["status"], "accepted")
+            status, accepted = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/accept", {"reason": "looks useful"})
+            self.assertEqual(status, 200)
+            self.assertEqual(accepted["proposal"]["status"], "accepted")
 
-                status, applied = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/apply", {})
-                self.assertEqual(status, 200)
-                self.assertEqual(applied["proposal"]["status"], "applied")
-                self.assertEqual(applied["validation"]["gbrain_check_resolvable"], "passed")
+            status, applied = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/apply", {})
+            self.assertEqual(status, 200)
+            self.assertTrue(applied["release"]["active"])
 
-                status, impact = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/impact", {"after_events": [{"result_status": "success"}]})
-                self.assertEqual(status, 200)
-                self.assertEqual(impact["proposal"]["impact"]["after"]["success_count"], 1)
+            status, impact = self.dispatch_post(f"/api/resolver/proposals/{proposal['id']}/impact", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(impact["impact"]["after"]["success"], 1)
+
+            status, health = self.dispatch_get("/api/resolver/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(health["events_24h"], 2)
+
+        self.assertEqual([call.args[0] for call in fake_gbrain_call.call_args_list], [
+            "resolver_proposals_generate",
+            "resolver_proposals_list",
+            "resolver_proposals_update",
+            "resolver_releases_apply",
+            "resolver_impact_measure",
+            "resolver_feedback_health",
+        ])
 
     def test_resolver_dream_phase_generates_summary_without_apply(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
             with (
                 mock.patch("server.DATA_DIR", data_dir),
-                mock.patch("server.RESOLVER_EVENTS_PATH", data_dir / "resolver_dispatch_events.json"),
-                mock.patch("server.RESOLVER_PROPOSALS_PATH", data_dir / "resolver_proposals.json"),
-                mock.patch("server.RESOLVER_DREAM_LOG_PATH", data_dir / "resolver_dream_runs.json"),
+                mock.patch("server.gbrain_call_tool") as fake_gbrain_call,
             ):
-                server.append_resolver_event({"surface": "Ask Yoda", "user_intent": "manual skill for tax writing", "result_status": "no_match"})
-                server.append_resolver_event({"surface": "Ask Yoda", "user_intent": "manual skill for tax writing", "result_status": "no_match"})
+                fake_gbrain_call.return_value = {
+                    "dream_run": {"events_scanned": 2, "proposals_created": 1, "auto_applied": 0},
+                    "auto_applied": 0,
+                }
                 status, data = self.dispatch_post("/api/resolver/dream", {"enabled": True})
 
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         self.assertEqual(data["summary"]["events_scanned"], 2)
         self.assertEqual(data["summary"]["proposals_created"], 1)
-        self.assertEqual(data["summary"]["applied"], 0)
+        self.assertEqual(data["summary"]["auto_applied"], 0)
 
 
 if __name__ == "__main__":
