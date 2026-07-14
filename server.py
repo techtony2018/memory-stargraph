@@ -147,7 +147,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.136"
+UI_VERSION = "V1.0.137"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -660,7 +660,8 @@ def validate_resolver_release(proposal, approved_route):
             encoding="utf-8",
         )
         (skill_dir / "SKILL.md").write_text(
-            "---\nname: approved-resolver-route\n---\n\n"
+            "---\nname: approved-resolver-route\ntriggers:\n"
+            f"  - {json.dumps(trigger)}\n---\n\n"
             f"Approved route: {route}\n",
             encoding="utf-8",
         )
