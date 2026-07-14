@@ -634,6 +634,19 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(fake_gbrain_call.call_args_list[0].args[0], "resolver_events_submit")
         self.assertEqual(fake_gbrain_call.call_args_list[1].args[0], "resolver_events_list")
 
+    def test_gbrain_call_tool_prefers_top_level_object_over_nested_lists(self):
+        output = json.dumps({
+            "created": 0,
+            "proposals": [],
+            "dream_run": {"auto_applied": 0},
+        })
+        with mock.patch("server.run_gbrain", return_value=output):
+            data = server.gbrain_call_tool("resolver_proposals_generate", {})
+
+        self.assertIsInstance(data, dict)
+        self.assertEqual(data["created"], 0)
+        self.assertEqual(data["proposals"], [])
+
     def test_resolver_proposal_generation_review_apply_and_health_proxy(self):
         with mock.patch("server.gbrain_call_tool") as fake_gbrain_call:
             fake_gbrain_call.side_effect = [

@@ -773,12 +773,18 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
             if cleaned.startswith("Unknown tool:"):
                 raise RuntimeError(f"GBrain backend does not expose {tool_name}: {cleaned}") from exc
         raise
-    parsed_list = extract_json_list(output)
-    if parsed_list is not None:
-        return parsed_list
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        return parsed
     parsed_object = extract_json_object(output)
     if parsed_object is not None:
         return parsed_object
+    parsed_list = extract_json_list(output)
+    if parsed_list is not None:
+        return parsed_list
     return {"output": output}
 
 
