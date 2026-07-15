@@ -21,6 +21,24 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
+## TODO Backlog Compaction
+
+The root backlog `notes/memory-starmap-todo-list` must stay lightweight. Run this before selecting nightly work and again after final TODO status updates:
+
+```bash
+python3 scripts/automation/compact_sg_todo_backlog.py --apply --json
+```
+
+The helper moves each full batch of 50 completed TODO rows into immutable archive collection nodes named `notes/memory-starmap-todo-list/completed-archive-0001`, `completed-archive-0002`, and so on. The active root keeps all `planned`, `implementing`, and `failed` rows, followed by only the remaining 0-49 completed rows. Failed rows are also mirrored to `notes/memory-starmap-todo-list/failed-items`.
+
+Use dry-run mode before risky manual repairs:
+
+```bash
+python3 scripts/automation/compact_sg_todo_backlog.py --json
+```
+
+Compaction is idempotent: existing completed archives are not rewritten or duplicated, but their rows are removed from the active root if a prior run stopped before the root rewrite. Treat compaction failure as a real automation failure unless GBrain itself is unreachable.
+
 ## GBrain Capture Quality Gate
 
 Use this before completing any GBrain capture/import work, including WeChat, LinkedIn, X/Twitter, web pages, PDFs/text extraction, and personal notes.

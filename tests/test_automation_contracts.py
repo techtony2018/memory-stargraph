@@ -25,6 +25,18 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("fall back to Chrome CDP", prompt)
         self.assertIn("Do not skip visual verification", prompt)
 
+    def test_wish_worker_compacts_completed_todos_before_and_after_run(self):
+        prompt = (ROOT / "automations" / "memory-stargraph-wish-to-reallity" / "prompt.md").read_text()
+        runbook = (ROOT / "docs" / "automation-runbook.md").read_text()
+        command = "python3 scripts/automation/compact_sg_todo_backlog.py --apply --json"
+
+        self.assertGreaterEqual(prompt.count(command), 2)
+        self.assertIn("full batch of 50 completed TODO rows", prompt)
+        self.assertIn("TODO compaction/archive result", prompt)
+        self.assertIn(command, runbook)
+        self.assertIn("completed-archive-0001", runbook)
+        self.assertIn("0-49 completed rows", runbook)
+
 
 if __name__ == "__main__":
     unittest.main()
