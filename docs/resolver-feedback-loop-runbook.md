@@ -68,6 +68,16 @@ The learning script runs:
 gbrain dream --phase resolver_learning --json
 ```
 
+The wrapper exports a deterministic cron PATH beginning with `$HOME/.bun/bin`, verifies both `bun` and the configured GBrain executable before acquiring work, and exits 127 with `preflight failed` in `nightly.log` if either is unavailable. Verify the installed job under a stripped environment after changes:
+
+```bash
+env -i HOME="$HOME" PATH=/usr/bin:/bin /bin/bash ~/.gbrain/resolver-learning-nightly.sh
+jq '.phases[0].details.dream_run | {status, auto_applied, errors}' ~/.gbrain/resolver-feedback-nightly/latest.json
+tail -20 ~/.gbrain/resolver-feedback-nightly/nightly.log
+```
+
+The wrapper also refuses success unless the result confirms `auto_applied=0`. The 03:00 backup entry is independent and must remain unchanged.
+
 It uses the normal GBrain cycle lock, records a durable `resolver_dream_runs` row, writes `~/.gbrain/resolver-feedback-nightly/latest.json`, and appends a timestamped summary to `nightly.log`. It never applies proposals and does not invoke an LLM.
 
 ## Backup And Restore
@@ -108,3 +118,4 @@ curl -sS http://127.0.0.1:8788/api/resolver/health
 
 A healthy loop has recent paired before/after events from both Codex and OpenClaw, a recent successful `resolver_learning` run with `auto_applied=0`, no stale accepted proposal awaiting an explicit decision, one active release at most, and `active` distribution rows whose checksums match that release.
 
+For browser, deployment, or test probes, send `environment`, `synthetic`, `test_run`, and a privacy-safe `pair_id`. Synthetic/test events remain listed for audit but are excluded from proposal learning. Health reports `production_events_24h` and `synthetic_test_events_24h` separately; legacy events without provenance remain production because existing evidence is never rewritten automatically.
