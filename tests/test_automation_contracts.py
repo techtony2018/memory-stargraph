@@ -21,6 +21,9 @@ class AutomationContractTests(unittest.TestCase):
         prompt = (ROOT / "automations" / "memory-stargraph-wish-to-reallity" / "prompt.md").read_text()
         self.assertIn("reuse", prompt.lower())
         self.assertIn("Markdown link", prompt)
+        self.assertIn("in-app browser", prompt)
+        self.assertIn("fall back to Chrome CDP", prompt)
+        self.assertIn("Do not skip visual verification", prompt)
 
 
 if __name__ == "__main__":
