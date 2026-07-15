@@ -35,6 +35,8 @@ from server import (
     materialize_gbrain_file_reference,
     copy_file_to_gbrain_store,
     gbrain_file_ledger_has_relative_path,
+    parse_gbrain_durable_evidence,
+    safe_upload_filename,
 )
 
 
@@ -551,9 +553,35 @@ cover_image: companies/example-inc/logo.jpg
         fields, files = parse_multipart_form(f"multipart/form-data; boundary={boundary}", body)
 
         self.assertEqual(fields, {})
-        self.assertEqual(files["file"]["filename"], "witty wang.jpg")
+        self.assertEqual(files["file"]["filename"], "witty-wang.jpg")
         self.assertEqual(files["file"]["content_type"], "image/jpeg")
         self.assertEqual(files["file"]["data"], b"fake jpg")
+
+    def test_safe_upload_filename_canonicalizes_all_whitespace_and_preserves_unicode(self):
+        self.assertEqual(
+            safe_upload_filename("Screenshot 2026-07-15 at 11.26.53\u202fAM.png"),
+            "Screenshot-2026-07-15-at-11.26.53-AM.png",
+        )
+        self.assertEqual(safe_upload_filename("普通 文件_name-1.png"), "普通-文件_name-1.png")
+        self.assertEqual(safe_upload_filename("simple_ASCII-file.png"), "simple_ASCII-file.png")
+
+    def test_parse_gbrain_durable_evidence_requires_exact_hash_size_and_path(self):
+        source = b"exact attachment bytes"
+        digest = __import__("hashlib").sha256(source).hexdigest()
+        output = (
+            'Uploaded: people/example/photo.png\n'
+            'GBRAIN_FILE_EVIDENCE '
+            f'{{"durable_storage_verified":true,"storage_path":"people/example/photo.png",'
+            f'"filename":"photo.png","size_bytes":{len(source)},"sha256":"{digest}",'
+            '"disposition":"uploaded"}\n'
+        )
+
+        evidence = parse_gbrain_durable_evidence(output, "people/example/photo.png", source)
+
+        self.assertTrue(evidence["durable_storage_verified"])
+        self.assertEqual(evidence["sha256"], digest)
+        with self.assertRaisesRegex(RuntimeError, "durable storage evidence"):
+            parse_gbrain_durable_evidence(output, "people/example/other.png", source)
 
     def test_run_gbrain_tolerates_non_utf8_output(self):
         completed = mock.Mock(returncode=0, stdout=b"uploaded \xff image", stderr=b"")
@@ -578,9 +606,10 @@ cover_image: companies/example-inc/logo.jpg
                 mock.patch("server.run_gbrain") as run,
                 mock.patch.object(store, "invalidate") as invalidate,
             ):
+                digest = __import__("hashlib").sha256(b"fake jpg").hexdigest()
                 run.side_effect = [
                     "# Azul Systems\n\nCompany notes.",
-                    "uploaded",
+                    f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,"storage_path":"companies/azul-systems/Azul.jpg","filename":"Azul.jpg","size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}',
                     "1 file(s):\n  companies/azul-systems / Azul.jpg  [8KB, image/jpeg]",
                     "",
                 ]
@@ -633,7 +662,11 @@ cover_image: companies/example-inc/logo.jpg
                     RuntimeError("localOnly thin-client has no storage"),
                     "",
                 ]
-                bridge.return_value = "1 file(s):\n  people/bridge / Bridge.jpg  [10B, image/jpeg]"
+                digest = __import__("hashlib").sha256(b"bridge jpg").hexdigest()
+                bridge.return_value = (
+                    f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,"storage_path":"people/bridge/Bridge.jpg","filename":"Bridge.jpg","size_bytes":10,"sha256":"{digest}","disposition":"uploaded"}}\n'
+                    "1 file(s):\n  people/bridge / Bridge.jpg  [10B, image/jpeg]"
+                )
                 result = store.attach_file("people/bridge", str(source), "Bridge image")
 
             bridge.assert_called_once_with(str(source), "people/bridge")
@@ -654,7 +687,12 @@ cover_image: companies/example-inc/logo.jpg
                 mock.patch("server.run_gbrain") as run,
                 mock.patch.object(store, "invalidate") as invalidate,
             ):
-                run.side_effect = ["# Garry Tan\n\nNotes.", "uploaded", "No files for page: people/garry-tan"]
+                digest = __import__("hashlib").sha256(b"fake jpg").hexdigest()
+                run.side_effect = [
+                    "# Garry Tan\n\nNotes.",
+                    f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,"storage_path":"people/garry-tan/Garry.jpg","filename":"Garry.jpg","size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}',
+                    "No files for page: people/garry-tan",
+                ]
                 with self.assertRaisesRegex(RuntimeError, "not visible in GBrain files"):
                     store.attach_file("people/garry-tan", str(source), "Garry")
 
@@ -899,6 +937,9 @@ cover_image: companies/example-inc/logo.jpg
         def fake_run(*args, **_kwargs):
             if args[:2] == ("files", "list"):
                 return "1 file(s):\n  people/tony-guan / example.jpg  [8KB, image/jpeg]"
+            if args[:2] == ("files", "upload"):
+                digest = __import__("hashlib").sha256(b"fake jpg").hexdigest()
+                return f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,"storage_path":"people/tony-guan/example.jpg","filename":"example.jpg","size_bytes":8,"sha256":"{digest}","disposition":"uploaded"}}'
             return "ok"
 
         with (

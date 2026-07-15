@@ -442,18 +442,26 @@ class ApiEndpointTests(unittest.TestCase):
             "source": {"mode": "gbrain", "status": "live", "warnings": []},
             "nodes": [{"slug": "index", "degree": 3}],
         }
-        with mock.patch("server.STORE", fake_store), mock.patch("server.GBRAIN") as gbrain_path:
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.GBRAIN") as gbrain_path,
+            mock.patch("server.GBRAIN_FILE_STORE_ROOTS", []),
+            mock.patch("server.GBRAIN_FILE_BASE_URLS", []),
+        ):
             gbrain_path.exists.return_value = True
             status, data = self.dispatch_get("/api/setup-diagnostics")
 
         self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
+        self.assertFalse(data["ok"])
         self.assertEqual(data["source_mode"], "gbrain")
         self.assertIn("checks", data)
         self.assertIn("next_action", data)
         self.assertIn("config_keys_present", data)
         self.assertNotIn("config_values", data)
         self.assertNotIn("api_key", json.dumps(data).lower())
+        attachment = next(check for check in data["checks"] if check["id"] == "attachment_storage")
+        self.assertFalse(attachment["ok"])
+        self.assertEqual(attachment["detail"], "durable storage unavailable")
 
 
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
@@ -616,7 +624,7 @@ class ApiEndpointTests(unittest.TestCase):
                         "messages": [
                             {"role": "system", "content": "Ask Yoda about Tony", "timestamp": "now"},
                             {"role": "user", "content": "hello", "timestamp": "now"},
-                            {"role": "assistant", "content": "answer", "fallbackOutput": "raw graph output", "timestamp": "now"},
+                            {"role": "assistant", "content": "## Answer\n\n- **First**\n- people/tony-guan", "fallbackOutput": "raw graph output", "timestamp": "now"},
                             {"role": "assistant", "content": "Thinking", "pending": True},
                         ]
                     },
@@ -627,6 +635,7 @@ class ApiEndpointTests(unittest.TestCase):
                 status, data = self.dispatch_get("/api/yoda-chat/people%2Ftony-guan")
                 self.assertEqual(status, 200)
                 self.assertEqual([item["role"] for item in data["messages"]], ["system", "user", "assistant"])
+                self.assertEqual(data["messages"][-1]["content"], "## Answer\n\n- **First**\n- people/tony-guan")
                 self.assertEqual(data["messages"][-1]["fallbackOutput"], "raw graph output")
 
                 status, data = self.dispatch_post("/api/yoda-chat/people%2Ftony-guan", {"clear": True})

@@ -175,6 +175,21 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function clearYodaChatHistory", script)
         self.assertIn("/api/yoda-chat/", script)
 
+    def test_canvas_has_only_one_cross_renderer_radar_ring_system(self):
+        styles = (ROOT / "public" / "styles.css").read_text()
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertNotIn(".graph-canvas-wrap::before", styles)
+        self.assertIn("function drawBackground()", script)
+        self.assertIn("ctx.arc(radarX, radarY, radius, 0, Math.PI * 2)", script)
+
+    def test_restored_yoda_history_uses_the_same_formatted_chat_renderer(self):
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn("normalizeYodaChatMessages(response.data.messages)", script)
+        self.assertIn("renderAskChat(slug, label, { mode: \"yoda\" })", script)
+        self.assertIn("renderMarkdownInline(message.content, bubble)", script)
+
     def test_timeline_uses_read_only_markdown_with_add_event_button(self):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public" / "app.js").read_text()
@@ -343,8 +358,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("<p class=\"panel-label\">Hot Hubs</p>", markup)
         self.assertIn("<span>Top</span>", markup)
         self.assertNotIn("<span>Top hubs</span>", markup)
-        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.143"', markup)
-        self.assertIn('src="/assets/brand/yoda-selection-avatar.png?v=1.0.143"', markup)
+        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.144"', markup)
+        self.assertIn('src="/assets/brand/yoda-selection-avatar.png?v=1.0.144"', markup)
         self.assertIn("object-fit: contain", styles)
         self.assertIn("overflow: hidden", styles)
         self.assertIn(".selection-actions", styles)
@@ -429,9 +444,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.143"', markup)
-        self.assertIn('src="/app.js?v=1.0.143"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.143"', script)
+        self.assertIn('href="/styles.css?v=1.0.144"', markup)
+        self.assertIn('src="/app.js?v=1.0.144"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.144"', script)
         self.assertIn("height: 28px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -1162,11 +1177,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.143"', markup)
-        self.assertIn('src="/app.js?v=1.0.143"', markup)
-        self.assertIn('>V1.0.143</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.143"', script)
-        self.assertIn('UI_VERSION = "V1.0.143"', server)
+        self.assertIn('href="/styles.css?v=1.0.144"', markup)
+        self.assertIn('src="/app.js?v=1.0.144"', markup)
+        self.assertIn('>V1.0.144</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.144"', script)
+        self.assertIn('UI_VERSION = "V1.0.144"', server)
 
     def test_readme_showcases_current_screenshot_and_top_features(self):
         readme = (ROOT / "README.md").read_text()
@@ -1234,10 +1249,10 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.143"', markup)
-        self.assertIn('src="/app.js?v=1.0.143"', markup)
-        self.assertIn('V1.0.143', markup)
-        self.assertIn('const UI_VERSION = "V1.0.143"', script)
+        self.assertIn('href="/styles.css?v=1.0.144"', markup)
+        self.assertIn('src="/app.js?v=1.0.144"', markup)
+        self.assertIn('V1.0.144', markup)
+        self.assertIn('const UI_VERSION = "V1.0.144"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -1251,11 +1266,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.143"', markup)
-        self.assertIn('src="/app.js?v=1.0.143"', markup)
-        self.assertIn('>V1.0.143</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.143"', script)
-        self.assertIn('UI_VERSION = "V1.0.143"', (ROOT / "server.py").read_text())
+        self.assertIn('href="/styles.css?v=1.0.144"', markup)
+        self.assertIn('src="/app.js?v=1.0.144"', markup)
+        self.assertIn('>V1.0.144</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.144"', script)
+        self.assertIn('UI_VERSION = "V1.0.144"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)

@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from http import HTTPStatus
@@ -153,7 +154,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.143"
+UI_VERSION = "V1.0.144"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -397,6 +398,16 @@ def sanitize_text_summary(value, limit=220):
     return text[:limit]
 
 
+def sanitize_chat_content(value, limit=5000):
+    """Redact persisted chat content without destroying Markdown layout."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(character for character in text if character in "\n\t" or ord(character) >= 32)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text).strip()
+    text = SECRET_RE.sub("[redacted]", text)
+    return text[:limit]
+
+
 def yoda_system_prompt_state():
     data = read_json_file(YODA_SETTINGS_PATH, {})
     prompt = str(data.get("system_prompt") or "").strip() if isinstance(data, dict) else ""
@@ -480,12 +491,12 @@ def sanitize_chat_message(message):
     role = str(message.get("role") or "").strip().lower()
     if role not in {"system", "user", "assistant"}:
         return None
-    content = SECRET_RE.sub("[redacted]", str(message.get("content") or "").strip())[:5000]
+    content = sanitize_chat_content(message.get("content"), 5000)
     if not content:
         return None
     safe = {
         "role": role,
-        "content": sanitize_text_summary(content, 5000),
+        "content": content,
         "timestamp": sanitize_text_summary(message.get("timestamp") or iso_now(), 80),
     }
     fallback_output = str(message.get("fallbackOutput") or message.get("fallback_output") or "").strip()
@@ -1584,9 +1595,45 @@ def parse_search_results(output):
 
 
 def safe_upload_filename(filename):
-    name = Path(str(filename or "upload.bin")).name.strip()
-    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .")
-    return name or "upload.bin"
+    source = unicodedata.normalize("NFC", Path(str(filename or "upload.bin")).name).strip()
+    output = []
+    pending_separator = False
+    for char in source:
+        if char.isspace():
+            pending_separator = bool(output)
+            continue
+        if char.isalnum() or char in "._-":
+            if pending_separator and output and output[-1] != "-":
+                output.append("-")
+            output.append(char)
+            pending_separator = False
+        else:
+            pending_separator = bool(output)
+    return "".join(output).strip(".-") or "upload.bin"
+
+
+def parse_gbrain_durable_evidence(output, relative_path, source_bytes):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    payload = None
+    for line in str(output or "").splitlines():
+        if line.startswith("GBRAIN_FILE_EVIDENCE "):
+            try:
+                payload = json.loads(line.split(" ", 1)[1])
+            except json.JSONDecodeError:
+                payload = None
+    expected = bytes(source_bytes or b"")
+    expected_hash = hashlib.sha256(expected).hexdigest()
+    if not (
+        safe_path
+        and isinstance(payload, dict)
+        and payload.get("durable_storage_verified") is True
+        and payload.get("storage_path") == safe_path.as_posix()
+        and payload.get("filename") == safe_path.name
+        and int(payload.get("size_bytes") or -1) == len(expected)
+        and payload.get("sha256") == expected_hash
+    ):
+        raise RuntimeError("GBrain durable storage evidence did not match the attachment path, size, and SHA-256.")
+    return payload
 
 
 def parse_multipart_form(content_type, body):
@@ -1864,7 +1911,7 @@ def run_gbrain_files_bridge(file_path, slug):
     source = Path(file_path).expanduser()
     if not source.is_file():
         raise RuntimeError("Attachment source file is unavailable for the GBrain files bridge.")
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip(".-") or "upload.bin"
+    safe_name = safe_upload_filename(source.name)
     create_dir = subprocess.run(
         ["ssh", GBRAIN_FILES_BRIDGE_SSH, "bash", "-s"],
         cwd=ROOT,
@@ -3663,6 +3710,18 @@ class GraphStore:
         return "\n".join(lines)
 
     def attach_file(self, slug, file_path, description=""):
+        source = Path(str(file_path or "")).expanduser()
+        if not source.is_file():
+            raise RuntimeError("Attachment source file is unavailable.")
+        canonical_name = safe_upload_filename(source.name)
+        staged_source = source
+        if source.name != canonical_name:
+            staged_dir = DATA_DIR / "uploads" / re.sub(r"[^A-Za-z0-9._-]+", "_", slug.strip("/") or "root")
+            staged_dir.mkdir(parents=True, exist_ok=True)
+            staged_source = staged_dir / canonical_name
+            shutil.copy2(source, staged_source)
+        file_path = str(staged_source)
+        source_bytes = staged_source.read_bytes()
         raw = ""
         try:
             raw_output = run_gbrain("get", slug)
@@ -3676,7 +3735,8 @@ class GraphStore:
         upload_transport = "local"
         ledger_output = None
         try:
-            run_gbrain("files", "upload", file_path, "--page", slug)
+            upload_output = run_gbrain("files", "upload", file_path, "--page", slug)
+            ledger_output = upload_output
         except RuntimeError as exc:
             if not GBRAIN_FILES_BRIDGE_SSH:
                 raise RuntimeError(
@@ -3685,6 +3745,9 @@ class GraphStore:
                 ) from exc
             ledger_output = run_gbrain_files_bridge(file_path, slug)
             upload_transport = "ssh-bridge"
+        durable_evidence = parse_gbrain_durable_evidence(ledger_output, relative_path, source_bytes)
+        if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
+            ledger_output = f"{ledger_output or ''}\n{run_gbrain('files', 'list', slug)}"
         if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
             raise RuntimeError(
                 f"Attachment upload was not visible in GBrain files for {slug}; markdown was not updated."
@@ -3700,6 +3763,12 @@ class GraphStore:
         if local_media:
             local_media["markdown_updated"] = markdown_updated
             local_media["upload_transport"] = upload_transport
+            local_media["durable_storage_verified"] = True
+            local_media["canonical_relative_path"] = relative_path.as_posix()
+            local_media["filename"] = relative_path.name
+            local_media["size_bytes"] = durable_evidence["size_bytes"]
+            local_media["sha256"] = durable_evidence["sha256"]
+            local_media["storage_disposition"] = durable_evidence.get("disposition")
         return local_media
 
     def history(self, slug):
@@ -3750,6 +3819,16 @@ class GraphStore:
 STORE = GraphStore()
 
 
+def attachment_storage_status():
+    for root in GBRAIN_FILE_STORE_ROOTS:
+        expanded = root.expanduser()
+        if expanded.is_dir() and os.access(expanded, os.R_OK | os.W_OK):
+            return {"available": True, "mode": "local-durable-root", "detail": "durable storage readable and writable"}
+    if GBRAIN_FILE_BASE_URLS:
+        return {"available": True, "mode": "trusted-host-endpoint", "detail": "durable hosting endpoint configured"}
+    return {"available": False, "mode": "unavailable", "detail": "durable storage unavailable"}
+
+
 def setup_diagnostics():
     """Return support-safe setup state without config values or node content."""
     graph = STORE.graph or {}
@@ -3761,11 +3840,13 @@ def setup_diagnostics():
         key for key, value in CONFIG.items()
         if value not in (None, "", [], {}) and not any(token in key.lower() for token in ("key", "secret", "token", "password"))
     )
+    attachment_storage = attachment_storage_status()
     checks = [
         {"id": "gbrain_binary", "ok": GBRAIN.exists(), "detail": "configured" if GBRAIN.exists() else "not found"},
         {"id": "graph_source", "ok": mode == "gbrain", "detail": mode},
         {"id": "root_index", "ok": bool(index_node and int(index_node.get("degree") or 0) > 0), "detail": "linked" if index_node else "missing"},
         {"id": "media", "ok": bool(GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS), "detail": "configured" if (GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS) else "not configured"},
+        {"id": "attachment_storage", "ok": attachment_storage["available"], "detail": attachment_storage["detail"]},
         {"id": "privacy", "ok": True, "detail": "local service; values and node content redacted"},
     ]
     failing = [check["id"] for check in checks if not check["ok"]]
@@ -3775,6 +3856,8 @@ def setup_diagnostics():
         next_action = "Refresh the graph and resolve the source warning before using customer data."
     elif "root_index" in failing:
         next_action = "Add useful links to the GBrain index node, then refresh."
+    elif "attachment_storage" in failing:
+        next_action = "Configure a durable GBrain file backend or trusted hosting file endpoint before attaching files."
     else:
         next_action = "Run Search, select a node, then use View or Ask Yoda to verify the first workflow."
     return {
@@ -3875,6 +3958,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "loaded": bool(STORE.graph),
                     "source": STORE.graph.get("source") if STORE.graph else None,
                     "stats": STORE.graph.get("stats") if STORE.graph else None,
+                    "attachment_storage": attachment_storage_status(),
                 }
             )
         if parsed.path == "/api/setup-diagnostics":

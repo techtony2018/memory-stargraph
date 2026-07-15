@@ -156,10 +156,48 @@ This means new web-service hosts should not need a full pre-synced `media/` mirr
 ## Attachment Consistency Rule
 
 The attach flow must never create a markdown-only media reference. A successful
-attachment requires both:
+attachment requires all of the following:
 
-1. `gbrain files upload <file> --page <slug>` succeeds.
-2. `gbrain files list <slug>` shows the uploaded filename.
+1. Memory Stargraph canonicalizes the filename once and uses that exact name for multipart staging, bridge paths, ledger verification, and Markdown.
+2. `gbrain files upload <file> --page <slug>` succeeds against a configured durable backend.
+3. GBrain reads the stored bytes back and emits `durable_storage_verified: true` with the canonical path, exact size, and SHA-256.
+4. `gbrain files list <slug>` shows exactly one matching page/filename row.
+5. Memory Stargraph returns the same structured evidence and updates Markdown only afterward.
+
+A ledger row or warm Stargraph cache is not proof that bytes are durable. Missing,
+unreadable, or unwritable storage must fail nonzero and leave Markdown unchanged.
+
+## Durable hosted local backend
+
+For a single trusted hosting machine, GBrain may use its `local` storage backend
+with a stable root outside disposable Stargraph caches, for example:
+
+```json
+{
+  "storage": {
+    "backend": "local",
+    "bucket": "brain-files",
+    "localPath": "/path/to/durable/gbrain-data/files"
+  }
+}
+```
+
+Configure the hosting Stargraph `gbrain_file_store_roots` to read that same root.
+Other Stargraph instances use the hosting `/gbrain-files/` HTTPS endpoint and keep
+only rebuildable caches. Do not configure a cache directory as the source root.
+
+`gbrain files verify` must read every backing object and compare its size and
+SHA-256 with the ledger. Inventory missing objects before migration, copy trusted
+legacy bytes without deleting their sources, then rerun verification. Cleanup of
+legacy copies requires a separate explicit review.
+
+## Backup and restore
+
+The durable storage root is part of the GBrain disaster-recovery set alongside
+Markdown, graph links, and the files ledger. A backup must retain relative paths,
+sizes, and SHA-256 values. Restore into the configured durable root, run
+`gbrain files verify`, clear only disposable Stargraph caches, and confirm a cold
+`/gbrain-files/<path>` read reproduces the ledger hash before declaring recovery.
 
 Only after both checks pass may Stargraph append or update markdown/frontmatter
 references such as `![Label](people/example/photo.jpg)`. If the upload command

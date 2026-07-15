@@ -3119,20 +3119,6 @@ body::after {
   border-radius: 0;
 }
 
-.graph-canvas-wrap::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  background:
-    radial-gradient(circle at 50% 50%, transparent 0 18%, rgba(34, 211, 238, 0.08) 18.2% 18.35%, transparent 18.6% 33%, rgba(34, 211, 238, 0.055) 33.2% 33.35%, transparent 33.6% 49%, rgba(34, 211, 238, 0.035) 49.2% 49.35%, transparent 49.6%),
-    linear-gradient(90deg, transparent 49.95%, rgba(34, 211, 238, 0.06) 50%, transparent 50.05%),
-    linear-gradient(0deg, transparent 49.95%, rgba(34, 211, 238, 0.05) 50%, transparent 50.05%);
-  opacity: 0.45;
-  mix-blend-mode: screen;
-}
-
 .graph-canvas-wrap::after {
   content: "";
   position: absolute;
