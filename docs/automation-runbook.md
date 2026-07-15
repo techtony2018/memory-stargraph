@@ -78,6 +78,8 @@ Prefer simple process tools such as `pgrep -f`, `ps -p`, `case`, and `lsof` over
 
 ## Browser Verification
 
+Present user-facing GBrain slugs as exact-label Markdown links using `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`. Before opening a browser tab, inspect existing tabs and reuse a suitable same-origin or same-source tab. Never close a reused user tab; close only a temporary tab created by the current run.
+
 Use Chrome CDP first for UI verification:
 
 ```bash

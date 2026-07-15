@@ -149,7 +149,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.139"
+UI_VERSION = "V1.0.140"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -3640,6 +3640,46 @@ class GraphStore:
 STORE = GraphStore()
 
 
+def setup_diagnostics():
+    """Return support-safe setup state without config values or node content."""
+    graph = STORE.graph or {}
+    source = graph.get("source") or {}
+    nodes = graph.get("nodes") or []
+    index_node = next((node for node in nodes if node.get("slug") == ROOT_INDEX_SLUG), None)
+    mode = str(source.get("mode") or "not-loaded")
+    config_keys = sorted(
+        key for key, value in CONFIG.items()
+        if value not in (None, "", [], {}) and not any(token in key.lower() for token in ("key", "secret", "token", "password"))
+    )
+    checks = [
+        {"id": "gbrain_binary", "ok": GBRAIN.exists(), "detail": "configured" if GBRAIN.exists() else "not found"},
+        {"id": "graph_source", "ok": mode == "gbrain", "detail": mode},
+        {"id": "root_index", "ok": bool(index_node and int(index_node.get("degree") or 0) > 0), "detail": "linked" if index_node else "missing"},
+        {"id": "media", "ok": bool(GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS), "detail": "configured" if (GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS) else "not configured"},
+        {"id": "privacy", "ok": True, "detail": "local service; values and node content redacted"},
+    ]
+    failing = [check["id"] for check in checks if not check["ok"]]
+    if "gbrain_binary" in failing:
+        next_action = "Configure an executable gbrain_path, then restart Memory Stargraph."
+    elif "graph_source" in failing:
+        next_action = "Refresh the graph and resolve the source warning before using customer data."
+    elif "root_index" in failing:
+        next_action = "Add useful links to the GBrain index node, then refresh."
+    else:
+        next_action = "Run Search, select a node, then use View or Ask Yoda to verify the first workflow."
+    return {
+        "ok": not failing,
+        "ui_version": UI_VERSION,
+        "source_mode": mode,
+        "source_status": str(source.get("status") or "not-loaded"),
+        "dashboard_url": "http://127.0.0.1:8788",
+        "checks": checks,
+        "failing_checks": failing,
+        "config_keys_present": config_keys,
+        "next_action": next_action,
+    }
+
+
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -3727,6 +3767,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "stats": STORE.graph.get("stats") if STORE.graph else None,
                 }
             )
+        if parsed.path == "/api/setup-diagnostics":
+            return self.end_json(setup_diagnostics())
         if parsed.path == "/api/graph":
             graph = STORE.get_seed_graph()
             return self.end_json(graph)

@@ -436,6 +436,26 @@ class ApiEndpointTests(unittest.TestCase):
             }.issubset(endpoints)
         )
 
+    def test_setup_diagnostics_is_redacted_and_actionable(self):
+        fake_store = FakeStore()
+        fake_store.graph = {
+            "source": {"mode": "gbrain", "status": "live", "warnings": []},
+            "nodes": [{"slug": "index", "degree": 3}],
+        }
+        with mock.patch("server.STORE", fake_store), mock.patch("server.GBRAIN") as gbrain_path:
+            gbrain_path.exists.return_value = True
+            status, data = self.dispatch_get("/api/setup-diagnostics")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["source_mode"], "gbrain")
+        self.assertIn("checks", data)
+        self.assertIn("next_action", data)
+        self.assertIn("config_keys_present", data)
+        self.assertNotIn("config_values", data)
+        self.assertNotIn("api_key", json.dumps(data).lower())
+
+
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):
