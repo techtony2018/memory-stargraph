@@ -999,6 +999,28 @@ cover_image: companies/example-inc/logo.jpg
             ]
         )
 
+    def test_ask_yoda_reuses_bounded_context_and_reports_privacy_safe_subphases(self):
+        store = GraphStore()
+        with (
+            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_openclaw_agent", return_value="agent answer"),
+        ):
+            run.side_effect = ["# Tony\n\nEngineer", "graph", "backlinks", "search"]
+            cold = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
+            warm = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
+
+        self.assertFalse(cold["diagnostics"]["context_cache_hit"])
+        self.assertTrue(warm["diagnostics"]["context_cache_hit"])
+        self.assertEqual(run.call_count, 4)
+        self.assertIn("context_subphases_ms", cold["diagnostics"])
+        self.assertEqual(
+            set(cold["diagnostics"]["context_subphases_ms"]),
+            {"selected_node", "graph", "backlinks", "search", "direct_reads", "assembly"},
+        )
+        self.assertNotIn("prompt", cold["diagnostics"])
+        store.invalidate()
+        self.assertEqual(store.yoda_prompt_cache, {})
+
     def test_extract_openclaw_answer_ignores_cli_warnings(self):
         output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'
 

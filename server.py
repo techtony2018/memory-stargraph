@@ -153,7 +153,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.141"
+UI_VERSION = "V1.0.142"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -3068,6 +3068,7 @@ class GraphStore:
         self.loaded_at = 0.0
         self.refreshing = False
         self.condition = threading.Condition()
+        self.yoda_prompt_cache = {}
 
     def get_graph(self, force=False):
         now = time.time()
@@ -3195,6 +3196,7 @@ class GraphStore:
         with self.condition:
             self.graph = None
             self.loaded_at = 0.0
+            self.yoda_prompt_cache = {}
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
         slug = node.get("slug")
@@ -3427,8 +3429,10 @@ class GraphStore:
         sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
         return "\n\n".join(sections)
 
-    def build_yoda_prompt(self, slug, question, history=None, depth="4"):
+    def build_yoda_prompt(self, slug, question, history=None, depth="4", trace=None):
         history = history or []
+        trace = trace if isinstance(trace, dict) else {}
+        phase_started = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
         prompt_state = yoda_system_prompt_state()
         lines = [
@@ -3446,8 +3450,10 @@ class GraphStore:
                 if content:
                     lines.append(f"- {role}: {content}")
         raw = self.get_entity_raw(slug) or ""
+        trace["selected_node"] = int((time.perf_counter() - phase_started) * 1000)
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
+        phase_started = time.perf_counter()
         try:
             graph_output = run_gbrain(
                 "graph-query",
@@ -3460,12 +3466,16 @@ class GraphStore:
             )
         except Exception as exc:  # noqa: BLE001
             graph_output = f"Direct relationship context unavailable: {exc}"
+        trace["graph"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
+        phase_started = time.perf_counter()
         try:
             backlink_output = run_gbrain("backlinks", slug)
         except Exception as exc:  # noqa: BLE001
             backlink_output = f"Backlink context unavailable: {exc}"
+        trace["backlinks"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Backlink context:", str(backlink_output or "")[:4000]])
+        phase_started = time.perf_counter()
         try:
             search_output = run_gbrain(
                 "query",
@@ -3479,11 +3489,13 @@ class GraphStore:
             )
         except Exception as exc:  # noqa: BLE001
             search_output = f"Broader retrieval unavailable: {exc}"
+        trace["search"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Broader retrieval context:", str(search_output or "")[:6000]])
         search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
         if not search_slugs:
             search_slugs = parse_slugs(str(search_output or ""))
         likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
+        phase_started = time.perf_counter()
         if likely_slugs:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
@@ -3493,14 +3505,28 @@ class GraphStore:
                 except Exception as exc:  # noqa: BLE001
                     candidate_raw = f"Unable to read {candidate}: {exc}"
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
-        return "\n".join(lines)
+        trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
+        phase_started = time.perf_counter()
+        prompt = "\n".join(lines)
+        trace["assembly"] = int((time.perf_counter() - phase_started) * 1000)
+        return prompt
 
     def ask_yoda(self, slug, question, history=None, depth="4"):
         request_id = f"yoda-{int(time.time() * 1000)}"
         started_at = time.perf_counter()
         prompt_started_at = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
-        prompt = self.build_yoda_prompt(slug, question, history, yoda_depth)
+        cache_payload = json.dumps({"slug": slug, "question": question, "history": history or [], "depth": yoda_depth}, sort_keys=True, ensure_ascii=False)
+        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
+        cache_entry = self.yoda_prompt_cache.get(cache_key) or {}
+        context_cache_hit = bool(cache_entry and time.time() - float(cache_entry.get("created_at") or 0) <= 300)
+        if context_cache_hit:
+            prompt = cache_entry["prompt"]
+            context_subphases_ms = {key: 0 for key in ("selected_node", "graph", "backlinks", "search", "direct_reads", "assembly")}
+        else:
+            context_subphases_ms = {}
+            prompt = self.build_yoda_prompt(slug, question, history, yoda_depth, trace=context_subphases_ms)
+            self.yoda_prompt_cache = {cache_key: {"created_at": time.time(), "prompt": prompt}}
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
         agent_result = run_yoda_model(prompt, return_details=True)
@@ -3516,6 +3542,12 @@ class GraphStore:
             "selected_slug": slug,
             "depth": yoda_depth,
             "timings": timings,
+            "context_cache_hit": context_cache_hit,
+            "context_subphases_ms": context_subphases_ms,
+            "context_counts": {
+                "prompt_chars": len(prompt),
+                "history_messages": len(history or []),
+            },
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
             "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",
