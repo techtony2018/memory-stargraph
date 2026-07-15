@@ -66,6 +66,8 @@ The Stargraph service should then:
 7. Append a markdown reference such as `![description](relative/path.jpg)` or `[description](relative/path.pdf)` to the selected node.
 8. Refresh the graph/cache for the selected node.
 
+When the local CLI is a thin-client/localOnly install, configure `gbrain_files_bridge_ssh` with a trusted GBrain storage host and optionally `gbrain_files_bridge_path`. The service copies the temporary upload with `scp`, runs upload and ledger readback under a minimal deterministic remote `bash` environment, removes only its remote temporary file, and updates markdown only after the returned ledger contains the page and filename. Environment variables `MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_SSH` and `MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_PATH` override the local-only config.
+
 This is the preferred user-facing workflow because it updates the page reference and the stored file bytes together.
 
 ## Manual Single-File Import

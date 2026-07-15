@@ -14,6 +14,8 @@
   "remote_media_base_urls": [],
   "gbrain_file_base_urls": [],
   "gbrain_file_store_roots": [],
+  "gbrain_files_bridge_ssh": "",
+  "gbrain_files_bridge_path": "gbrain",
   "media_fetch_timeout_seconds": 8,
   "max_upload_bytes": 26214400,
   "yoda_backend": "openclaw",

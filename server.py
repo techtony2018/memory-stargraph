@@ -42,6 +42,8 @@ DEFAULT_CONFIG = {
     "remote_media_base_urls": [],
     "gbrain_file_base_urls": [],
     "gbrain_file_store_roots": [],
+    "gbrain_files_bridge_ssh": "",
+    "gbrain_files_bridge_path": "gbrain",
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
     "yoda_backend": "openclaw",
@@ -145,11 +147,13 @@ GBRAIN_FILE_STORE_ROOTS = [
     for root in str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILE_STORE_ROOTS", "")).split(",")
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("gbrain_file_store_roots", [])]
+GBRAIN_FILES_BRIDGE_SSH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_SSH", CONFIG.get("gbrain_files_bridge_ssh", ""))).strip()
+GBRAIN_FILES_BRIDGE_PATH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_PATH", CONFIG.get("gbrain_files_bridge_path", "gbrain"))).strip() or "gbrain"
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.140"
+UI_VERSION = "V1.0.141"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1828,23 +1832,87 @@ def copy_file_to_gbrain_store(source_path, relative_path):
     return None
 
 
-def gbrain_file_ledger_has_relative_path(slug, relative_path):
+def gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=None):
     safe_path = safe_media_relative_path(str(relative_path or ""))
     if not safe_path:
         return False
-    try:
-        output = run_gbrain("files", "list", slug)
-    except Exception:  # noqa: BLE001
-        return False
+    output = ledger_output
+    if output is None:
+        try:
+            output = run_gbrain("files", "list", slug)
+        except Exception:  # noqa: BLE001
+            return False
     filename = safe_path.name
     page = str(slug or "").strip("/")
     for line in str(output or "").splitlines():
-        if filename not in line:
+        listed_page, separator, listed_file = line.strip().partition(" / ")
+        if not separator:
             continue
-        if page and page not in line:
-            continue
-        return True
+        listed_file = listed_file.split("  [", 1)[0].strip()
+        if listed_page == page and listed_file == filename:
+            return True
     return False
+
+
+def run_gbrain_files_bridge(file_path, slug):
+    if not GBRAIN_FILES_BRIDGE_SSH:
+        raise RuntimeError("No trusted GBrain files SSH bridge is configured.")
+    source = Path(file_path).expanduser()
+    if not source.is_file():
+        raise RuntimeError("Attachment source file is unavailable for the GBrain files bridge.")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip(".-") or "upload.bin"
+    create_dir = subprocess.run(
+        ["ssh", GBRAIN_FILES_BRIDGE_SSH, "bash", "-s"],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=30,
+        check=False,
+        input=b"set -euo pipefail\nmktemp -d /tmp/memory-stargraph-upload.XXXXXX\n",
+    )
+    if create_dir.returncode != 0:
+        raise RuntimeError(f"GBrain files bridge temp directory failed: {decode_process_output(create_dir.stderr).strip() or 'mktemp failed'}")
+    remote_dir = decode_process_output(create_dir.stdout).strip().splitlines()[-1]
+    if not remote_dir.startswith("/tmp/memory-stargraph-upload."):
+        raise RuntimeError("GBrain files bridge returned an unsafe temporary directory.")
+    remote_path = f"{remote_dir}/{safe_name}"
+    copied = subprocess.run(
+        ["scp", "-q", "--", str(source), f"{GBRAIN_FILES_BRIDGE_SSH}:{remote_path}"],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if copied.returncode != 0:
+        subprocess.run(
+            ["ssh", GBRAIN_FILES_BRIDGE_SSH, "rmdir", "--", remote_dir],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        raise RuntimeError(f"GBrain files bridge copy failed: {decode_process_output(copied.stderr).strip() or 'scp failed'}")
+    script = """set -euo pipefail
+remote_file="$1"
+page_slug="$2"
+gbrain_bin="$3"
+remote_dir="${remote_file%/*}"
+trap 'rm -f -- "$remote_file"; rmdir -- "$remote_dir" 2>/dev/null || true' EXIT
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+"$gbrain_bin" files upload "$remote_file" --page "$page_slug"
+"$gbrain_bin" files list "$page_slug"
+"""
+    result = subprocess.run(
+        ["ssh", GBRAIN_FILES_BRIDGE_SSH, "bash", "-s", "--", remote_path, str(slug), GBRAIN_FILES_BRIDGE_PATH],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=90,
+        check=False,
+        input=script.encode("utf-8"),
+    )
+    if result.returncode != 0:
+        message = decode_process_output(result.stderr).strip() or decode_process_output(result.stdout).strip()
+        raise RuntimeError(f"GBrain files bridge upload/list failed: {message or result.returncode}")
+    return decode_process_output(result.stdout)
 
 
 def extract_first_http_url(text):
@@ -3569,14 +3637,19 @@ class GraphStore:
         relative_path = relative_path_for_local_media(local_media)
         if not relative_path:
             raise RuntimeError("Could not create a safe relative media path for this attachment.")
+        upload_transport = "local"
+        ledger_output = None
         try:
             run_gbrain("files", "upload", file_path, "--page", slug)
         except RuntimeError as exc:
-            raise RuntimeError(
-                "Attachment upload did not reach GBrain files; markdown was not updated. "
-                "Fix the GBrain file upload path and try again."
-            ) from exc
-        if not gbrain_file_ledger_has_relative_path(slug, relative_path):
+            if not GBRAIN_FILES_BRIDGE_SSH:
+                raise RuntimeError(
+                    "Attachment upload did not reach GBrain files; markdown was not updated. "
+                    "Configure a trusted GBrain files bridge and try again."
+                ) from exc
+            ledger_output = run_gbrain_files_bridge(file_path, slug)
+            upload_transport = "ssh-bridge"
+        if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
             raise RuntimeError(
                 f"Attachment upload was not visible in GBrain files for {slug}; markdown was not updated."
             )
@@ -3590,6 +3663,7 @@ class GraphStore:
         self.invalidate()
         if local_media:
             local_media["markdown_updated"] = markdown_updated
+            local_media["upload_transport"] = upload_transport
         return local_media
 
     def history(self, slug):
