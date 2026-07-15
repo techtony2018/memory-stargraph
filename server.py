@@ -149,7 +149,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.138"
+UI_VERSION = "V1.0.139"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -921,11 +921,33 @@ def resolver_list_events(limit=50, producer=None, outcome=None):
     return gbrain_call_tool("resolver_events_list", payload, timeout=20)
 
 
+def normalize_resolver_proposal(row):
+    proposal = dict(row) if isinstance(row, dict) else {}
+    impact = proposal.get("impact")
+    if isinstance(impact, str):
+        try:
+            impact = json.loads(impact)
+        except json.JSONDecodeError:
+            impact = {}
+    proposal["impact"] = impact if isinstance(impact, dict) else {}
+    evidence = proposal.get("evidence")
+    evidence_count = parse_nonnegative_int(proposal.get("evidence_count"), 0)
+    if isinstance(evidence, list):
+        evidence_count = max(evidence_count, len(evidence))
+    proposal["evidence_count"] = evidence_count
+    return proposal
+
+
 def resolver_list_proposals(status_filter="", limit=100):
     payload = {"limit": limit}
     if status_filter:
         payload["status"] = status_filter
-    return gbrain_call_tool("resolver_proposals_list", payload, timeout=30)
+    data = gbrain_call_tool("resolver_proposals_list", payload, timeout=30)
+    if not isinstance(data, dict) or not isinstance(data.get("proposals"), list):
+        return data
+    normalized = dict(data)
+    normalized["proposals"] = [normalize_resolver_proposal(row) for row in data["proposals"]]
+    return normalized
 
 
 def resolver_generate_proposals(payload=None):
@@ -988,6 +1010,14 @@ def parse_nonnegative_int(value, default=0):
         return max(0, int(value))
     except (TypeError, ValueError):
         return default
+
+
+def parse_bounded_int(value, default, minimum, maximum):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
 
 
 def holder_filter_is_wildcard(value):
@@ -3724,7 +3754,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json({"ok": True, "slug": slug, "messages": yoda_chat_history(slug)})
         if parsed.path == "/api/resolver/events":
             query = parse_qs(parsed.query)
-            limit = (query.get("limit") or ["50"])[0]
+            limit = parse_bounded_int((query.get("limit") or ["50"])[0], 50, 1, MAX_RESOLVER_EVENTS)
             producer = (query.get("producer") or [""])[0].strip()
             outcome = (query.get("outcome") or [""])[0].strip()
             try:

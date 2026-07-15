@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.138";
+const UI_VERSION = "V1.0.139";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -5052,6 +5052,21 @@ function resolverProposalMeta(proposal) {
   return [proposal.kind || "proposal", proposal.status || "pending", confidence, proposal.target_ref || proposal.target || ""].filter(Boolean).join(" · ");
 }
 
+function normalizeResolverImpact(proposal) {
+  const rawImpact = proposal?.impact;
+  const impact = typeof rawImpact === "string" ? safeJsonParse(rawImpact, {}) : rawImpact;
+  return impact && typeof impact === "object" && !Array.isArray(impact) ? impact : {};
+}
+
+function resolverEvidenceSummary(proposal) {
+  const examples = Array.isArray(proposal?.example_intents) ? proposal.example_intents.filter(Boolean) : [];
+  if (examples.length) return examples.slice(0, 3).join(" / ");
+  const rawCount = proposal?.evidence_count ?? (Array.isArray(proposal?.evidence) ? proposal.evidence.length : 0);
+  const count = Math.max(0, Number.parseInt(rawCount, 10) || 0);
+  if (count) return `${count} evidence event${count === 1 ? "" : "s"} · raw examples withheld.`;
+  return "Evidence unavailable; no raw examples were provided.";
+}
+
 function renderResolverHealth() {
   if (!resolverHealthPanel) return;
   resolverHealthPanel.innerHTML = "";
@@ -5104,16 +5119,23 @@ function renderResolverProposalRows() {
     meta.textContent = resolverProposalMeta(proposal);
     const evidence = document.createElement("p");
     evidence.className = "resolver-proposal-evidence";
-    const examples = proposal.example_intents || [];
-    evidence.textContent = examples.length ? examples.slice(0, 3).join(" / ") : "No examples attached.";
+    evidence.textContent = resolverEvidenceSummary(proposal);
     const impact = document.createElement("div");
     impact.className = "resolver-impact-grid";
-    const before = proposal.impact?.before || {};
-    const after = proposal.impact?.after || {};
+    const normalizedImpact = normalizeResolverImpact(proposal);
+    const before = normalizedImpact.before || {};
+    const after = normalizedImpact.after || {};
     [
+      ["Before events", before.event_count ?? 0],
       ["Before fallback", before.fallback_count ?? 0],
       ["Before timeout", before.timeout_count ?? 0],
+      ["Before success", before.success_count ?? 0],
+      ["Before corrections", before.manual_correction_count ?? 0],
+      ["After events", after.event_count ?? 0],
+      ["After fallback", after.fallback_count ?? 0],
+      ["After timeout", after.timeout_count ?? 0],
       ["After success", after.success_count ?? 0],
+      ["After corrections", after.manual_correction_count ?? 0],
     ].forEach(([label, value]) => {
       const item = document.createElement("span");
       item.textContent = `${label}: ${value}`;

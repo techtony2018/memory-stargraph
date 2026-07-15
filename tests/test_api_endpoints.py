@@ -677,6 +677,67 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["events"][0]["event_id"], "stargraph-1")
         self.assertEqual(fake_gbrain_call.call_args_list[0].args[0], "resolver_events_submit")
         self.assertEqual(fake_gbrain_call.call_args_list[1].args[0], "resolver_events_list")
+        self.assertEqual(fake_gbrain_call.call_args_list[1].args[1], {"limit": 2, "producer": "stargraph"})
+
+    def test_resolver_events_api_coerces_and_clamps_limits(self):
+        cases = [
+            ("/api/resolver/events", 50),
+            ("/api/resolver/events?limit=50", 50),
+            ("/api/resolver/events?limit=invalid", 50),
+            ("/api/resolver/events?limit=-4", 1),
+            ("/api/resolver/events?limit=9999", server.MAX_RESOLVER_EVENTS),
+        ]
+        for path, expected_limit in cases:
+            with self.subTest(path=path), mock.patch("server.gbrain_call_tool", return_value={"events": []}) as fake_gbrain_call:
+                status, data = self.dispatch_get(path)
+
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            payload = fake_gbrain_call.call_args.args[1]
+            self.assertEqual(payload["limit"], expected_limit)
+            self.assertIsInstance(payload["limit"], int)
+
+        with mock.patch("server.gbrain_call_tool", return_value={"events": []}) as fake_gbrain_call:
+            status, _data = self.dispatch_get("/api/resolver/events?limit=8&producer=codex&outcome=fallback")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(fake_gbrain_call.call_args.args[1], {
+            "limit": 8,
+            "producer": "codex",
+            "outcome": "fallback",
+        })
+
+    def test_resolver_proposals_api_normalizes_hosted_and_local_impact_payloads(self):
+        hosted_impact = json.dumps({
+            "before": {
+                "event_count": 5,
+                "fallback_count": 5,
+                "timeout_count": 0,
+                "success_count": 0,
+                "manual_correction_count": 0,
+            },
+            "after": {},
+        })
+        local_impact = {
+            "before": {"event_count": 3, "fallback_count": 1},
+            "after": {"event_count": 2, "success_count": 2},
+        }
+        with mock.patch("server.gbrain_call_tool", return_value={
+            "proposals": [
+                {"id": "rp-hosted", "impact": hosted_impact, "evidence_count": 5},
+                {"id": "rp-local", "impact": local_impact, "evidence": [{"event_id": "event-1"}]},
+            ],
+            "total": 2,
+        }):
+            status, data = self.dispatch_get("/api/resolver/proposals?status=pending")
+
+        self.assertEqual(status, 200)
+        hosted, local = data["proposals"]
+        self.assertEqual(hosted["impact"]["before"]["event_count"], 5)
+        self.assertEqual(hosted["impact"]["before"]["fallback_count"], 5)
+        self.assertEqual(hosted["evidence_count"], 5)
+        self.assertEqual(local["impact"], local_impact)
+        self.assertEqual(local["evidence_count"], 1)
 
     def test_gbrain_call_tool_prefers_top_level_object_over_nested_lists(self):
         output = json.dumps({
