@@ -37,6 +37,14 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("completed-archive-0001", runbook)
         self.assertIn("0-49 completed rows", runbook)
 
+    def test_wish_worker_lands_pushed_work_on_main(self):
+        prompt = (ROOT / "automations" / "memory-stargraph-wish-to-reallity" / "prompt.md").read_text()
+
+        self.assertIn("Push the work branch to origin", prompt)
+        self.assertIn("merge the pushed work into `main`", prompt)
+        self.assertIn("push `main` to origin", prompt)
+        self.assertIn("`main` merge/push result", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
