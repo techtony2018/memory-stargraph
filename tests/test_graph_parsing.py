@@ -614,6 +614,34 @@ cover_image: companies/example-inc/logo.jpg
             self.assertEqual(put_calls, [])
             invalidate.assert_not_called()
 
+    def test_graph_store_attach_file_uses_remote_bridge_after_local_upload_failure(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "Bridge.jpg"
+            source.write_bytes(b"bridge jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.GBRAIN_FILES_BRIDGE_SSH", "toddy@example"),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch("server.run_gbrain_files_bridge") as bridge,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                run.side_effect = [
+                    "# Bridge\n\nNotes.",
+                    RuntimeError("localOnly thin-client has no storage"),
+                    "",
+                ]
+                bridge.return_value = "1 file(s):\n  people/bridge / Bridge.jpg  [10B, image/jpeg]"
+                result = store.attach_file("people/bridge", str(source), "Bridge image")
+
+            bridge.assert_called_once_with(str(source), "people/bridge")
+            self.assertTrue(result["markdown_updated"])
+            self.assertEqual(result["upload_transport"], "ssh-bridge")
+            run.assert_any_call("put", "people/bridge", input_text=mock.ANY)
+            invalidate.assert_called_once()
+
     def test_graph_store_attach_file_refuses_markdown_when_ledger_misses_upload(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "media"
@@ -639,6 +667,17 @@ cover_image: companies/example-inc/logo.jpg
         with mock.patch("server.run_gbrain", return_value=output):
             self.assertTrue(gbrain_file_ledger_has_relative_path("people/garry-tan", "people/garry-tan/Garry.jpg"))
             self.assertFalse(gbrain_file_ledger_has_relative_path("people/tony-guan", "people/garry-tan/Garry.jpg"))
+            self.assertFalse(gbrain_file_ledger_has_relative_path("people/garry-tan", "people/garry-tan/not-Garry.jpg"))
+
+    def test_gbrain_file_ledger_rejects_prefixed_remote_temp_filename(self):
+        output = "1 file(s):\n  people/bridge / memory-stargraph-upload-123-Bridge.jpg  [10B, image/jpeg]\n"
+        self.assertFalse(
+            gbrain_file_ledger_has_relative_path(
+                "people/bridge",
+                "people/bridge/Bridge.jpg",
+                ledger_output=output,
+            )
+        )
 
     def test_part_identity_collapses_slug_and_label(self):
         slug, label, collapsed = collapse_part_identity(
@@ -959,6 +998,28 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("get", "notes/tai-chi/white-swan"),
             ]
         )
+
+    def test_ask_yoda_reuses_bounded_context_and_reports_privacy_safe_subphases(self):
+        store = GraphStore()
+        with (
+            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_openclaw_agent", return_value="agent answer"),
+        ):
+            run.side_effect = ["# Tony\n\nEngineer", "graph", "backlinks", "search"]
+            cold = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
+            warm = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
+
+        self.assertFalse(cold["diagnostics"]["context_cache_hit"])
+        self.assertTrue(warm["diagnostics"]["context_cache_hit"])
+        self.assertEqual(run.call_count, 4)
+        self.assertIn("context_subphases_ms", cold["diagnostics"])
+        self.assertEqual(
+            set(cold["diagnostics"]["context_subphases_ms"]),
+            {"selected_node", "graph", "backlinks", "search", "direct_reads", "assembly"},
+        )
+        self.assertNotIn("prompt", cold["diagnostics"])
+        store.invalidate()
+        self.assertEqual(store.yoda_prompt_cache, {})
 
     def test_extract_openclaw_answer_ignores_cli_warnings(self):
         output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'

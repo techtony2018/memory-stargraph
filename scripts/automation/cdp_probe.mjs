@@ -32,7 +32,16 @@ if (!chromium) {
 
 const browser = await chromium.connectOverCDP(cdpUrl);
 const context = browser.contexts()[0] || await browser.newContext();
-const page = await context.newPage();
+const targetOrigin = new URL(appUrl).origin;
+let page = context.pages().find((candidate) => {
+  try {
+    return new URL(candidate.url()).origin === targetOrigin;
+  } catch {
+    return false;
+  }
+});
+const createdPage = !page;
+if (!page) page = await context.newPage();
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message || String(error)));
 page.on("console", (message) => {
@@ -74,6 +83,6 @@ try {
   if (!probe.noPlannedFlightRailButton) throw new Error(`unexpected separate Planned Flight rail button: ${JSON.stringify(probe)}`);
   console.log(JSON.stringify({ ok: true, appUrl, cdpUrl, probe, errors }, null, 2));
 } finally {
-  await page.close().catch(() => {});
+  if (createdPage) await page.close().catch(() => {});
   await browser.close().catch(() => {});
 }

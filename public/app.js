@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.139";
+const UI_VERSION = "V1.0.143";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -219,6 +219,7 @@ const modalYodaClearHistoryButton = document.getElementById("modalYodaClearHisto
 const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
+const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -258,6 +259,17 @@ function stableHash(value) {
     hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
   }
   return hash;
+}
+
+function requestedSlugFromLocation() {
+  return (new URLSearchParams(window.location.search).get("slug") || "").trim();
+}
+
+function replaceLocationSlug(slug) {
+  const url = new URL(window.location.href);
+  if (slug) url.searchParams.set("slug", slug);
+  else url.searchParams.delete("slug");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function hexToRgba(hex, alpha) {
@@ -3431,6 +3443,30 @@ function openYodaLogWindow(options = {}) {
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
 }
 
+async function openSetupDiagnosticsWindow() {
+  hideFloatingPanels();
+  modalKicker.textContent = "First-run setup";
+  modalTitle.textContent = "Checklist & diagnostics";
+  modalMessage.textContent = "Safe to copy: configuration values and node content are redacted.";
+  modalPrimaryButton.textContent = "Close";
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  operationModal.hidden = false;
+  state.modalAction = { action: "setup-diagnostics", slug: "", label: "Setup diagnostics" };
+  const response = await apiGet("/api/setup-diagnostics");
+  const pre = document.createElement("pre");
+  pre.className = "yoda-log-window";
+  pre.textContent = response.ok
+    ? JSON.stringify(response.data, null, 2)
+    : `Diagnostics unavailable: ${response.data?.error || response.status}`;
+  modalMarkdown.appendChild(pre);
+}
+
 function captureYodaModelReturn() {
   if (!operationModal.hidden && state.modalAction?.action && state.modalAction.action !== "yoda-model") {
     return { surface: "modal", action: state.modalAction.action, slug: state.modalAction.slug || state.focusSlug || "" };
@@ -5764,7 +5800,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "media" || action === "result" || action === "take-review") {
+  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics") {
     closeModal();
     return;
   }
@@ -6129,6 +6165,8 @@ async function loadEntity(slug, options = {}) {
       if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
       detailType.textContent = `${requested?.category || requested?.type || "entity"} · partial info`;
       detailSummary.textContent = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}.`;
+      if (options.source !== "system") replaceLocationSlug(slug);
+      hoverLabel.textContent = `Node unavailable: ${slug}. The graph remains ready.`;
       setHover(slug);
       return { status: "partial", slug, httpStatus: response.status };
     }
@@ -6136,6 +6174,7 @@ async function loadEntity(slug, options = {}) {
     const payload = response.data;
     const { entity, neighbors, second_ring: secondRing, source } = payload;
     state.focusSlug = entity.slug;
+    if (options.source !== "system") replaceLocationSlug(entity.slug);
     updateAskYodaButtons();
     if (options.recordHistory !== false) {
       recordSelectionHistory(entity.slug);
@@ -6426,6 +6465,9 @@ function bindEvents() {
   });
   settingsYodaPromptButton?.addEventListener("click", () => {
     void openYodaPromptWindow();
+  });
+  settingsDiagnosticsButton?.addEventListener("click", () => {
+    void openSetupDiagnosticsWindow();
   });
   resolverReviewCloseButton?.addEventListener("click", closeResolverReviewModal);
   resolverRefreshButton?.addEventListener("click", () => {
@@ -7012,7 +7054,11 @@ async function init() {
   setZoom(state.zoom);
   await fetchHidden();
   await loadPersistentYodaLogs();
+  const requestedSlug = requestedSlugFromLocation();
   await fetchGraph();
+  if (requestedSlug) {
+    await loadEntity(requestedSlug, { source: "deep-link", recordHistory: false });
+  }
   if (!state.animationHandle) {
     requestRender();
   }

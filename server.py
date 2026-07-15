@@ -42,6 +42,8 @@ DEFAULT_CONFIG = {
     "remote_media_base_urls": [],
     "gbrain_file_base_urls": [],
     "gbrain_file_store_roots": [],
+    "gbrain_files_bridge_ssh": "",
+    "gbrain_files_bridge_path": "gbrain",
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
     "yoda_backend": "openclaw",
@@ -145,11 +147,13 @@ GBRAIN_FILE_STORE_ROOTS = [
     for root in str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILE_STORE_ROOTS", "")).split(",")
     if root.strip()
 ] or [resolve_project_path(root) for root in CONFIG.get("gbrain_file_store_roots", [])]
+GBRAIN_FILES_BRIDGE_SSH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_SSH", CONFIG.get("gbrain_files_bridge_ssh", ""))).strip()
+GBRAIN_FILES_BRIDGE_PATH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_PATH", CONFIG.get("gbrain_files_bridge_path", "gbrain"))).strip() or "gbrain"
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.139"
+UI_VERSION = "V1.0.143"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -908,6 +912,10 @@ def resolver_submit_event(payload):
         "correction_signal": sanitize_text_summary(payload.get("correction_signal"), 160),
         "operation_path": sanitize_text_summary(payload.get("operation_path") or payload.get("operation"), 160),
         "client_timestamp": iso_now(),
+        "environment": sanitize_text_summary(payload.get("environment"), 40) or "production",
+        "synthetic": payload.get("synthetic") is True,
+        "test_run": payload.get("test_run") is True,
+        "pair_id": sanitize_text_summary(payload.get("pair_id"), 160),
     }
     return gbrain_call_tool("resolver_events_submit", event_payload, timeout=20)
 
@@ -1828,23 +1836,87 @@ def copy_file_to_gbrain_store(source_path, relative_path):
     return None
 
 
-def gbrain_file_ledger_has_relative_path(slug, relative_path):
+def gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=None):
     safe_path = safe_media_relative_path(str(relative_path or ""))
     if not safe_path:
         return False
-    try:
-        output = run_gbrain("files", "list", slug)
-    except Exception:  # noqa: BLE001
-        return False
+    output = ledger_output
+    if output is None:
+        try:
+            output = run_gbrain("files", "list", slug)
+        except Exception:  # noqa: BLE001
+            return False
     filename = safe_path.name
     page = str(slug or "").strip("/")
     for line in str(output or "").splitlines():
-        if filename not in line:
+        listed_page, separator, listed_file = line.strip().partition(" / ")
+        if not separator:
             continue
-        if page and page not in line:
-            continue
-        return True
+        listed_file = listed_file.split("  [", 1)[0].strip()
+        if listed_page == page and listed_file == filename:
+            return True
     return False
+
+
+def run_gbrain_files_bridge(file_path, slug):
+    if not GBRAIN_FILES_BRIDGE_SSH:
+        raise RuntimeError("No trusted GBrain files SSH bridge is configured.")
+    source = Path(file_path).expanduser()
+    if not source.is_file():
+        raise RuntimeError("Attachment source file is unavailable for the GBrain files bridge.")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip(".-") or "upload.bin"
+    create_dir = subprocess.run(
+        ["ssh", GBRAIN_FILES_BRIDGE_SSH, "bash", "-s"],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=30,
+        check=False,
+        input=b"set -euo pipefail\nmktemp -d /tmp/memory-stargraph-upload.XXXXXX\n",
+    )
+    if create_dir.returncode != 0:
+        raise RuntimeError(f"GBrain files bridge temp directory failed: {decode_process_output(create_dir.stderr).strip() or 'mktemp failed'}")
+    remote_dir = decode_process_output(create_dir.stdout).strip().splitlines()[-1]
+    if not remote_dir.startswith("/tmp/memory-stargraph-upload."):
+        raise RuntimeError("GBrain files bridge returned an unsafe temporary directory.")
+    remote_path = f"{remote_dir}/{safe_name}"
+    copied = subprocess.run(
+        ["scp", "-q", "--", str(source), f"{GBRAIN_FILES_BRIDGE_SSH}:{remote_path}"],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if copied.returncode != 0:
+        subprocess.run(
+            ["ssh", GBRAIN_FILES_BRIDGE_SSH, "rmdir", "--", remote_dir],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        raise RuntimeError(f"GBrain files bridge copy failed: {decode_process_output(copied.stderr).strip() or 'scp failed'}")
+    script = """set -euo pipefail
+remote_file="$1"
+page_slug="$2"
+gbrain_bin="$3"
+remote_dir="${remote_file%/*}"
+trap 'rm -f -- "$remote_file"; rmdir -- "$remote_dir" 2>/dev/null || true' EXIT
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+"$gbrain_bin" files upload "$remote_file" --page "$page_slug"
+"$gbrain_bin" files list "$page_slug"
+"""
+    result = subprocess.run(
+        ["ssh", GBRAIN_FILES_BRIDGE_SSH, "bash", "-s", "--", remote_path, str(slug), GBRAIN_FILES_BRIDGE_PATH],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=90,
+        check=False,
+        input=script.encode("utf-8"),
+    )
+    if result.returncode != 0:
+        message = decode_process_output(result.stderr).strip() or decode_process_output(result.stdout).strip()
+        raise RuntimeError(f"GBrain files bridge upload/list failed: {message or result.returncode}")
+    return decode_process_output(result.stdout)
 
 
 def extract_first_http_url(text):
@@ -3000,6 +3072,7 @@ class GraphStore:
         self.loaded_at = 0.0
         self.refreshing = False
         self.condition = threading.Condition()
+        self.yoda_prompt_cache = {}
 
     def get_graph(self, force=False):
         now = time.time()
@@ -3127,6 +3200,7 @@ class GraphStore:
         with self.condition:
             self.graph = None
             self.loaded_at = 0.0
+            self.yoda_prompt_cache = {}
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
         slug = node.get("slug")
@@ -3359,8 +3433,10 @@ class GraphStore:
         sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
         return "\n\n".join(sections)
 
-    def build_yoda_prompt(self, slug, question, history=None, depth="4"):
+    def build_yoda_prompt(self, slug, question, history=None, depth="4", trace=None):
         history = history or []
+        trace = trace if isinstance(trace, dict) else {}
+        phase_started = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
         prompt_state = yoda_system_prompt_state()
         lines = [
@@ -3378,8 +3454,10 @@ class GraphStore:
                 if content:
                     lines.append(f"- {role}: {content}")
         raw = self.get_entity_raw(slug) or ""
+        trace["selected_node"] = int((time.perf_counter() - phase_started) * 1000)
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
+        phase_started = time.perf_counter()
         try:
             graph_output = run_gbrain(
                 "graph-query",
@@ -3392,12 +3470,16 @@ class GraphStore:
             )
         except Exception as exc:  # noqa: BLE001
             graph_output = f"Direct relationship context unavailable: {exc}"
+        trace["graph"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
+        phase_started = time.perf_counter()
         try:
             backlink_output = run_gbrain("backlinks", slug)
         except Exception as exc:  # noqa: BLE001
             backlink_output = f"Backlink context unavailable: {exc}"
+        trace["backlinks"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Backlink context:", str(backlink_output or "")[:4000]])
+        phase_started = time.perf_counter()
         try:
             search_output = run_gbrain(
                 "query",
@@ -3411,11 +3493,13 @@ class GraphStore:
             )
         except Exception as exc:  # noqa: BLE001
             search_output = f"Broader retrieval unavailable: {exc}"
+        trace["search"] = int((time.perf_counter() - phase_started) * 1000)
         lines.extend(["", "Broader retrieval context:", str(search_output or "")[:6000]])
         search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
         if not search_slugs:
             search_slugs = parse_slugs(str(search_output or ""))
         likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
+        phase_started = time.perf_counter()
         if likely_slugs:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
@@ -3425,14 +3509,28 @@ class GraphStore:
                 except Exception as exc:  # noqa: BLE001
                     candidate_raw = f"Unable to read {candidate}: {exc}"
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
-        return "\n".join(lines)
+        trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
+        phase_started = time.perf_counter()
+        prompt = "\n".join(lines)
+        trace["assembly"] = int((time.perf_counter() - phase_started) * 1000)
+        return prompt
 
     def ask_yoda(self, slug, question, history=None, depth="4"):
         request_id = f"yoda-{int(time.time() * 1000)}"
         started_at = time.perf_counter()
         prompt_started_at = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
-        prompt = self.build_yoda_prompt(slug, question, history, yoda_depth)
+        cache_payload = json.dumps({"slug": slug, "question": question, "history": history or [], "depth": yoda_depth}, sort_keys=True, ensure_ascii=False)
+        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
+        cache_entry = self.yoda_prompt_cache.get(cache_key) or {}
+        context_cache_hit = bool(cache_entry and time.time() - float(cache_entry.get("created_at") or 0) <= 300)
+        if context_cache_hit:
+            prompt = cache_entry["prompt"]
+            context_subphases_ms = {key: 0 for key in ("selected_node", "graph", "backlinks", "search", "direct_reads", "assembly")}
+        else:
+            context_subphases_ms = {}
+            prompt = self.build_yoda_prompt(slug, question, history, yoda_depth, trace=context_subphases_ms)
+            self.yoda_prompt_cache = {cache_key: {"created_at": time.time(), "prompt": prompt}}
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
         agent_result = run_yoda_model(prompt, return_details=True)
@@ -3448,6 +3546,12 @@ class GraphStore:
             "selected_slug": slug,
             "depth": yoda_depth,
             "timings": timings,
+            "context_cache_hit": context_cache_hit,
+            "context_subphases_ms": context_subphases_ms,
+            "context_counts": {
+                "prompt_chars": len(prompt),
+                "history_messages": len(history or []),
+            },
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
             "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",
@@ -3569,14 +3673,19 @@ class GraphStore:
         relative_path = relative_path_for_local_media(local_media)
         if not relative_path:
             raise RuntimeError("Could not create a safe relative media path for this attachment.")
+        upload_transport = "local"
+        ledger_output = None
         try:
             run_gbrain("files", "upload", file_path, "--page", slug)
         except RuntimeError as exc:
-            raise RuntimeError(
-                "Attachment upload did not reach GBrain files; markdown was not updated. "
-                "Fix the GBrain file upload path and try again."
-            ) from exc
-        if not gbrain_file_ledger_has_relative_path(slug, relative_path):
+            if not GBRAIN_FILES_BRIDGE_SSH:
+                raise RuntimeError(
+                    "Attachment upload did not reach GBrain files; markdown was not updated. "
+                    "Configure a trusted GBrain files bridge and try again."
+                ) from exc
+            ledger_output = run_gbrain_files_bridge(file_path, slug)
+            upload_transport = "ssh-bridge"
+        if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
             raise RuntimeError(
                 f"Attachment upload was not visible in GBrain files for {slug}; markdown was not updated."
             )
@@ -3590,6 +3699,7 @@ class GraphStore:
         self.invalidate()
         if local_media:
             local_media["markdown_updated"] = markdown_updated
+            local_media["upload_transport"] = upload_transport
         return local_media
 
     def history(self, slug):
@@ -3638,6 +3748,46 @@ class GraphStore:
 
 
 STORE = GraphStore()
+
+
+def setup_diagnostics():
+    """Return support-safe setup state without config values or node content."""
+    graph = STORE.graph or {}
+    source = graph.get("source") or {}
+    nodes = graph.get("nodes") or []
+    index_node = next((node for node in nodes if node.get("slug") == ROOT_INDEX_SLUG), None)
+    mode = str(source.get("mode") or "not-loaded")
+    config_keys = sorted(
+        key for key, value in CONFIG.items()
+        if value not in (None, "", [], {}) and not any(token in key.lower() for token in ("key", "secret", "token", "password"))
+    )
+    checks = [
+        {"id": "gbrain_binary", "ok": GBRAIN.exists(), "detail": "configured" if GBRAIN.exists() else "not found"},
+        {"id": "graph_source", "ok": mode == "gbrain", "detail": mode},
+        {"id": "root_index", "ok": bool(index_node and int(index_node.get("degree") or 0) > 0), "detail": "linked" if index_node else "missing"},
+        {"id": "media", "ok": bool(GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS), "detail": "configured" if (GBRAIN_FILE_BASE_URLS or GBRAIN_FILE_STORE_ROOTS or MEDIA_ROOTS) else "not configured"},
+        {"id": "privacy", "ok": True, "detail": "local service; values and node content redacted"},
+    ]
+    failing = [check["id"] for check in checks if not check["ok"]]
+    if "gbrain_binary" in failing:
+        next_action = "Configure an executable gbrain_path, then restart Memory Stargraph."
+    elif "graph_source" in failing:
+        next_action = "Refresh the graph and resolve the source warning before using customer data."
+    elif "root_index" in failing:
+        next_action = "Add useful links to the GBrain index node, then refresh."
+    else:
+        next_action = "Run Search, select a node, then use View or Ask Yoda to verify the first workflow."
+    return {
+        "ok": not failing,
+        "ui_version": UI_VERSION,
+        "source_mode": mode,
+        "source_status": str(source.get("status") or "not-loaded"),
+        "dashboard_url": "http://127.0.0.1:8788",
+        "checks": checks,
+        "failing_checks": failing,
+        "config_keys_present": config_keys,
+        "next_action": next_action,
+    }
 
 
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
@@ -3727,6 +3877,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "stats": STORE.graph.get("stats") if STORE.graph else None,
                 }
             )
+        if parsed.path == "/api/setup-diagnostics":
+            return self.end_json(setup_diagnostics())
         if parsed.path == "/api/graph":
             graph = STORE.get_seed_graph()
             return self.end_json(graph)
@@ -4095,6 +4247,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                         "fallback_used": result.get("diagnostics", {}).get("fallback_used") or result.get("source") == "fallback",
                         "related_slug": slug,
                         "error_class": result.get("diagnostics", {}).get("error_summary"),
+                        "environment": payload.get("environment"),
+                        "synthetic": payload.get("synthetic") is True,
+                        "test_run": payload.get("test_run") is True,
+                        "pair_id": payload.get("pair_id"),
                     })
                 except Exception:
                     pass
