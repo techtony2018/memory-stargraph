@@ -153,7 +153,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.142"
+UI_VERSION = "V1.0.143"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -912,6 +912,10 @@ def resolver_submit_event(payload):
         "correction_signal": sanitize_text_summary(payload.get("correction_signal"), 160),
         "operation_path": sanitize_text_summary(payload.get("operation_path") or payload.get("operation"), 160),
         "client_timestamp": iso_now(),
+        "environment": sanitize_text_summary(payload.get("environment"), 40) or "production",
+        "synthetic": payload.get("synthetic") is True,
+        "test_run": payload.get("test_run") is True,
+        "pair_id": sanitize_text_summary(payload.get("pair_id"), 160),
     }
     return gbrain_call_tool("resolver_events_submit", event_payload, timeout=20)
 
@@ -4243,6 +4247,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                         "fallback_used": result.get("diagnostics", {}).get("fallback_used") or result.get("source") == "fallback",
                         "related_slug": slug,
                         "error_class": result.get("diagnostics", {}).get("error_summary"),
+                        "environment": payload.get("environment"),
+                        "synthetic": payload.get("synthetic") is True,
+                        "test_run": payload.get("test_run") is True,
+                        "pair_id": payload.get("pair_id"),
                     })
                 except Exception:
                     pass

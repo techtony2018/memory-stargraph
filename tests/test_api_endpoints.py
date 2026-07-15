@@ -652,7 +652,7 @@ class ApiEndpointTests(unittest.TestCase):
                 fake_gbrain_call.return_value = {"event": {"event_id": "evt-1"}, "idempotent": False}
                 status, data = self.dispatch_post(
                     "/api/entity-ask-yoda/people%2Ftony-guan",
-                    {"question": "Which ACA7 writing matters?", "depth": 4},
+                    {"question": "Which ACA7 writing matters?", "depth": 4, "environment": "test", "synthetic": True, "test_run": True, "pair_id": "api-probe-1"},
                 )
                 logs_status, logs = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=2")
 
@@ -670,6 +670,10 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(submitted["selected_route"], "Ask Yoda")
         self.assertEqual(submitted["related_node_slug"], "people/tony-guan")
         self.assertIn("ACA7", submitted["intent_summary"])
+        self.assertEqual(submitted["environment"], "test")
+        self.assertTrue(submitted["synthetic"])
+        self.assertTrue(submitted["test_run"])
+        self.assertEqual(submitted["pair_id"], "api-probe-1")
 
     def test_resolver_events_api_proxies_to_hosted_gbrain(self):
         with mock.patch("server.gbrain_call_tool") as fake_gbrain_call:
