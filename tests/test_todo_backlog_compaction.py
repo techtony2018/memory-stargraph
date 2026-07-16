@@ -5,6 +5,7 @@ import unittest
 
 from scripts.automation.compact_sg_todo_backlog import (
     ARCHIVE_SIZE,
+    TODO_COLUMNS,
     parse_todo_rows,
     plan_compaction,
     render_todo_table,
@@ -24,6 +25,9 @@ def make_row(item_id, status):
 
 
 class TodoBacklogCompactionTests(unittest.TestCase):
+    def test_todo_columns_remains_a_public_list(self):
+        self.assertIsInstance(TODO_COLUMNS, list)
+
     def test_compactor_remains_directly_invocable(self):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
