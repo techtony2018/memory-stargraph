@@ -21,6 +21,6 @@ This worker runs daily at 6:00 AM in `America/Los_Angeles` and may run by manual
 
 If health is bad, record it and stop without calling it a UI finding. If the in-app browser fails, use Chrome CDP. If both fail, create a failed Run and do not substitute source inspection. Skip unsafe/private journeys. If no friction appears, create a successful no-op report.
 
-Human-control contract: this worker must not implement fixes, edit code, deploy, auto-approve resolver proposals, perform destructive actions, expose private data, or broaden access. Every user-facing GBrain slug is an exact-label Markdown link to `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`.
+Human-control contract: this worker must not implement fixes or edit code; must not deploy; must not perform destructive operations; must not auto-approve resolver proposals; and must not expose private data or broaden access. Every user-facing GBrain slug is an exact-label Markdown link to `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`.
 
-Pacific-time contract: logs, Runs, reports, screenshots, filenames, and messages use timezone-aware ISO 8601 in `America/Los_Angeles`: PDT in summer and PST in winter. Do not use fixed UTC-8 or label UTC as Pacific time.
+Pacific-time contract: logs, Runs, reports, screenshots, filenames, and messages use timezone-aware ISO 8601 in `America/Los_Angeles`: PDT in summer and PST in winter. Do not use a fixed UTC-8 offset or label UTC as Pacific time.

@@ -104,6 +104,13 @@ class AutomationContractTests(unittest.TestCase):
             "no fixed cutoff",
         ):
             self.assertIn(phrase, contract)
+        prompt = (directory / "prompt.md").read_text()
+        for prohibition in (
+            "must not deploy",
+            "must not perform destructive operations",
+            "must not auto-approve resolver proposals",
+        ):
+            self.assertIn(prohibition, prompt)
 
     def test_every_worker_uses_dst_aware_pacific_reporting(self):
         workers = (
@@ -113,6 +120,7 @@ class AutomationContractTests(unittest.TestCase):
             "memory-stargraph-divergent-product-discovery",
             "memory-stargraph-goal-steward-daily-review",
             "memory-stargraph-capture-link-drain",
+            "memory-stargraph-ux-engineer-daily-dogfood",
         )
         required = (
             "America/Los_Angeles",
