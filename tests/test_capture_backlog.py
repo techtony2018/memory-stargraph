@@ -35,6 +35,8 @@ updated_at: '2026-07-15T04:00:00-07:00'
 
 # Capture Request {capture_id}
 
+Status: {status}
+
 ## Attempt History
 """
 
@@ -383,6 +385,53 @@ class CaptureBacklogTests(unittest.TestCase):
         self.assertLess(updated.index("capturing -> failed"), updated.index("## Evidence"))
         self.assertTrue(updated.rstrip().endswith("Keep me last."))
 
+    def test_child_transition_updates_the_heading_adjacent_visible_status(self):
+        markdown = child_markdown("CAP-0001", "capturing") + "\n## Evidence\n\nStatus: source-specific\n"
+
+        updated = capture.update_child_status(
+            markdown,
+            "capturing",
+            "completed",
+            "2026-07-15T05:00:00-07:00",
+            "captured",
+        )
+
+        self.assertIn("# Capture Request CAP-0001\n\nStatus: completed\n", updated)
+        self.assertIn("## Evidence\n\nStatus: source-specific", updated)
+        self.assertEqual(updated.count("Status: completed"), 1)
+
+    def test_visible_status_is_inserted_when_legacy_child_has_no_projection(self):
+        markdown = child_markdown("CAP-0001", "completed").replace("\nStatus: completed\n", "")
+
+        updated = capture.synchronize_visible_status(markdown)
+
+        self.assertIn("# Capture Request CAP-0001\n\nStatus: completed\n\n## Attempt History", updated)
+
+    def test_visible_status_projection_supports_every_capture_state_idempotently(self):
+        for status in sorted(capture.ALLOWED_STATUSES):
+            with self.subTest(status=status):
+                markdown = child_markdown("CAP-0001", status)
+                once = capture.synchronize_visible_status(markdown)
+                twice = capture.synchronize_visible_status(once)
+                self.assertIn(f"Status: {status}", once)
+                self.assertEqual(once, twice)
+
+    def test_reconcile_visible_status_repairs_terminal_children_without_changing_parent(self):
+        backend = FakeGBrain.with_one_request("CAP-0001", "completed")
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+        backend.nodes[child_slug] = backend.nodes[child_slug].replace(
+            "Status: completed", "Status: planned"
+        )
+        root_before = backend.nodes[capture.ROOT_SLUG]
+
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            result = capture.apply_reconcile_visible_status()
+
+        self.assertEqual(result["reconciled"], [child_slug])
+        self.assertEqual(backend.nodes[capture.ROOT_SLUG], root_before)
+        self.assertIn("Status: completed", backend.nodes[child_slug])
+        self.assertNotIn("Status: planned", backend.nodes[child_slug])
+
     def test_all_operations_reject_unknown_stored_status(self):
         backend = FakeGBrain.with_one_request("CAP-0001", "planned")
         backend.nodes[capture.ROOT_SLUG] = backend.nodes[capture.ROOT_SLUG].replace(
@@ -580,6 +629,7 @@ class CaptureBacklogTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Manage the Memory Stargraph capture backlog", result.stdout)
+        self.assertIn("reconcile-visible-status", result.stdout)
 
 
 if __name__ == "__main__":

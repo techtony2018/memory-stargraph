@@ -377,6 +377,7 @@ def update_child_status(
     if re.search(r"(?m)^updated_at:", frontmatter):
         frontmatter = re.sub(r"(?m)^updated_at:.*$", f"updated_at: '{updated}'", frontmatter, count=1)
         result = frontmatter + result[frontmatter_end:]
+    result = synchronize_visible_status(result)
     history = f"- {updated}: {expected} -> {target}; {notes}"
     section = re.search(r"(?m)^## Attempt History\s*$", result)
     if not section:
@@ -389,6 +390,26 @@ def update_child_status(
     if after:
         combined += "\n" + after
     return combined
+
+
+def synchronize_visible_status(markdown: str) -> str:
+    status = child_status(markdown)
+    frontmatter_end = markdown.find("\n---", 4)
+    body_start = frontmatter_end + len("\n---")
+    heading = re.search(r"(?m)^# .+$", markdown[body_start:])
+    if not heading:
+        raise ValueError("child body title is missing")
+    heading_start = body_start + heading.start()
+    heading_end = body_start + heading.end()
+    next_section = re.search(r"(?m)^## ", markdown[heading_end:])
+    projection_end = heading_end + next_section.start() if next_section else len(markdown)
+    projection = markdown[heading_end:projection_end]
+    visible = re.search(r"(?m)^Status:\s*.*$", projection)
+    if visible:
+        start = heading_end + visible.start()
+        end = heading_end + visible.end()
+        return markdown[:start] + f"Status: {status}" + markdown[end:]
+    return markdown[:heading_end] + f"\n\nStatus: {status}" + markdown[heading_end:]
 
 
 def child_status(markdown: str) -> str:
@@ -514,7 +535,7 @@ def apply_transition(
             root, capture_id, expected, target, canonical_stamp, canonical_notes
         )
     if child_at_target:
-        updated_child = child
+        updated_child = synchronize_visible_status(child)
     else:
         updated_child = update_child_status(
             child, expected, target, canonical_stamp, canonical_notes
@@ -558,6 +579,35 @@ def apply_transition(
         "status": target,
         "child_slug": child_slug,
         "updated_at": canonical_stamp,
+    }
+
+
+def apply_reconcile_visible_status() -> dict[str, object]:
+    root = get_required(ROOT_SLUG)
+    rows = parse_capture_rows(root)
+    reconciled: list[str] = []
+    unchanged: list[str] = []
+    for row in rows:
+        child_slug = node_slug(row)
+        if not child_slug:
+            raise ValueError(f"missing child node for {row.get('id') or 'unknown capture'}")
+        child = get_required(child_slug)
+        if child_status(child) != row["status"]:
+            raise RuntimeError(f"parent/child status mismatch for {row['id']}")
+        updated_child = synchronize_visible_status(child)
+        if updated_child == child:
+            unchanged.append(child_slug)
+            continue
+        readback = put_readback(child_slug, updated_child)
+        if readback != updated_child:
+            raise RuntimeError(f"visible status readback mismatch for {row['id']}")
+        reconciled.append(child_slug)
+    if get_required(ROOT_SLUG) != root:
+        raise RuntimeError("parent root changed during visible status reconciliation")
+    return {
+        "root_slug": ROOT_SLUG,
+        "reconciled": reconciled,
+        "unchanged": unchanged,
     }
 
 
@@ -725,6 +775,13 @@ def main(argv: list[str] | None = None) -> int:
     compact_parser.add_argument("--apply", action="store_true")
     compact_parser.add_argument("--json", action="store_true")
 
+    reconcile_parser = subparsers.add_parser(
+        "reconcile-visible-status",
+        help="Synchronize each active child body Status line with authoritative state.",
+    )
+    reconcile_parser.add_argument("--apply", action="store_true")
+    reconcile_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "init":
         result = apply_init() if args.apply else {
@@ -743,7 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             root = get_required(ROOT_SLUG)
             transition(root, args.capture_id, args.expected, args.target, pacific_iso(), args.notes)
             result = {"capture_id": args.capture_id, "status": args.target, "applied": False}
-    else:
+    elif args.command == "compact":
         if args.apply:
             result = apply_compaction()
         else:
@@ -755,6 +812,11 @@ def main(argv: list[str] | None = None) -> int:
                 "failed_rows": len(plan.failed_rows),
                 "applied": False,
             }
+    else:
+        result = apply_reconcile_visible_status() if args.apply else {
+            "root_slug": ROOT_SLUG,
+            "applied": False,
+        }
     emit(result, args.json)
     return 0
 
