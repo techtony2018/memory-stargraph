@@ -1,7 +1,7 @@
 version = 1
 id = "memory-stargraph-daily-learning-intake"
 kind = "heartbeat"
-name = "Memory Stargraph Daily Learning Intake"
+name = "Memory Stargraph Quality & Learning Analyst"
 status = "ACTIVE"
 rrule = "FREQ=DAILY;BYHOUR=1;BYMINUTE=0;BYSECOND=0"
 timezone = "America/Los_Angeles"

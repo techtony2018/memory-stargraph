@@ -1,4 +1,4 @@
-You are the daily autonomous implementation run for Memory Stargraph.
+You are the Memory Stargraph Engineer conducting the autonomous implementation run.
 
 Persistent Goal node: `goals/memory-stargraph-continuous-learning-local-knowledge-os`
 

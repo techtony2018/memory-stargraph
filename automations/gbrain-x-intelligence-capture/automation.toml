@@ -1,7 +1,7 @@
 version = 1
 id = "gbrain-x-intelligence-capture"
 kind = "heartbeat"
-name = "GBrain X Intelligence Capture"
+name = "GBrain Intelligence Researcher"
 status = "ACTIVE"
 rrule = "FREQ=DAILY;BYHOUR=0;BYMINUTE=15;BYSECOND=0"
 timezone = "America/Los_Angeles"

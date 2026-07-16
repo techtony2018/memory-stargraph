@@ -7,6 +7,65 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AutomationContractTests(unittest.TestCase):
+    def test_worker_role_titles_are_user_facing_only(self):
+        expected = {
+            "gbrain-x-intelligence-capture": {
+                "title": "GBrain Intelligence Researcher",
+                "rrule": "FREQ=DAILY;BYHOUR=0;BYMINUTE=15;BYSECOND=0",
+                "target_thread_id": "{{GBRAIN_X_INTELLIGENCE_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
+            "memory-stargraph-daily-learning-intake": {
+                "title": "Memory Stargraph Quality & Learning Analyst",
+                "rrule": "FREQ=DAILY;BYHOUR=1;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{LEARNING_INTAKE_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
+            "memory-stargraph-wish-to-reallity": {
+                "title": "Memory Stargraph Engineer",
+                "rrule": "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{WISH_TO_REALLITY_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
+            "memory-stargraph-divergent-product-discovery": {
+                "title": "Memory Stargraph Product Strategist",
+                "rrule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=4;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{PRODUCT_DISCOVERY_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
+            "memory-stargraph-capture-link-drain": {
+                "title": "Memory Stargraph Knowledge Curator",
+                "rrule": "FREQ=DAILY;BYHOUR=0;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{CAPTURE_LINK_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
+            "memory-stargraph-goal-steward-daily-review": {
+                "title": "Memory Stargraph Product Owner",
+                "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{STEWARD_THREAD_ID}}",
+                "role_files": ("prompt.md", "steward-thread-prompt.md"),
+            },
+        }
+
+        for automation_id, contract in expected.items():
+            directory = ROOT / "automations" / automation_id
+            definition = tomllib.loads((directory / "automation.toml").read_text())
+
+            self.assertEqual(definition["id"], automation_id)
+            self.assertEqual(definition["name"], contract["title"])
+            self.assertEqual(definition["rrule"], contract["rrule"])
+            self.assertEqual(definition["timezone"], "America/Los_Angeles")
+            self.assertEqual(definition["destination"], "thread")
+            self.assertEqual(
+                definition["target_thread_id"], contract["target_thread_id"]
+            )
+            for role_file in contract["role_files"]:
+                self.assertIn(
+                    contract["title"],
+                    (directory / role_file).read_text(),
+                    f"{automation_id}/{role_file} missing user-facing role title",
+                )
+
     def test_every_worker_uses_dst_aware_pacific_reporting(self):
         workers = (
             "gbrain-x-intelligence-capture",

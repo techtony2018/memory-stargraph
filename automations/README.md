@@ -15,18 +15,18 @@ placeholders before restoring a definition through the Codex automation UI/API.
 
 ## Pipeline
 
-| Local time | Automation | Purpose |
-| --- | --- | --- |
-| Daily 12:00 AM | `memory-stargraph-capture-link-drain` | Freeze the current planned Capture Link queue and drain every frozen request to `completed` or `failed`. |
-| Daily 12:15 AM | `gbrain-x-intelligence-capture` | Collect public GBrain usage, releases, explanations, and product inspiration from X. |
-| Daily 1:00 AM | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs. |
-| Daily 2:00 AM | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
-| Sunday 4:00 AM | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
-| Daily 7:00 AM | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated steward thread. |
+| Local time | Role | Automation ID | Purpose |
+| --- | --- | --- | --- |
+| Daily 12:00 AM | Memory Stargraph Knowledge Curator | `memory-stargraph-capture-link-drain` | Freeze the current planned Capture Link queue and drain every frozen request to `completed` or `failed`. |
+| Daily 12:15 AM | GBrain Intelligence Researcher | `gbrain-x-intelligence-capture` | Collect public GBrain usage, releases, explanations, and product inspiration from X. |
+| Daily 1:00 AM | Memory Stargraph Quality & Learning Analyst | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs. |
+| Daily 2:00 AM | Memory Stargraph Engineer | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
+| Sunday 4:00 AM | Memory Stargraph Product Strategist | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
+| Daily 7:00 AM | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated Product Owner task. |
 
 The midnight Capture Link drain and the 12:15 AM X intelligence capture are
 independently scheduled; neither depends on the other finishing. The Capture
-Link worker may also be triggered manually at any time without a cutoff.
+Knowledge Curator may also be triggered manually at any time without a cutoff.
 
 All six automations work toward the persistent GBrain goal:
 

@@ -1,7 +1,7 @@
 version = 1
 id = "memory-stargraph-goal-steward-daily-review"
 kind = "heartbeat"
-name = "Memory Stargraph Goal Steward Daily Review"
+name = "Memory Stargraph Product Owner"
 status = "ACTIVE"
 rrule = "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0"
 timezone = "America/Los_Angeles"

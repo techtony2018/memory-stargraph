@@ -1,7 +1,7 @@
 version = 1
 id = "memory-stargraph-wish-to-reallity"
 kind = "heartbeat"
-name = "Memory Stargraph Wish to Reallity"
+name = "Memory Stargraph Engineer"
 status = "ACTIVE"
 rrule = "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0"
 timezone = "America/Los_Angeles"
