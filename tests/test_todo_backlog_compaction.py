@@ -1,3 +1,6 @@
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 from scripts.automation.compact_sg_todo_backlog import (
@@ -21,6 +24,19 @@ def make_row(item_id, status):
 
 
 class TodoBacklogCompactionTests(unittest.TestCase):
+    def test_compactor_remains_directly_invocable(self):
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, "scripts/automation/compact_sg_todo_backlog.py", "--help"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Compact Memory Stargraph completed TODO rows", result.stdout)
+
     def test_plan_archives_only_full_completed_batches_and_keeps_active_light(self):
         rows = [make_row("SG-0123", "planned"), make_row("SG-0124", "failed")]
         rows.extend(make_row(f"SG-{index:04d}", "completed") for index in range(1, 127))
