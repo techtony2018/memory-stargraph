@@ -154,7 +154,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.146"
+UI_VERSION = "V1.0.147"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1616,6 +1616,66 @@ def extract_question_entities(question, limit=3):
         if len(entities) >= limit:
             break
     return entities
+
+
+def is_short_yoda_followup(question):
+    text = re.sub(r"\s+", " ", str(question or "").strip().lower())
+    if not text:
+        return False
+    explicit = {
+        "again",
+        "continue",
+        "go on",
+        "please continue",
+        "retry",
+        "try again",
+        "what about it",
+        "why",
+        "yes",
+    }
+    words = re.findall(r"[a-z0-9]+", text)
+    return text in explicit or len(words) <= 4
+
+
+def effective_yoda_retrieval_question(question, history=None):
+    current = str(question or "").strip()
+    if not is_short_yoda_followup(current):
+        return current, False
+    for item in reversed(history or []):
+        if str(item.get("role") or "").strip().lower() != "user":
+            continue
+        previous = str(item.get("content") or "").strip()
+        if not previous or previous.lower() == current.lower() or is_short_yoda_followup(previous):
+            continue
+        return f"{previous}\nFollow-up: {current}", True
+    return current, False
+
+
+def is_targeted_relationship_question(question):
+    if not extract_question_entities(question):
+        return False
+    words = set(re.findall(r"[a-z0-9]+", str(question or "").lower()))
+    relationship_words = {
+        "authored",
+        "comment",
+        "commented",
+        "follow",
+        "followed",
+        "like",
+        "liked",
+        "member",
+        "replied",
+        "reply",
+        "repost",
+        "reposted",
+        "retweeted",
+        "retweet",
+        "share",
+        "shared",
+        "wrote",
+        "written",
+    }
+    return bool(words & relationship_words)
 
 
 def relationship_matches_question(link_type, question):
@@ -3703,13 +3763,17 @@ class GraphStore:
         trace=None,
         counts=None,
         stable_context=None,
+        retrieval_question=None,
+        broad_graph_depth=None,
     ):
         history = history or []
         trace = trace if isinstance(trace, dict) else {}
         counts = counts if isinstance(counts, dict) else {}
         yoda_depth = clamp_yoda_depth(depth)
+        effective_question = str(retrieval_question or question or "").strip()
+        effective_graph_depth = clamp_yoda_depth(broad_graph_depth or yoda_depth)
         prompt_state = yoda_system_prompt_state()
-        stable_context = stable_context or self.build_yoda_stable_context(slug, yoda_depth)
+        stable_context = stable_context or self.build_yoda_stable_context(slug, effective_graph_depth)
         trace.update(stable_context.get("timings") or {})
         lines = [
             prompt_state["prompt"],
@@ -3717,7 +3781,10 @@ class GraphStore:
             f"Selected node: {slug}",
             f"Question: {question}",
             f"Retrieval depth: {yoda_depth}",
+            f"Broad graph retrieval depth: {effective_graph_depth}",
         ]
+        if effective_question and effective_question != str(question or "").strip():
+            lines.extend(["", "Resolved retrieval intent:", effective_question])
         if history:
             lines.extend(["", "Recent chat:"])
             for item in history[-8:]:
@@ -3725,6 +3792,14 @@ class GraphStore:
                 content = str(item.get("content") or "").strip()
                 if content:
                     lines.append(f"- {role}: {content}")
+            if any(str(item.get("role") or "").strip().lower() == "assistant" for item in history):
+                lines.extend(
+                    [
+                        "",
+                        "Prior assistant answers are conversation context, not evidence. "
+                        "They may be wrong; replace them when current GBrain evidence contradicts them.",
+                    ]
+                )
         raw = stable_context.get("selected_node") or ""
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
@@ -3750,7 +3825,7 @@ class GraphStore:
         try:
             search_output = run_gbrain(
                 "query",
-                f"{question} {slug}",
+                f"{effective_question} {slug}",
                 "--adaptive-return",
                 "true",
                 "--limit",
@@ -3781,7 +3856,7 @@ class GraphStore:
         trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
         targeted_context = self.build_yoda_targeted_context(
-            question,
+            effective_question,
             excluded_slugs={slug, *likely_slugs},
         )
         targeted_text = targeted_context.get("text") or ""
@@ -3806,7 +3881,9 @@ class GraphStore:
         started_at = time.perf_counter()
         prompt_started_at = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
-        cache_payload = json.dumps({"slug": slug, "depth": yoda_depth}, sort_keys=True, ensure_ascii=False)
+        retrieval_question, retrieval_history_used = effective_yoda_retrieval_question(question, history)
+        broad_graph_depth = 1 if is_targeted_relationship_question(retrieval_question) else yoda_depth
+        cache_payload = json.dumps({"slug": slug, "depth": broad_graph_depth}, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
         cache_entry = self.yoda_context_cache.get(cache_key) or {}
         context_cache_hit = bool(cache_entry and time.time() - float(cache_entry.get("created_at") or 0) <= 300)
@@ -3817,7 +3894,7 @@ class GraphStore:
                 key: 0 for key in ("selected_node", "graph", "backlinks")
             }
         else:
-            stable_context = self.build_yoda_stable_context(slug, yoda_depth)
+            stable_context = self.build_yoda_stable_context(slug, broad_graph_depth)
             self.yoda_context_cache = {
                 cache_key: {"created_at": time.time(), "context": stable_context}
             }
@@ -3830,6 +3907,8 @@ class GraphStore:
             trace=context_subphases_ms,
             counts=context_counts,
             stable_context=stable_context,
+            retrieval_question=retrieval_question,
+            broad_graph_depth=broad_graph_depth,
         )
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
@@ -3856,6 +3935,8 @@ class GraphStore:
                 "targeted_entities": context_counts.get("targeted_entities", 0),
                 "targeted_backlink_reads": context_counts.get("targeted_backlink_reads", 0),
                 "relationship_source_reads": context_counts.get("relationship_source_reads", 0),
+                "retrieval_history_used": retrieval_history_used,
+                "broad_graph_depth": broad_graph_depth,
             },
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),

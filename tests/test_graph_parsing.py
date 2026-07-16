@@ -13,6 +13,7 @@ from server import (
     collect_seed_graph,
     ensure_media_references_available,
     extract_openclaw_answer,
+    effective_yoda_retrieval_question,
     expand_raw_graph,
     finalize_graph,
     friendly_label,
@@ -44,6 +45,19 @@ from server import (
 
 
 class GraphParsingTests(unittest.TestCase):
+    def test_effective_yoda_retrieval_question_inherits_short_followup_intent(self):
+        history = [
+            {"role": "user", "content": "which of my X posts were reposted by Garry Tan?"},
+            {"role": "assistant", "content": "The graph does not contain enough evidence."},
+            {"role": "user", "content": "try again"},
+        ]
+
+        resolved, inherited = effective_yoda_retrieval_question("try again", history)
+
+        self.assertTrue(inherited)
+        self.assertIn("which of my X posts were reposted by Garry Tan?", resolved)
+        self.assertIn("Follow-up: try again", resolved)
+
     def test_relationship_question_matching_ignores_structural_stopwords(self):
         question = "which of my X posts were reposted by Garry Tan?"
 
@@ -1137,6 +1151,71 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(result["diagnostics"]["context_counts"]["targeted_entities"], 1)
         self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
 
+    def test_ask_yoda_short_followup_reuses_prior_user_intent_and_constrains_broad_graph(self):
+        store = GraphStore()
+        history = [
+            {"role": "user", "content": "which of my X posts were reposted by Garry Tan?"},
+            {"role": "assistant", "content": "No Garry Tan node was found."},
+            {"role": "user", "content": "try again"},
+        ]
+        captured_prompt = {}
+
+        def gbrain_result(*args, **kwargs):
+            del kwargs
+            if args == ("get", "people/tony-guan"):
+                return "# Tony Guan"
+            if args == ("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1"):
+                return "constrained graph"
+            if args == ("backlinks", "people/tony-guan"):
+                return "selected backlinks"
+            if args[0] == "query":
+                self.assertIn("which of my X posts were reposted by Garry Tan?", args[1])
+                return "[1.19] platforms/tony-guan-x -- Tony Guan X Posts"
+            if args == ("get", "platforms/tony-guan-x"):
+                return "# Tony Guan X Posts"
+            if args == ("search", "Garry Tan", "--limit", "5"):
+                return "[1.29] people/garry-tan -- Garry Tan"
+            if args == ("get", "people/garry-tan"):
+                return "# Garry Tan"
+            if args == ("backlinks", "people/garry-tan"):
+                return json.dumps(
+                    [
+                        {
+                            "from_slug": "media/x-ecalifornians-status-2071774149987680569",
+                            "to_slug": "people/garry-tan",
+                            "link_type": "reposted_by",
+                        }
+                    ]
+                )
+            if args == ("get", "media/x-ecalifornians-status-2071774149987680569"):
+                return "# Introducing Memory Stargraph"
+            raise AssertionError(args)
+
+        def answer_from_prompt(prompt, return_details=False):
+            captured_prompt["value"] = prompt
+            result = {
+                "output": "The Memory Stargraph post was reposted by Garry Tan.",
+                "backend": "openai",
+                "model_status": "answered",
+                "openclaw_status": "not_used",
+            }
+            return result if return_details else result["output"]
+
+        with (
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch("server.run_yoda_model", side_effect=answer_from_prompt),
+        ):
+            result = store.ask_yoda("people/tony-guan", "try again", history, depth=4)
+
+        self.assertIn("Resolved retrieval intent:", captured_prompt["value"])
+        self.assertIn("which of my X posts were reposted by Garry Tan?", captured_prompt["value"])
+        self.assertIn("Prior assistant answers are conversation context, not evidence", captured_prompt["value"])
+        self.assertEqual(result["diagnostics"]["context_counts"]["broad_graph_depth"], 1)
+        self.assertTrue(result["diagnostics"]["context_counts"]["retrieval_history_used"])
+        self.assertEqual(result["diagnostics"]["context_counts"]["targeted_entities"], 1)
+        self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
+        run.assert_any_call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30)
+
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
 
@@ -1177,6 +1256,8 @@ cover_image: companies/example-inc/logo.jpg
                 "targeted_entities",
                 "targeted_backlink_reads",
                 "relationship_source_reads",
+                "retrieval_history_used",
+                "broad_graph_depth",
             },
         )
         self.assertNotIn("prompt", cold["diagnostics"])
