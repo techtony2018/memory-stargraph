@@ -1,4 +1,5 @@
 import datetime as dt
+from contextlib import contextmanager
 from pathlib import Path
 import json
 import subprocess
@@ -114,6 +115,59 @@ class FakeGBrain:
 
 
 class CaptureBacklogTests(unittest.TestCase):
+    def setUp(self):
+        @contextmanager
+        def no_op_lease(_operation):
+            yield {"token": "test"}
+        self.lease_patch = mock.patch.object(capture, "queue_authority_lease", no_op_lease)
+        self.lease_patch.start()
+
+    def tearDown(self):
+        self.lease_patch.stop()
+
+    def test_all_consistent_read_and_mutation_paths_use_queue_authority_lease(self):
+        self.lease_patch.stop()
+        operations = []
+
+        @contextmanager
+        def recording_lease(operation):
+            operations.append(operation)
+            yield {"token": "test"}
+
+        backend = FakeGBrain.with_one_request("CAP-0001", "planned")
+        with mock.patch.object(capture, "queue_authority_lease", recording_lease), mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            capture.list_backlog()
+            capture.create_snapshot(NOW)
+            capture.apply_transition("CAP-0001", "planned", "capturing", "worker claimed", NOW)
+        compact_backend = FakeGBrain.with_completed_requests(50)
+        with mock.patch.object(capture, "queue_authority_lease", recording_lease), mock.patch.object(capture, "run_gbrain", side_effect=compact_backend):
+            capture.apply_compaction(NOW)
+        self.assertEqual(operations, ["list", "snapshot", "transition", "compact"])
+        self.lease_patch.start()
+
+    def test_queue_authority_lease_releases_in_finally_after_operation_failure(self):
+        self.lease_patch.stop()
+        calls = []
+
+        def post(path, payload):
+            calls.append((path, dict(payload)))
+            if path.endswith("/acquire"):
+                return {"ok": True, "token": "lease-token"}
+            return {"ok": True, "released": True}
+
+        try:
+            with mock.patch.object(capture, "_queue_authority_post", side_effect=post):
+                with self.assertRaisesRegex(RuntimeError, "body failed"):
+                    with capture.queue_authority_lease("transition"):
+                        raise RuntimeError("body failed")
+            self.assertEqual([path for path, _ in calls], [
+                "/api/capture-queue/lease/acquire",
+                "/api/capture-queue/lease/release",
+            ])
+            self.assertEqual(calls[-1][1]["token"], "lease-token")
+        finally:
+            self.lease_patch.start()
+
     def test_root_has_exact_schema_and_pacific_timestamp(self):
         now = dt.datetime(2026, 7, 15, 12, 0, tzinfo=dt.timezone.utc)
         root = capture.build_root(now)

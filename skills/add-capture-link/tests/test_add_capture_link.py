@@ -732,6 +732,38 @@ class AddCaptureLinkTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(calls, 1)
 
+    def test_receipt_failure_after_upload_is_probe_before_repeat_ambiguous(self):
+        attachment = self.file("receipt-ambiguous.bin", b"exact")
+        backend = FakeGBrain.empty_capture_root()
+        uploads = 0
+
+        def upload(*args):
+            nonlocal uploads
+            uploads += 1
+            return self.upload_side_effect(backend)(*args)
+
+        with (
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "upload_attachment", side_effect=upload),
+            mock.patch.object(module, "_receipt", side_effect=module.AttachmentRequestError("receipt lost")),
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            self.assertRaises(module.QueueFailure) as caught,
+        ):
+            module.queue_capture(source="file", source_kind="file", instructions="Capture", attachments=[str(attachment)], now=NOW)
+        manifest = Path(caught.exception.result["recovery_manifest"])
+        progress = json.loads(manifest.read_text())["attachment_progress"][0]
+        self.assertTrue(progress["upload_started"])
+
+        with (
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "upload_attachment", side_effect=upload),
+            mock.patch.object(module, "fetch_served_attachment", return_value=b"exact"),
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+        ):
+            result = module.queue_capture(recovery_manifest=str(manifest), now=NOW)
+        self.assertTrue(result["ok"])
+        self.assertEqual(uploads, 1)
+
     def test_cli_json_is_queue_only(self):
         completed = subprocess.run(
             ["python3", str(SCRIPT), "--help"], capture_output=True, text=True, check=False

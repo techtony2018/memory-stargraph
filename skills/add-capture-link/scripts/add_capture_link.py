@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from urllib import error, parse, request
 from zoneinfo import ZoneInfo
 
@@ -435,8 +436,29 @@ def _write_manifest(bundle: Path, data: dict) -> Path:
     _reject_symlink(bundle, "recovery bundle")
     path = bundle / "recovery.json"
     _reject_symlink(path, "recovery manifest")
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(path, 0o600)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=bundle, prefix=".recovery.", suffix=".tmp", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            os.chmod(temporary, 0o600)
+            handle.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        directory_fd = os.open(bundle, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
     return path
 
 
@@ -811,6 +833,7 @@ def _queue_capture_locked(
                 "filename": path.name,
                 "expected_canonical_relative_path": f"{child_slug}/{path.name}",
                 "ambiguous_persistence": False,
+                "upload_started": False,
             })
         manifest_data["attachment_progress"] = list(progress_by_name.values())
         _write_manifest(bundle, manifest_data)
@@ -833,7 +856,7 @@ def _queue_capture_locked(
                     try:
                         hosted = fetch_served_attachment(base_url, expected_url)
                     except AttachmentRequestError:
-                        if progress.get("ambiguous_persistence"):
+                        if progress.get("ambiguous_persistence") or progress.get("upload_started"):
                             raise AttachmentRequestError(
                                 "Ambiguous upload could not be reconciled at its expected canonical path.",
                                 {"error": "ambiguous_upload_unavailable", "filenames": [path.name]},
@@ -857,6 +880,9 @@ def _queue_capture_locked(
                         "sha256": digest,
                     }
                 else:
+                    progress["upload_started"] = True
+                    manifest_data["attachment_progress"] = list(progress_by_name.values())
+                    _write_manifest(bundle, manifest_data)
                     try:
                         payload = upload_attachment(base_url, child_slug, path, f"Attachment for {capture_id}")
                     except AttachmentRequestError as exc:
@@ -870,6 +896,7 @@ def _queue_capture_locked(
             receipts.append(receipt)
             manifest_data["receipts"] = list(receipts)
             progress["ambiguous_persistence"] = False
+            progress["upload_started"] = False
             manifest_data["attachment_progress"] = list(progress_by_name.values())
             _write_manifest(bundle, manifest_data)
 
@@ -877,7 +904,7 @@ def _queue_capture_locked(
             "idempotency_key": idempotency_key,
             "attachments": receipts,
         })
-        if str(finalized["capture_id"]) != capture_id or str(finalized["child_slug"]) != child_slug or finalized.get("status") != "planned":
+        if str(finalized["capture_id"]) != capture_id or str(finalized["child_slug"]) != child_slug or finalized.get("status") not in {"planned", "finalized"}:
             raise AttachmentRequestError(
                 "Capture queue finalize response did not match the reservation.", finalized,
                 may_have_persisted=True,

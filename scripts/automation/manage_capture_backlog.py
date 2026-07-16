@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import datetime as dt
+import functools
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
+from urllib import error, request
 from zoneinfo import ZoneInfo
 
 if __package__ in {None, ""}:
@@ -31,6 +36,7 @@ FAILED_COLLECTION_SLUG = f"{ROOT_SLUG}/failed-items"
 ARCHIVE_PREFIX = f"{ROOT_SLUG}/completed-archive-"
 ALLOWED_STATUSES = {"planned", "capturing", "completed", "failed"}
 PACIFIC = ZoneInfo("America/Los_Angeles")
+DEFAULT_STARGRAPH_URL = "http://127.0.0.1:8788"
 CAPTURE_SPEC = BacklogSpec(
     root_slug=ROOT_SLUG,
     section_heading="Capture Items",
@@ -46,6 +52,68 @@ def pacific_iso(now: dt.datetime | None = None) -> str:
     if value.tzinfo is None:
         raise ValueError("timestamp must be timezone-aware")
     return value.astimezone(PACIFIC).replace(microsecond=0).isoformat()
+
+
+def _queue_authority_post(path: str, payload: dict[str, object]) -> dict[str, object]:
+    base = os.environ.get("MEMORY_STARGRAPH_URL", DEFAULT_STARGRAPH_URL).rstrip("/")
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(base + path, data=body, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with request.urlopen(req, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"capture queue authority HTTP {exc.code}: {detail}") from exc
+    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"capture queue authority unavailable: {exc}") from exc
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise RuntimeError("capture queue authority returned an invalid response")
+    return result
+
+
+@contextmanager
+def queue_authority_lease(operation: str):
+    owner = f"manage-capture-backlog:{os.getpid()}:{operation}:{uuid.uuid4()}"
+    lease = None
+    last_error = None
+    for delay in (0.0, 0.1, 0.25):
+        if delay:
+            time.sleep(delay)
+        try:
+            lease = _queue_authority_post(
+                "/api/capture-queue/lease/acquire",
+                {"owner": owner, "ttl_seconds": 300},
+            )
+            break
+        except RuntimeError as exc:
+            last_error = exc
+    if lease is None:
+        raise RuntimeError(f"could not acquire capture queue authority lease: {last_error}")
+    body_error = None
+    try:
+        yield lease
+    except BaseException as exc:  # preserve the operation failure if release also fails
+        body_error = exc
+        raise
+    finally:
+        try:
+            _queue_authority_post(
+                "/api/capture-queue/lease/release",
+                {"owner": owner, "token": lease["token"]},
+            )
+        except Exception:
+            if body_error is None:
+                raise
+
+
+def _uses_queue_authority(operation: str):
+    def decorate(function):
+        @functools.wraps(function)
+        def wrapped(*args, **kwargs):
+            with queue_authority_lease(operation):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 def build_root(now: dt.datetime | None = None) -> str:
@@ -313,6 +381,7 @@ def unlink(source: str, target: str, relation: str) -> None:
     verify_link(source, target, relation, False)
 
 
+@_uses_queue_authority("init")
 def apply_init(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_optional(ROOT_SLUG)
     failed = get_optional(FAILED_COLLECTION_SLUG)
@@ -342,6 +411,7 @@ def apply_init(now: dt.datetime | None = None) -> dict[str, object]:
     }
 
 
+@_uses_queue_authority("snapshot")
 def create_snapshot(
     now: dt.datetime | None = None,
     invocation_id: str | None = None,
@@ -460,6 +530,7 @@ def verify_failed_mirror(markdown: str, expected_rows: list[dict[str, str]]) -> 
         raise RuntimeError("failed mirror readback mismatch")
 
 
+@_uses_queue_authority("transition")
 def apply_transition(
     capture_id: str,
     expected: str,
@@ -628,6 +699,7 @@ def compaction_preview(
     return plan_compaction(parse_capture_rows(root_markdown), archives, CAPTURE_SPEC), archives
 
 
+@_uses_queue_authority("compact")
 def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_required(ROOT_SLUG)
     plan, indexed_archives = compaction_preview(root)
@@ -681,6 +753,7 @@ def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
     }
 
 
+@_uses_queue_authority("list")
 def list_backlog(status: str | None = None) -> dict[str, object]:
     rows = parse_capture_rows(get_required(ROOT_SLUG))
     if status:
@@ -688,6 +761,25 @@ def list_backlog(status: str | None = None) -> dict[str, object]:
             raise ValueError("unsupported status")
         rows = [row for row in rows if row.get("status") == status]
     return {"root_slug": ROOT_SLUG, "count": len(rows), "rows": rows}
+
+
+@_uses_queue_authority("transition-preview")
+def preview_transition(capture_id: str, expected: str, target: str, notes: str) -> dict[str, object]:
+    root = get_required(ROOT_SLUG)
+    transition(root, capture_id, expected, target, pacific_iso(), notes)
+    return {"capture_id": capture_id, "status": target, "applied": False}
+
+
+@_uses_queue_authority("compact-preview")
+def preview_compaction() -> dict[str, object]:
+    root = get_required(ROOT_SLUG)
+    plan, _ = compaction_preview(root)
+    return {
+        "created_archives": [str(archive["slug"]) for archive in plan.archives_to_create],
+        "active_rows": len(plan.active_rows),
+        "failed_rows": len(plan.failed_rows),
+        "applied": False,
+    }
 
 
 def emit(result: dict[str, object], as_json: bool) -> None:
@@ -740,21 +832,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.apply:
             result = apply_transition(args.capture_id, args.expected, args.target, args.notes)
         else:
-            root = get_required(ROOT_SLUG)
-            transition(root, args.capture_id, args.expected, args.target, pacific_iso(), args.notes)
-            result = {"capture_id": args.capture_id, "status": args.target, "applied": False}
+            result = preview_transition(args.capture_id, args.expected, args.target, args.notes)
     else:
         if args.apply:
             result = apply_compaction()
         else:
-            root = get_required(ROOT_SLUG)
-            plan, _ = compaction_preview(root)
-            result = {
-                "created_archives": [str(archive["slug"]) for archive in plan.archives_to_create],
-                "active_rows": len(plan.active_rows),
-                "failed_rows": len(plan.failed_rows),
-                "applied": False,
-            }
+            result = preview_compaction()
     emit(result, args.json)
     return 0
 

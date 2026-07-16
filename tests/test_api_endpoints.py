@@ -1,8 +1,10 @@
+import hashlib
 import json
 import tempfile
 import threading
 import types
 import unittest
+import stat
 from pathlib import Path
 from unittest import mock
 
@@ -158,6 +160,16 @@ class FakeCaptureQueueStore(FakeStore):
         with self.guard:
             self.edges.discard((source_slug, target_slug, link_type))
 
+    def graph_query(self, slug, link_type="", direction="both", depth="1"):
+        del depth
+        with self.guard:
+            return json.dumps([
+                {"from_slug": source, "to_slug": target, "link_type": relation}
+                for source, target, relation in sorted(self.edges)
+                if (not link_type or relation == link_type)
+                and (direction == "both" or (direction == "out" and source == slug) or (direction == "in" and target == slug))
+            ])
+
 
 class CaptureQueueAuthorityTests(unittest.TestCase):
     def setUp(self):
@@ -207,13 +219,13 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
     def test_reserve_and_finalize_http_routes_use_the_server_authority(self):
         status, reserved = self.dispatch("/api/capture-queue/reserve", self.payload)
         self.assertEqual(status, 200)
-        self.assertEqual(reserved["status"], "capture-recovery")
+        self.assertEqual(reserved["status"], "reserved")
         status, finalized = self.dispatch("/api/capture-queue/finalize", {
             "idempotency_key": self.payload["idempotency_key"],
             "attachments": [],
         })
         self.assertEqual(status, 200)
-        self.assertEqual(finalized["status"], "planned")
+        self.assertEqual(finalized["status"], "finalized")
         status, rejected = self.dispatch("/api/capture-queue/reserve", dict(self.payload, capture_id="CAP-9999"))
         self.assertEqual(status, 400)
         self.assertIn("forbidden", rejected["error"])
@@ -250,22 +262,32 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         self.assertEqual(finalized, retried)
         self.assertEqual(finalized["capture_id"], first["capture_id"])
         self.assertEqual(finalized["child_slug"], first["child_slug"])
-        self.assertEqual(finalized["status"], "planned")
+        self.assertEqual(finalized["status"], "finalized")
 
-    def test_finalize_reconciles_planned_child_missing_parent_and_reverse_links(self):
+    def test_finalize_reconciles_finalizing_child_missing_parent_projection(self):
         reservation = self.reserve()
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
-            server.finalize_capture_request(
+            partial = server.finalize_capture_request(
                 {"idempotency_key": self.payload["idempotency_key"], "attachments": []},
                 now="2026-07-15T09:31:00-07:00",
                 stop_after_child_for_test=True,
             )
+        self.assertEqual(partial["status"], "finalizing")
+        self.assertFalse(partial["graph_verified"])
+        self.assertNotIn(f"| {reservation['capture_id']} | planned |", self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG])
         result = self.finalize()
         parent = self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG]
         self.assertEqual(parent.count(f"| {reservation['capture_id']} | planned |"), 1)
         self.assertIn((server.CAPTURE_QUEUE_PARENT_SLUG, reservation["child_slug"], "has_capture_request"), self.store.edges)
         self.assertIn((reservation["child_slug"], server.CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"), self.store.edges)
         self.assertTrue(result["graph_verified"])
+
+    def test_authority_ledger_and_runtime_directory_are_private(self):
+        self.reserve()
+        runtime = self.data_dir / "private-runtime" / "capture-queue"
+        ledger = runtime / "authority.json"
+        self.assertEqual(stat.S_IMODE(runtime.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(ledger.stat().st_mode), 0o600)
 
     def test_reserve_and_finalize_reject_invalid_bodies_and_client_authority_fields(self):
         invalid = [
@@ -290,6 +312,49 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
                     server.finalize_capture_request(payload, now="2026-07-15T09:31:00-07:00")
+
+    def test_ledger_remains_sole_authority_when_child_is_tampered_or_unreadable(self):
+        reserved = self.reserve()
+        self.store.nodes[reserved["child_slug"]] = "tampered child metadata"
+        retried = self.reserve()
+        self.assertEqual(retried["capture_id"], reserved["capture_id"])
+        self.assertEqual(retried["status"], "reserved")
+        with self.assertRaisesRegex(ValueError, "metadata fingerprint"):
+            self.reserve(dict(self.payload, instructions="different request"))
+
+        original = self.store.get_entity_raw
+        self.store.get_entity_raw = lambda slug: (_ for _ in ()).throw(RuntimeError("child read unavailable")) if slug == reserved["child_slug"] else original(slug)
+        with self.assertRaisesRegex(RuntimeError, "child read unavailable"):
+            self.reserve()
+
+    def test_finalize_rejects_fabricated_attachment_receipt(self):
+        reserved = self.reserve()
+        receipt = {
+            "filename": "proof.png",
+            "reference": f"/media/{reserved['child_slug']}/proof.png",
+            "served_url": f"/media/{reserved['child_slug']}/proof.png",
+            "canonical_relative_path": f"{reserved['child_slug']}/proof.png",
+            "size_bytes": 5,
+            "sha256": hashlib.sha256(b"false").hexdigest(),
+        }
+        with mock.patch("server.MEDIA_ROOTS", [self.data_dir / "media"]):
+            with self.assertRaisesRegex(ValueError, "hosted bytes"):
+                self.finalize(attachments=[receipt])
+
+    def test_external_lease_blocks_queue_until_release_or_expiry(self):
+        status, lease = self.dispatch("/api/capture-queue/lease/acquire", {"owner": "worker-1", "ttl_seconds": 60})
+        self.assertEqual(status, 200)
+        with self.assertRaisesRegex(RuntimeError, "leased"):
+            self.reserve()
+        status, released = self.dispatch("/api/capture-queue/lease/release", {"owner": "worker-1", "token": lease["token"]})
+        self.assertEqual(status, 200)
+        self.assertTrue(released["released"])
+        self.assertEqual(self.reserve()["status"], "reserved")
+
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=100):
+            server.acquire_capture_queue_lease({"owner": "worker-2", "ttl_seconds": 1})
+        with mock.patch("server.time.time", return_value=102):
+            self.assertEqual(self.reserve()["status"], "reserved")
 
 
 class ApiEndpointTests(unittest.TestCase):
