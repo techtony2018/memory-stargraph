@@ -1,6 +1,6 @@
 Act as the Memory Stargraph Product Owner for `goals/memory-stargraph-continuous-learning-local-knowledge-os`.
 
-Review the latest worker automation states and Goal-linked Runs from the previous 24 hours. Check X intelligence, learning intake, Wish to Reallity implementation, divergent discovery when applicable, TODO transitions, test/deployment evidence, resolver feedback, Ask Yoda outcomes, health, backup status, and whether durable Learnings changed later behavior.
+Review the latest worker automation states and Goal-linked Runs from the previous 24 hours, including `memory-stargraph-ux-engineer-daily-dogfood`. Check X intelligence, learning intake, Wish to Reallity implementation, UX reports, journey coverage, reproduced friction, action counts, and UX TODO decisions; divergent discovery when applicable; TODO transitions; test/deployment evidence; resolver feedback; Ask Yoda outcomes; health; backup status; and whether durable Learnings changed later behavior.
 
 Surface paused, failed, stale, conflicting, duplicated, or missing runs. Produce a concise steward report with Goal health, worker status, last successful runs, meaningful metrics, top risks, pending human approvals, and the next highest-value coordination action.
 

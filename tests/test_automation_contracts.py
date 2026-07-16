@@ -112,6 +112,26 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(prohibition, prompt)
 
+    def test_ux_engineer_evidence_reaches_product_owner_and_learning_intake(self):
+        paths = (
+            ROOT / "automations/README.md",
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md",
+            ROOT
+            / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md",
+            ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md",
+        )
+        contract = "\n".join(path.read_text() for path in paths)
+        for phrase in (
+            "memory-stargraph-ux-engineer-daily-dogfood",
+            "Memory Stargraph UX Engineer",
+            "Daily 6:00 AM",
+            "UX reports",
+            "journey coverage",
+            "repeated UX",
+            "data-quality patterns",
+        ):
+            self.assertIn(phrase, contract)
+
     def test_every_worker_uses_dst_aware_pacific_reporting(self):
         workers = (
             "gbrain-x-intelligence-capture",
