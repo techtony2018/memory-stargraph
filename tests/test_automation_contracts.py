@@ -45,6 +45,12 @@ class AutomationContractTests(unittest.TestCase):
                 "target_thread_id": "{{STEWARD_THREAD_ID}}",
                 "role_files": ("prompt.md", "steward-thread-prompt.md"),
             },
+            "memory-stargraph-ux-engineer-daily-dogfood": {
+                "title": "Memory Stargraph UX Engineer",
+                "rrule": "FREQ=DAILY;BYHOUR=6;BYMINUTE=0;BYSECOND=0",
+                "target_thread_id": "{{UX_ENGINEER_THREAD_ID}}",
+                "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
+            },
         }
 
         for automation_id, contract in expected.items():
@@ -65,6 +71,39 @@ class AutomationContractTests(unittest.TestCase):
                     (directory / role_file).read_text(),
                     f"{automation_id}/{role_file} missing user-facing role title",
                 )
+
+    def test_ux_engineer_dogfoods_deployed_app_with_bounded_authority(self):
+        directory = ROOT / "automations/memory-stargraph-ux-engineer-daily-dogfood"
+        definition = tomllib.loads((directory / "automation.toml").read_text())
+        contract = "\n".join(
+            (directory / name).read_text()
+            for name in ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md")
+        )
+        self.assertEqual(definition["id"], "memory-stargraph-ux-engineer-daily-dogfood")
+        self.assertEqual(definition["name"], "Memory Stargraph UX Engineer")
+        self.assertEqual(definition["rrule"], "FREQ=DAILY;BYHOUR=6;BYMINUTE=0;BYSECOND=0")
+        self.assertEqual(definition["timezone"], "America/Los_Angeles")
+        self.assertEqual(definition["destination"], "thread")
+        self.assertEqual(definition["target_thread_id"], "{{UX_ENGINEER_THREAD_ID}}")
+        for phrase in (
+            "http://127.0.0.1:8788/api/health",
+            "dashboard-managed",
+            "demanding human user",
+            "rolling seven-day",
+            "reuse a suitable Memory Stargraph tab",
+            "Chrome CDP",
+            "environment=test",
+            "synthetic=true",
+            "test_run=true",
+            "pair_id=ux-dogfood:{invocation_id}:{journey_slug}",
+            "at most three planned TODOs",
+            "must not implement fixes",
+            "Goal-linked Run",
+            "dated UX report",
+            "manual trigger",
+            "no fixed cutoff",
+        ):
+            self.assertIn(phrase, contract)
 
     def test_every_worker_uses_dst_aware_pacific_reporting(self):
         workers = (

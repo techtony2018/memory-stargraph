@@ -1,0 +1,12 @@
+version = 1
+id = "memory-stargraph-ux-engineer-daily-dogfood"
+kind = "heartbeat"
+name = "Memory Stargraph UX Engineer"
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=6;BYMINUTE=0;BYSECOND=0"
+timezone = "America/Los_Angeles"
+destination = "thread"
+target_thread_id = "{{UX_ENGINEER_THREAD_ID}}"
+prompt_file = "heartbeat-prompt.md"
+worker_prompt_file = "prompt.md"
+thread_bootstrap_file = "thread-bootstrap.md"
