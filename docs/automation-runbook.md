@@ -11,6 +11,39 @@ private deployment configuration, and credentials remain local-only.
 
 See `automations/README.md` for the pipeline order and restore checklist.
 
+## Capture Link Backlog Operations
+
+Initialize and inspect the queue, freeze a worker snapshot, compact completed
+rows, and install the repository-canonical skills with:
+
+```bash
+python3 scripts/automation/manage_capture_backlog.py init --apply --json
+python3 scripts/automation/manage_capture_backlog.py list --json
+python3 scripts/automation/manage_capture_backlog.py snapshot --json
+python3 scripts/automation/manage_capture_backlog.py compact --apply --json
+python3 scripts/automation/install_capture_skills.py --json
+```
+
+The root queue is `notes/memory-starmap-capture-list`; its synchronized failure
+view is `notes/memory-starmap-capture-list/failed-items`. Requests move through
+`planned`, `capturing`, `completed`, and `failed`. A worker invocation takes one
+authoritative frozen snapshot of the then-current `planned` rows. It must finish
+every frozen row as `completed` or `failed`; rows added afterward remain planned
+for the next invocation. The midnight schedule is the default, but operators may
+trigger the persistent worker manually at any time.
+
+Request nodes own uploaded attachments. Upload and verify each attachment once,
+then let the final captured node reuse the durable reference and SHA-256 without
+copying the bytes again. Link request to result with `captured_as` and result to
+request with `captured_from`. Failed rows remain active in the failure view until
+explicitly requeued or resolved. Compaction creates immutable archives for each
+full batch of 50 completed rows while leaving active and residual rows at the
+root.
+
+All worker-generated timestamps and evidence use timezone-aware ISO 8601 in
+`America/Los_Angeles`: PDT (`-07:00`) in summer and PST (`-08:00`) in winter,
+never a fixed UTC-8 offset.
+
 ## Required Preflight
 
 Run this before implementation work:
