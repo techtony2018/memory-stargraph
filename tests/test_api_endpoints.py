@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import tempfile
 import threading
 import types
@@ -193,12 +194,16 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
             return server.reserve_capture_request(dict(self.payload if payload is None else payload), now="2026-07-15T09:30:00-07:00")
 
-    def finalize(self, key=None, attachments=None):
+    def finalize(self, key=None, attachments=None, attachment_receipts=None):
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
-            return server.finalize_capture_request({
+            payload = {
                 "idempotency_key": key or self.payload["idempotency_key"],
-                "attachments": list(attachments or []),
-            }, now="2026-07-15T09:31:00-07:00")
+            }
+            if attachments is not None:
+                payload["attachments"] = list(attachments)
+            if attachment_receipts is not None:
+                payload["attachment_receipts"] = list(attachment_receipts)
+            return server.finalize_capture_request(payload, now="2026-07-15T09:31:00-07:00")
 
     def dispatch(self, path, payload):
         handler = object.__new__(MemoryStargraphHandler)
@@ -222,7 +227,6 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         self.assertEqual(reserved["status"], "reserved")
         status, finalized = self.dispatch("/api/capture-queue/finalize", {
             "idempotency_key": self.payload["idempotency_key"],
-            "attachments": [],
         })
         self.assertEqual(status, 200)
         self.assertEqual(finalized["status"], "finalized")
@@ -268,7 +272,7 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         reservation = self.reserve()
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
             partial = server.finalize_capture_request(
-                {"idempotency_key": self.payload["idempotency_key"], "attachments": []},
+                {"idempotency_key": self.payload["idempotency_key"]},
                 now="2026-07-15T09:31:00-07:00",
                 stop_after_child_for_test=True,
             )
@@ -337,9 +341,76 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
             "size_bytes": 5,
             "sha256": hashlib.sha256(b"false").hexdigest(),
         }
-        with mock.patch("server.MEDIA_ROOTS", [self.data_dir / "media"]):
-            with self.assertRaisesRegex(ValueError, "hosted bytes"):
-                self.finalize(attachments=[receipt])
+        with self.assertRaisesRegex(ValueError, "client attachment claims"):
+            self.finalize(attachments=[receipt])
+
+    def test_gbrain_verified_opaque_receipt_is_authoritative_without_local_media_cache(self):
+        reserved = self.reserve()
+        content = b"durable-only"
+        digest = hashlib.sha256(content).hexdigest()
+        relative = f"{reserved['child_slug']}/proof.bin"
+        evidence = (
+            'GBRAIN_FILE_EVIDENCE '
+            + json.dumps({
+                "durable_storage_verified": True,
+                "storage_path": relative,
+                "filename": "proof.bin",
+                "size_bytes": len(content),
+                "sha256": digest,
+                "disposition": "uploaded",
+            })
+        )
+        with (
+            mock.patch("server.DATA_DIR", self.data_dir),
+            mock.patch("server.STORE", self.store),
+            mock.patch("server.run_gbrain", return_value=evidence) as run,
+        ):
+            receipt = server.verify_capture_queue_attachment({
+                "idempotency_key": self.payload["idempotency_key"],
+                "canonical_relative_path": relative,
+                "filename": "proof.bin",
+                "size_bytes": len(content),
+                "sha256": digest,
+            })
+        run.assert_called_once_with("files", "list", reserved["child_slug"])
+        self.assertFalse((self.data_dir / "media").exists())
+        finalized = self.finalize()
+        self.assertTrue(finalized["graph_verified"])
+        self.assertEqual(finalized["attachments"], [{
+            "receipt": receipt["receipt"],
+            "filename": "proof.bin",
+            "reference": f"/media/{relative}",
+            "served_url": f"/media/{relative}",
+            "canonical_relative_path": relative,
+            "size_bytes": len(content),
+            "sha256": digest,
+        }])
+        self.assertIn("proof.bin", self.store.nodes[reserved["child_slug"]])
+
+    def test_cache_exists_but_failed_gbrain_upload_never_records_receipt(self):
+        reserved = self.reserve()
+        content = b"cache-is-not-proof"
+        source = self.data_dir / "proof.bin"
+        source.write_bytes(content)
+        media = self.data_dir / "media" / reserved["child_slug"] / source.name
+        media.parent.mkdir(parents=True)
+        media.write_bytes(content)
+        upload_payload = {
+            "idempotency_key": self.payload["idempotency_key"],
+            "canonical_relative_path": f"{reserved['child_slug']}/{source.name}",
+            "filename": source.name,
+            "size_bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+        with (
+            mock.patch("server.DATA_DIR", self.data_dir),
+            mock.patch("server.STORE", self.store),
+            mock.patch.object(self.store, "attach_file", side_effect=RuntimeError("GBrain upload failed")),
+            self.assertRaisesRegex(RuntimeError, "GBrain upload failed"),
+        ):
+            server.record_capture_queue_attachment_upload(upload_payload, source, "proof")
+        with self.assertRaisesRegex(ValueError, "client attachment claims"):
+            self.finalize(attachment_receipts=["fabricated-token"])
 
     def test_external_lease_blocks_queue_until_release_or_expiry(self):
         status, lease = self.dispatch("/api/capture-queue/lease/acquire", {"owner": "worker-1", "ttl_seconds": 60})
@@ -355,6 +426,79 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
             server.acquire_capture_queue_lease({"owner": "worker-2", "ttl_seconds": 1})
         with mock.patch("server.time.time", return_value=102):
             self.assertEqual(self.reserve()["status"], "reserved")
+
+    def test_lease_renewal_preserves_owner_token_and_fence(self):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", side_effect=[100, 100, 101, 101]):
+            first = server.acquire_capture_queue_lease({"owner": "worker", "ttl_seconds": 10})
+            renewed = server.acquire_capture_queue_lease({
+                "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 10,
+            })
+        self.assertEqual((renewed["owner"], renewed["token"], renewed["fence"]), (first["owner"], first["token"], first["fence"]))
+        self.assertGreater(renewed["expires_at_epoch"], first["expires_at_epoch"])
+
+    def test_renewed_lease_remains_exclusive_beyond_initial_ttl(self):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=100):
+            first = server.acquire_capture_queue_lease({"owner": "worker", "ttl_seconds": 3})
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=102):
+            server.acquire_capture_queue_lease({
+                "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 3,
+            })
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=104):
+            with self.assertRaisesRegex(RuntimeError, "leased by worker"):
+                server.acquire_capture_queue_lease({"owner": "competitor", "ttl_seconds": 3})
+
+    def test_lost_owner_and_old_fence_cannot_mutate(self):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store), mock.patch("server.time.time", return_value=100):
+            first = server.acquire_capture_queue_lease({"owner": "worker-1", "ttl_seconds": 1})
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store), mock.patch("server.time.time", return_value=102):
+            second = server.acquire_capture_queue_lease({"owner": "worker-2", "ttl_seconds": 30})
+            with self.assertRaisesRegex(RuntimeError, "lease.*lost|fenced"):
+                server.mutate_capture_queue_under_lease({
+                    "owner": first["owner"], "token": first["token"], "fence": first["fence"],
+                    "operation": "put", "slug": server.CAPTURE_QUEUE_PARENT_SLUG, "markdown": "stale",
+                })
+            result = server.mutate_capture_queue_under_lease({
+                "owner": second["owner"], "token": second["token"], "fence": second["fence"],
+                "operation": "put", "slug": server.CAPTURE_QUEUE_PARENT_SLUG, "markdown": "fresh",
+            })
+        self.assertEqual(result["readback"], "fresh")
+        self.assertEqual(self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG], "fresh")
+
+    def test_private_authority_paths_reject_symlinks_and_sync_runtime_directory(self):
+        private = self.data_dir / "private-runtime"
+        outside = self.data_dir / "outside"
+        outside.mkdir()
+        private.symlink_to(outside, target_is_directory=True)
+        with mock.patch("server.DATA_DIR", self.data_dir), self.assertRaisesRegex(RuntimeError, "symlink"):
+            server._capture_queue_runtime_dir()
+        private.unlink()
+        self.reserve()
+        runtime = private / "capture-queue"
+        ledger = runtime / "authority.json"
+        ledger.unlink()
+        ledger.symlink_to(self.data_dir / "outside-ledger")
+        with mock.patch("server.DATA_DIR", self.data_dir), self.assertRaisesRegex(RuntimeError, "symlink"):
+            server._capture_queue_load_ledger()
+        ledger.unlink()
+        lock = runtime / "authority.lock"
+        lock.unlink()
+        lock.symlink_to(self.data_dir / "outside-lock")
+        with mock.patch("server.DATA_DIR", self.data_dir), self.assertRaisesRegex(RuntimeError, "symlink"):
+            with server._capture_queue_lock():
+                pass
+
+        lock.unlink()
+        synced_directory = False
+        real_fsync = os.fsync
+        def tracking_fsync(fd):
+            nonlocal synced_directory
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                synced_directory = True
+            return real_fsync(fd)
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.os.fsync", side_effect=tracking_fsync):
+            with server._capture_queue_lock():
+                server._capture_queue_save_ledger({"version": server.CAPTURE_QUEUE_LEDGER_VERSION, "next_capture_number": 1, "next_fence": 1, "entries": {}, "lease": None})
+        self.assertTrue(synced_directory)
 
 
 class ApiEndpointTests(unittest.TestCase):

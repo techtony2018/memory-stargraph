@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import contextvars
 import datetime as dt
 import functools
 import json
@@ -10,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -37,6 +39,9 @@ ARCHIVE_PREFIX = f"{ROOT_SLUG}/completed-archive-"
 ALLOWED_STATUSES = {"planned", "capturing", "completed", "failed"}
 PACIFIC = ZoneInfo("America/Los_Angeles")
 DEFAULT_STARGRAPH_URL = "http://127.0.0.1:8788"
+LEASE_TTL_SECONDS = 300
+LEASE_RENEW_INTERVAL_SECONDS = 90.0
+_LEASE_CONTEXT = contextvars.ContextVar("capture_queue_lease", default=None)
 CAPTURE_SPEC = BacklogSpec(
     root_slug=ROOT_SLUG,
     section_heading="Capture Items",
@@ -82,24 +87,62 @@ def queue_authority_lease(operation: str):
         try:
             lease = _queue_authority_post(
                 "/api/capture-queue/lease/acquire",
-                {"owner": owner, "ttl_seconds": 300},
+                {"owner": owner, "ttl_seconds": LEASE_TTL_SECONDS},
             )
             break
         except RuntimeError as exc:
             last_error = exc
     if lease is None:
         raise RuntimeError(f"could not acquire capture queue authority lease: {last_error}")
+    if not lease.get("token") or not isinstance(lease.get("fence"), int):
+        raise RuntimeError("capture queue authority returned an unfenced lease")
+    stop_renewal = threading.Event()
+    renewal_error = []
+
+    def renew():
+        while not stop_renewal.wait(LEASE_RENEW_INTERVAL_SECONDS):
+            try:
+                renewed = _queue_authority_post(
+                    "/api/capture-queue/lease/acquire",
+                    {
+                        "owner": owner,
+                        "token": lease["token"],
+                        "fence": lease["fence"],
+                        "ttl_seconds": LEASE_TTL_SECONDS,
+                    },
+                )
+                if (
+                    renewed.get("owner") != owner
+                    or renewed.get("token") != lease["token"]
+                    or renewed.get("fence") != lease["fence"]
+                ):
+                    raise RuntimeError("capture queue lease renewal changed owner, token, or fence")
+                lease["expires_at_epoch"] = renewed.get("expires_at_epoch")
+            except Exception as exc:  # noqa: BLE001 - delivered to the owning operation
+                renewal_error.append(exc)
+                stop_renewal.set()
+                return
+
+    renewal_thread = threading.Thread(target=renew, name="capture-queue-lease-renewal", daemon=True)
+    renewal_thread.start()
+    context = {"owner": owner, "token": lease["token"], "fence": lease["fence"], "renewal_error": renewal_error}
+    context_token = _LEASE_CONTEXT.set(context)
     body_error = None
     try:
         yield lease
+        if renewal_error:
+            raise RuntimeError(f"capture queue lease was lost during {operation}: {renewal_error[0]}")
     except BaseException as exc:  # preserve the operation failure if release also fails
         body_error = exc
         raise
     finally:
+        _LEASE_CONTEXT.reset(context_token)
+        stop_renewal.set()
+        renewal_thread.join(timeout=max(1.0, min(5.0, LEASE_RENEW_INTERVAL_SECONDS + 1.0)))
         try:
             _queue_authority_post(
                 "/api/capture-queue/lease/release",
-                {"owner": owner, "token": lease["token"]},
+                {"owner": owner, "token": lease["token"], "fence": lease["fence"]},
             )
         except Exception:
             if body_error is None:
@@ -311,10 +354,23 @@ def get_optional(slug: str) -> str | None:
 
 
 def put_readback(slug: str, markdown: str) -> str:
-    result = run_gbrain(["put", slug], input_text=markdown)
-    if result.returncode:
-        raise RuntimeError(result_error(result))
-    return get_required(slug)
+    result = _queue_authority_mutate({"operation": "put", "slug": slug, "markdown": markdown})
+    return str(result["readback"])
+
+
+def _queue_authority_mutate(payload: dict[str, object]) -> dict[str, object]:
+    lease = _LEASE_CONTEXT.get()
+    if not isinstance(lease, dict):
+        raise RuntimeError("capture queue mutation requires an active authority lease")
+    if lease["renewal_error"]:
+        raise RuntimeError(f"capture queue lease was lost before mutation: {lease['renewal_error'][0]}")
+    result = _queue_authority_post(
+        "/api/capture-queue/lease/mutate",
+        {**payload, "owner": lease["owner"], "token": lease["token"], "fence": lease["fence"]},
+    )
+    if lease["renewal_error"]:
+        raise RuntimeError(f"capture queue lease was lost during mutation: {lease['renewal_error'][0]}")
+    return result
 
 
 def graph_edges(source: str, relation: str) -> list[dict[str, object]]:
@@ -348,37 +404,11 @@ def verify_link(source: str, target: str, relation: str, present: bool) -> None:
 
 
 def link(source: str, target: str, relation: str) -> None:
-    result = run_gbrain(
-        [
-            "link",
-            source,
-            target,
-            "--link-type",
-            relation,
-            "--link-source",
-            "memory-stargraph-capture-backlog",
-        ]
-    )
-    if result.returncode and "already" not in result_error(result).lower():
-        raise RuntimeError(result_error(result))
-    verify_link(source, target, relation, True)
+    _queue_authority_mutate({"operation": "link", "source": source, "target": target, "relation": relation})
 
 
 def unlink(source: str, target: str, relation: str) -> None:
-    result = run_gbrain(
-        [
-            "unlink",
-            source,
-            target,
-            "--link-type",
-            relation,
-            "--link-source",
-            "memory-stargraph-capture-backlog",
-        ]
-    )
-    if result.returncode and "not found" not in result_error(result).lower():
-        raise RuntimeError(result_error(result))
-    verify_link(source, target, relation, False)
+    _queue_authority_mutate({"operation": "unlink", "source": source, "target": target, "relation": relation})
 
 
 @_uses_queue_authority("init")

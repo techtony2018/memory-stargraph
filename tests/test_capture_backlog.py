@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import subprocess
 import sys
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -121,8 +123,24 @@ class CaptureBacklogTests(unittest.TestCase):
             yield {"token": "test"}
         self.lease_patch = mock.patch.object(capture, "queue_authority_lease", no_op_lease)
         self.lease_patch.start()
+        def local_mutation(payload):
+            operation = payload["operation"]
+            if operation == "put":
+                result = capture.run_gbrain(["put", payload["slug"]], input_text=payload["markdown"])
+                if result.returncode:
+                    raise RuntimeError(capture.result_error(result))
+                return {"ok": True, "readback": capture.get_required(payload["slug"])}
+            args = [operation, payload["source"], payload["target"], "--link-type", payload["relation"]]
+            result = capture.run_gbrain(args)
+            if result.returncode:
+                raise RuntimeError(capture.result_error(result))
+            capture.verify_link(payload["source"], payload["target"], payload["relation"], operation == "link")
+            return {"ok": True, "present": operation == "link"}
+        self.mutation_patch = mock.patch.object(capture, "_queue_authority_mutate", side_effect=local_mutation)
+        self.mutation_patch.start()
 
     def tearDown(self):
+        self.mutation_patch.stop()
         self.lease_patch.stop()
 
     def test_all_consistent_read_and_mutation_paths_use_queue_authority_lease(self):
@@ -152,7 +170,7 @@ class CaptureBacklogTests(unittest.TestCase):
         def post(path, payload):
             calls.append((path, dict(payload)))
             if path.endswith("/acquire"):
-                return {"ok": True, "token": "lease-token"}
+                return {"ok": True, "owner": payload["owner"], "token": "lease-token", "fence": 1}
             return {"ok": True, "released": True}
 
         try:
@@ -166,6 +184,82 @@ class CaptureBacklogTests(unittest.TestCase):
             ])
             self.assertEqual(calls[-1][1]["token"], "lease-token")
         finally:
+            self.lease_patch.start()
+
+    def test_queue_authority_lease_renews_before_ttl_and_preserves_fence(self):
+        self.lease_patch.stop()
+        calls = []
+        token = "lease-token"
+
+        def post(path, payload):
+            calls.append((path, dict(payload)))
+            if path.endswith("/acquire"):
+                return {"ok": True, "owner": payload["owner"], "token": token, "fence": 7, "expires_at_epoch": time.time() + 1}
+            return {"ok": True, "released": True}
+
+        try:
+            with (
+                mock.patch.object(capture, "_queue_authority_post", side_effect=post),
+                mock.patch.object(capture, "LEASE_TTL_SECONDS", 1),
+                mock.patch.object(capture, "LEASE_RENEW_INTERVAL_SECONDS", 0.01),
+            ):
+                with capture.queue_authority_lease("long-operation"):
+                    time.sleep(0.04)
+            renewals = [payload for path, payload in calls if path.endswith("/acquire") and payload.get("token")]
+            self.assertTrue(renewals)
+            self.assertTrue(all(item["token"] == token and item["fence"] == 7 for item in renewals))
+        finally:
+            self.lease_patch.start()
+
+    def test_queue_authority_lease_detects_lost_owner_and_aborts(self):
+        self.lease_patch.stop()
+        acquired = threading.Event()
+
+        def post(path, payload):
+            if path.endswith("/release"):
+                return {"ok": True, "released": False}
+            if payload.get("token"):
+                acquired.set()
+                raise RuntimeError("lease lost")
+            return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 2, "expires_at_epoch": time.time() + 1}
+
+        try:
+            with (
+                mock.patch.object(capture, "_queue_authority_post", side_effect=post),
+                mock.patch.object(capture, "LEASE_TTL_SECONDS", 1),
+                mock.patch.object(capture, "LEASE_RENEW_INTERVAL_SECONDS", 0.01),
+                self.assertRaisesRegex(RuntimeError, "lease.*lost"),
+            ):
+                with capture.queue_authority_lease("lost-owner"):
+                    self.assertTrue(acquired.wait(1))
+        finally:
+            self.lease_patch.start()
+
+    def test_all_gbrain_mutations_are_routed_through_fenced_authority(self):
+        self.lease_patch.stop()
+        self.mutation_patch.stop()
+        calls = []
+
+        def post(path, payload):
+            calls.append((path, dict(payload)))
+            if path.endswith("/acquire"):
+                return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 11, "expires_at_epoch": time.time() + 300}
+            if path.endswith("/mutate"):
+                return {"ok": True, "readback": payload.get("markdown", "")}
+            return {"ok": True, "released": True}
+
+        try:
+            with mock.patch.object(capture, "_queue_authority_post", side_effect=post), mock.patch.object(capture, "run_gbrain") as direct:
+                with capture.queue_authority_lease("mutations"):
+                    self.assertEqual(capture.put_readback(capture.ROOT_SLUG, "markdown"), "markdown")
+                    capture.link(capture.ROOT_SLUG, "child", "has_capture_request")
+                    capture.unlink(capture.ROOT_SLUG, "child", "has_capture_request")
+            mutation_payloads = [payload for path, payload in calls if path.endswith("/mutate")]
+            self.assertEqual([item["operation"] for item in mutation_payloads], ["put", "link", "unlink"])
+            self.assertTrue(all(item["token"] == "token" and item["fence"] == 11 for item in mutation_payloads))
+            direct.assert_not_called()
+        finally:
+            self.mutation_patch.start()
             self.lease_patch.start()
 
     def test_root_has_exact_schema_and_pacific_timestamp(self):

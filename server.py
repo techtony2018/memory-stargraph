@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import ssl
+import stat
 import subprocess
 import tempfile
 import threading
@@ -201,8 +202,10 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
     {"action": "capture-queue-reserve", "method": "POST", "endpoint": "/api/capture-queue/reserve", "mutates_gbrain": True},
     {"action": "capture-queue-finalize", "method": "POST", "endpoint": "/api/capture-queue/finalize", "mutates_gbrain": True},
+    {"action": "capture-queue-attachment-verify", "method": "POST", "endpoint": "/api/capture-queue/attachment/verify", "mutates_gbrain": False},
     {"action": "capture-queue-lease-acquire", "method": "POST", "endpoint": "/api/capture-queue/lease/acquire", "mutates_gbrain": False},
     {"action": "capture-queue-lease-release", "method": "POST", "endpoint": "/api/capture-queue/lease/release", "mutates_gbrain": False},
+    {"action": "capture-queue-lease-mutate", "method": "POST", "endpoint": "/api/capture-queue/lease/mutate", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
     {"action": "take-review", "method": "GET", "endpoint": "/api/take-proposals", "mutates_gbrain": False},
     {"action": "take-review-accept", "method": "POST", "endpoint": "/api/take-proposals/<id>/accept", "mutates_gbrain": True},
@@ -559,23 +562,61 @@ Collection: {reservation['collection'] or 'worker-selected'}
 def _capture_queue_lock():
     runtime_dir = _capture_queue_runtime_dir()
     lock_path = runtime_dir / "authority.lock"
-    with CAPTURE_QUEUE_THREAD_LOCK, lock_path.open("a+b") as handle:
-        os.chmod(lock_path, 0o600)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    with CAPTURE_QUEUE_THREAD_LOCK:
+        try:
+            fd = os.open(lock_path, flags, 0o600)
+        except OSError as exc:
+            raise RuntimeError("capture queue authority lock is unsafe, unavailable, or a symlink") from exc
+        handle = os.fdopen(fd, "a+b")
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            handle.close()
+            raise RuntimeError("capture queue authority lock must be a regular file, not a symlink")
+        os.fchmod(handle.fileno(), 0o600)
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
 
 
 def _capture_queue_runtime_dir():
+    data_root = DATA_DIR.resolve()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     private_root = DATA_DIR / "private-runtime"
-    private_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(private_root, 0o700)
+    _capture_queue_secure_directory(private_root, data_root)
     runtime_dir = private_root / "capture-queue"
-    runtime_dir.mkdir(exist_ok=True, mode=0o700)
-    os.chmod(runtime_dir, 0o700)
+    _capture_queue_secure_directory(runtime_dir, private_root.resolve())
     return runtime_dir
+
+
+def _capture_queue_secure_directory(path, parent_root):
+    try:
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode):
+            raise RuntimeError(f"capture queue private path must not be a symlink: {path}")
+        if not stat.S_ISDIR(current.st_mode):
+            raise RuntimeError(f"capture queue private path must be a directory: {path}")
+    except FileNotFoundError:
+        path.mkdir(mode=0o700, exist_ok=True)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISDIR(current.st_mode):
+            raise RuntimeError(f"capture queue private path must be a directory, not a symlink: {path}")
+    resolved = path.resolve()
+    if resolved != parent_root and parent_root not in resolved.parents:
+        raise RuntimeError(f"capture queue private path escapes its runtime root: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"capture queue private path is unsafe: {path}") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise RuntimeError(f"capture queue private path must be a directory: {path}")
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
 
 
 def _capture_queue_ledger_path():
@@ -584,10 +625,19 @@ def _capture_queue_ledger_path():
 
 def _capture_queue_load_ledger():
     path = _capture_queue_ledger_path()
-    if not path.exists():
-        return {"version": CAPTURE_QUEUE_LEDGER_VERSION, "next_capture_number": 1, "entries": {}, "lease": None}
     try:
-        with path.open(encoding="utf-8") as handle:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return {"version": CAPTURE_QUEUE_LEDGER_VERSION, "next_capture_number": 1, "next_fence": 1, "entries": {}, "lease": None}
+    if stat.S_ISLNK(mode):
+        raise RuntimeError("capture queue authority ledger must not be a symlink")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise RuntimeError("capture queue authority ledger must be a regular file")
+        with os.fdopen(fd, encoding="utf-8") as handle:
             ledger = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("capture queue authority ledger is unreadable or malformed") from exc
@@ -598,16 +648,31 @@ def _capture_queue_load_ledger():
 
 def _capture_queue_save_ledger(ledger):
     path = _capture_queue_ledger_path()
+    try:
+        if stat.S_ISLNK(path.lstat().st_mode):
+            raise RuntimeError("capture queue authority ledger must not be a symlink")
+    except FileNotFoundError:
+        pass
     temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             json.dump(ledger, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp, path)
-        os.chmod(path, 0o600)
+        ledger_fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fchmod(ledger_fd, 0o600)
+        finally:
+            os.close(ledger_fd)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         try:
             temp.unlink()
@@ -645,16 +710,24 @@ def acquire_capture_queue_lease(payload):
     if ttl < 1 or ttl > CAPTURE_QUEUE_LEASE_MAX_SECONDS:
         raise ValueError(f"ttl_seconds must be 1-{CAPTURE_QUEUE_LEASE_MAX_SECONDS}")
     requested_token = str(payload.get("token") or "")
+    requested_fence = payload.get("fence")
     with _capture_queue_lock():
         ledger = _capture_queue_load_ledger()
         active = _capture_queue_active_lease(ledger)
         if active:
-            if active.get("owner") == owner and requested_token and secrets.compare_digest(str(active.get("token")), requested_token):
+            if (
+                active.get("owner") == owner
+                and requested_token
+                and requested_fence == active.get("fence")
+                and secrets.compare_digest(str(active.get("token")), requested_token)
+            ):
                 active["expires_at_epoch"] = time.time() + ttl
                 _capture_queue_save_ledger(ledger)
                 return {"ok": True, **active}
             raise RuntimeError(f"capture queue is leased by {active.get('owner') or 'external actor'}")
-        lease = {"owner": owner, "token": secrets.token_urlsafe(32), "expires_at_epoch": time.time() + ttl}
+        fence = max(1, int(ledger.get("next_fence") or 1))
+        ledger["next_fence"] = fence + 1
+        lease = {"owner": owner, "token": secrets.token_urlsafe(32), "fence": fence, "expires_at_epoch": time.time() + ttl}
         ledger["lease"] = lease
         _capture_queue_save_ledger(ledger)
         return {"ok": True, **lease}
@@ -679,8 +752,203 @@ def release_capture_queue_lease(payload):
         return {"ok": True, "released": True}
 
 
+def _capture_queue_require_lease(ledger, payload):
+    active = _capture_queue_active_lease(ledger)
+    owner = str(payload.get("owner") or "")
+    token = str(payload.get("token") or "")
+    fence = payload.get("fence")
+    if not active:
+        raise RuntimeError("capture queue lease was lost or expired")
+    if (
+        active.get("owner") != owner
+        or active.get("fence") != fence
+        or not token
+        or not secrets.compare_digest(str(active.get("token")), token)
+    ):
+        raise RuntimeError("capture queue mutation was fenced because lease ownership was lost")
+    return active
+
+
+def _capture_queue_mutation_slug_allowed(slug):
+    value = str(slug or "").strip("/")
+    return value in {CAPTURE_QUEUE_PARENT_SLUG, f"{CAPTURE_QUEUE_PARENT_SLUG}/failed-items"} or value.startswith(
+        f"{CAPTURE_QUEUE_PARENT_SLUG}/"
+    )
+
+
+def mutate_capture_queue_under_lease(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    operation = str(payload.get("operation") or "")
+    if operation not in {"put", "link", "unlink"}:
+        raise ValueError("capture queue mutation operation is not whitelisted")
+    with _capture_queue_lock():
+        ledger = _capture_queue_load_ledger()
+        _capture_queue_require_lease(ledger, payload)
+        if operation == "put":
+            slug = str(payload.get("slug") or "").strip("/")
+            markdown = payload.get("markdown")
+            if not _capture_queue_mutation_slug_allowed(slug) or not isinstance(markdown, str):
+                raise ValueError("capture queue put target or markdown is invalid")
+            STORE.save_entity_raw(slug, markdown)
+            readback = STORE.get_entity_raw(slug)
+            if readback != markdown:
+                raise RuntimeError("capture queue fenced put readback mismatch")
+            return {"ok": True, "readback": readback, "fence": payload["fence"]}
+        source = str(payload.get("source") or "").strip("/")
+        target = str(payload.get("target") or "").strip("/")
+        relation = str(payload.get("relation") or "").strip()
+        allowed_relations = {
+            "has_failed_collection", "failed_collection_for", "has_failed_capture",
+            "failed_capture_for", "has_completed_archive", "completed_archive_for",
+            "contains_capture_request",
+        }
+        if not (_capture_queue_mutation_slug_allowed(source) and _capture_queue_mutation_slug_allowed(target)) or relation not in allowed_relations:
+            raise ValueError("capture queue link mutation is not whitelisted")
+        if operation == "link":
+            try:
+                STORE.add_relationship(source, target, relation, "memory-stargraph-capture-backlog")
+            except RuntimeError as exc:
+                if "already" not in str(exc).lower():
+                    raise
+        else:
+            try:
+                STORE.remove_relationship(source, target, relation)
+            except RuntimeError as exc:
+                if "not found" not in str(exc).lower():
+                    raise
+        raw_edges = STORE.graph_query(source, relation, "out", "1")
+        edges = extract_json_list(str(raw_edges or ""))
+        present = isinstance(edges, list) and any(
+            isinstance(edge, dict)
+            and str(edge.get("from_slug") or edge.get("source") or "") == source
+            and str(edge.get("to_slug") or edge.get("target") or "") == target
+            and str(edge.get("link_type") or relation) == relation
+            for edge in edges
+        )
+        if present != (operation == "link"):
+            raise RuntimeError("capture queue fenced link readback mismatch")
+        return {"ok": True, "present": present, "fence": payload["fence"]}
+
+
+def _capture_queue_attachment_expectation(payload, reservation):
+    filename = str(payload.get("filename") or "")
+    relative = str(payload.get("canonical_relative_path") or "").strip("/")
+    if not filename or Path(filename).name != filename or Path(relative).name != filename:
+        raise ValueError("attachment filename or canonical path is invalid")
+    if not relative.startswith(f"{reservation['child_slug']}/") or ".." in Path(relative).parts:
+        raise ValueError("attachment canonical path is outside the reserved child")
+    size = payload.get("size_bytes")
+    digest = str(payload.get("sha256") or "")
+    if not isinstance(size, int) or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("attachment size or sha256 is invalid")
+    return {"filename": filename, "canonical_relative_path": relative, "size_bytes": size, "sha256": digest}
+
+
+def _capture_queue_durable_evidence(output, expected):
+    matched = None
+    for line in str(output or "").splitlines():
+        if not line.startswith("GBRAIN_FILE_EVIDENCE "):
+            continue
+        try:
+            item = json.loads(line.split(" ", 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(item, dict)
+            and item.get("durable_storage_verified") is True
+            and item.get("storage_path") == expected["canonical_relative_path"]
+            and item.get("filename") == expected["filename"]
+            and item.get("size_bytes") == expected["size_bytes"]
+            and item.get("sha256") == expected["sha256"]
+        ):
+            matched = item
+    if matched is None:
+        raise RuntimeError("exact GBrain durable attachment evidence was not found")
+    return matched
+
+
+def _capture_queue_record_receipt(ledger, reservation, expected, evidence):
+    records = reservation.setdefault("attachment_receipts", {})
+    for token, recorded in records.items():
+        if all(recorded.get(key) == expected[key] for key in expected):
+            return {"ok": True, "receipt": token, **recorded}
+    token = secrets.token_urlsafe(32)
+    served_url = f"/media/{quote(expected['canonical_relative_path'], safe='/')}"
+    recorded = {
+        **expected,
+        "reference": served_url,
+        "served_url": served_url,
+    }
+    records[token] = recorded
+    reservation.setdefault("attachment_receipt_order", []).append(token)
+    _capture_queue_save_ledger(ledger)
+    return {"ok": True, "receipt": token, **recorded}
+
+
+def _capture_queue_reserved_entry(ledger, payload):
+    key = _capture_queue_validate_key(payload.get("idempotency_key"))
+    ledger_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    reservation = ledger["entries"].get(ledger_key)
+    if not isinstance(reservation, dict) or reservation.get("idempotency_key") != key:
+        raise ValueError("capture reservation does not exist")
+    if reservation.get("state") == "finalized":
+        raise ValueError("capture reservation is already finalized")
+    return reservation
+
+
+def verify_capture_queue_attachment(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    with _capture_queue_lock():
+        ledger = _capture_queue_load_ledger()
+        _capture_queue_assert_available(ledger)
+        reservation = _capture_queue_reserved_entry(ledger, payload)
+        expected = _capture_queue_attachment_expectation(payload, reservation)
+        evidence = _capture_queue_durable_evidence(
+            run_gbrain("files", "list", reservation["child_slug"]), expected
+        )
+        return _capture_queue_record_receipt(ledger, reservation, expected, evidence)
+
+
+def record_capture_queue_attachment_upload(payload, file_path, description=""):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    source = Path(file_path)
+    with _capture_queue_lock():
+        ledger = _capture_queue_load_ledger()
+        _capture_queue_assert_available(ledger)
+        reservation = _capture_queue_reserved_entry(ledger, payload)
+        expected = _capture_queue_attachment_expectation(payload, reservation)
+        source_bytes = source.read_bytes()
+        if len(source_bytes) != expected["size_bytes"] or hashlib.sha256(source_bytes).hexdigest() != expected["sha256"]:
+            raise ValueError("attachment upload bytes do not match the reserved size and sha256")
+        local_media = STORE.attach_file(reservation["child_slug"], str(source), description)
+        if not isinstance(local_media, dict):
+            raise RuntimeError("GBrain attachment upload returned no durable evidence")
+        evidence = {
+            "durable_storage_verified": local_media.get("durable_storage_verified"),
+            "storage_path": local_media.get("canonical_relative_path"),
+            "filename": local_media.get("filename"),
+            "size_bytes": local_media.get("size_bytes"),
+            "sha256": local_media.get("sha256"),
+            "disposition": local_media.get("storage_disposition"),
+        }
+        _capture_queue_durable_evidence(
+            "GBRAIN_FILE_EVIDENCE " + json.dumps(evidence), expected
+        )
+        return _capture_queue_record_receipt(ledger, reservation, expected, evidence)
+
+
 def _capture_queue_result(reservation):
     state = reservation["state"]
+    records = reservation.get("attachment_receipts", {})
+    order = reservation.get("attachment_receipt_order", list(records) if isinstance(records, dict) else [])
+    attachments = [
+        {"receipt": token, **records[token]}
+        for token in order
+        if isinstance(records, dict) and token in records
+    ]
     return {
         "ok": True,
         "capture_id": reservation["capture_id"],
@@ -690,6 +958,7 @@ def _capture_queue_result(reservation):
         "reserved": True,
         "finalized": state == "finalized",
         "graph_verified": bool(reservation.get("graph_verified")) and state == "finalized",
+        "attachments": attachments,
     }
 
 
@@ -727,6 +996,8 @@ def reserve_capture_request(payload, now=None):
             "created_at": capture_queue_timestamp(now),
             "state": "reserved",
             "receipts": [],
+            "attachment_receipts": {},
+            "attachment_receipt_order": [],
             "graph_verified": False,
         }
         ledger["entries"][ledger_key] = reservation
@@ -738,54 +1009,13 @@ def reserve_capture_request(payload, now=None):
         return _capture_queue_result(reservation)
 
 
-def _capture_queue_validate_attachments(payload, child_slug):
-    attachments = payload.get("attachments", [])
-    if not isinstance(attachments, list):
-        raise ValueError("attachments must be an array")
-    validated = []
-    filenames = set()
-    for item in attachments:
-        if not isinstance(item, dict):
-            raise ValueError("each attachment must be an object")
-        required = {"filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
-        if not required.issubset(item):
-            raise ValueError("attachment receipt is incomplete")
-        relative = str(item["canonical_relative_path"]).strip("/")
-        if not relative.startswith(f"{child_slug}/") or ".." in Path(relative).parts:
-            raise ValueError("attachment canonical path is outside the reserved child")
-        filename = str(item["filename"])
-        if not filename or Path(filename).name != filename or filename in filenames or "\n" in filename or "\r" in filename:
-            raise ValueError("attachment filename is invalid or duplicated")
-        filenames.add(filename)
-        if Path(relative).name != filename:
-            raise ValueError("attachment filename does not match canonical path")
-        if not isinstance(item["size_bytes"], int) or item["size_bytes"] < 0:
-            raise ValueError("attachment size_bytes is invalid")
-        if not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"])):
-            raise ValueError("attachment sha256 is invalid")
-        if str(item["reference"]) != str(item["served_url"]):
-            raise ValueError("attachment reference must equal served_url")
-        served = urlparse(str(item["served_url"]))
-        if served.scheme or served.netloc or served.query or served.fragment or unquote(served.path) != f"/media/{relative}":
-            raise ValueError("attachment served_url must be the canonical local media path")
-        hosted_path = resolve_media_file_path(str(item["served_url"]))
-        if hosted_path is None:
-            raise ValueError("attachment hosted bytes are unavailable to the server authority")
-        try:
-            hosted_bytes = hosted_path.read_bytes()
-        except OSError as exc:
-            raise ValueError("attachment hosted bytes are unreadable to the server authority") from exc
-        if len(hosted_bytes) != item["size_bytes"] or hashlib.sha256(hosted_bytes).hexdigest() != item["sha256"]:
-            raise ValueError("attachment hosted bytes do not match the claimed size and sha256")
-        validated.append({key: item[key] for key in sorted(required)})
-    return validated
-
-
 def finalize_capture_request(payload, now=None, stop_after_child_for_test=False):
     if not isinstance(payload, dict):
         raise ValueError("request body must be a JSON object")
-    forbidden = {"capture_id", "child_slug", "slug", "status"} & set(payload)
+    forbidden = {"capture_id", "child_slug", "slug", "status", "attachments", "attachment_receipts"} & set(payload)
     if forbidden:
+        if forbidden & {"attachments", "attachment_receipts"}:
+            raise ValueError("client attachment claims are forbidden; use server attachment receipts")
         raise ValueError(f"client authority fields are forbidden: {', '.join(sorted(forbidden))}")
     key = _capture_queue_validate_key(payload.get("idempotency_key"))
     child_slug = _capture_queue_child_slug(key)
@@ -798,13 +1028,20 @@ def finalize_capture_request(payload, now=None, stop_after_child_for_test=False)
             raise ValueError("capture reservation does not exist")
         if reservation.get("child_slug") != child_slug:
             raise RuntimeError("capture queue reservation ledger child is invalid")
-        attachments = _capture_queue_validate_attachments(payload, child_slug)
+        records = reservation.get("attachment_receipts", {})
+        if not isinstance(records, dict):
+            raise RuntimeError("capture attachment receipt ledger is malformed")
+        receipt_tokens = reservation.get("attachment_receipt_order", list(records))
+        if not isinstance(receipt_tokens, list) or len(receipt_tokens) != len(records) or any(token not in records for token in receipt_tokens):
+            raise RuntimeError("capture attachment receipt order is malformed")
+        attachments = [dict(records[token]) for token in receipt_tokens]
         if reservation["state"] in {"finalizing", "finalized"}:
-            if attachments != reservation.get("receipts", []):
-                raise ValueError("finalize retry attachments do not match the authoritative finalized result")
+            if receipt_tokens != reservation.get("receipt_tokens", []) or attachments != reservation.get("receipts", []):
+                raise RuntimeError("authoritative finalized attachment ledger changed unexpectedly")
         else:
             reservation["state"] = "finalizing"
             reservation["receipts"] = attachments
+            reservation["receipt_tokens"] = receipt_tokens
             reservation["graph_verified"] = False
             _capture_queue_save_ledger(ledger)
         final_child = _capture_queue_render_child(reservation, "planned", attachments)
@@ -4606,6 +4843,20 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/capture-queue/attachment/verify":
+            try:
+                return self.end_json(verify_capture_queue_attachment(self.read_json_body()))
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/capture-queue/lease/mutate":
+            try:
+                return self.end_json(mutate_capture_queue_under_lease(self.read_json_body()))
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
@@ -4891,6 +5142,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 content_type = getattr(self, "headers", {}).get("Content-Type") or ""
                 uploaded_path = None
                 description = ""
+                fields = {}
+                payload = {}
                 if content_type.startswith("multipart/form-data"):
                     fields, files = self.read_multipart_body()
                     description = str(fields.get("description") or "").strip()
@@ -4905,6 +5158,19 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     description = str(payload.get("description") or "").strip()
                 if not file_path:
                     return self.end_json({"error": "file_path is required"}, status=HTTPStatus.BAD_REQUEST)
+                queue_key = str(fields.get("idempotency_key") or "").strip() if content_type.startswith("multipart/form-data") else str(payload.get("idempotency_key") or "").strip()
+                if queue_key:
+                    source = Path(file_path)
+                    authority_fields = fields if content_type.startswith("multipart/form-data") else payload
+                    authority_payload = {
+                        "idempotency_key": queue_key,
+                        "canonical_relative_path": str(authority_fields.get("canonical_relative_path") or "").strip(),
+                        "filename": str(authority_fields.get("filename") or source.name).strip(),
+                        "size_bytes": int(authority_fields.get("size_bytes") or -1),
+                        "sha256": str(authority_fields.get("sha256") or "").strip(),
+                    }
+                    authority_receipt = record_capture_queue_attachment_upload(authority_payload, source, description)
+                    return self.end_json({"ok": True, "slug": slug, "attachment_receipt": authority_receipt})
                 local_media = STORE.attach_file(slug, file_path, description)
                 graph = STORE.get_seed_graph(force=True)
                 return self.end_json(

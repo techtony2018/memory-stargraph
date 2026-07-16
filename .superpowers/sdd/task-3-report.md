@@ -177,3 +177,47 @@ git diff --check
 ### Concerns
 
 No blocking concerns. The shared lease is intentionally fail-closed and expires after at most 300 seconds so a crashed worker cannot deadlock the queue. Direct deliberate GBrain writes outside the queue skill and managed backlog worker remain outside this authority boundary, as scoped by the review.
+
+## Production-safety closure
+
+- Removed local `/media` bytes from the capture authority decision. Successful queue uploads now record a random opaque receipt in the private server ledger only after `GraphStore.attach_file` returns exact GBrain durable evidence for the reserved child, canonical path, filename, byte count, and SHA-256. Finalize accepts only the idempotency key and derives every attachment from the ledger's server-maintained receipt order; client attachment objects and receipt selections are rejected.
+- Ambiguous recovery now calls `/api/capture-queue/attachment/verify`. Under the authority lock, Stargraph independently runs the exact child's `gbrain files list`, requires a matching `GBRAIN_FILE_EVIDENCE` path, filename, size, and SHA, and only then records or reuses an opaque receipt. Recovery never reconstructs authority from served cache bytes.
+- External manager leases now carry a monotonic fencing generation. A renewal thread refreshes the same owner, token, and fence before TTL, makes renewal loss visible to the owning operation, and aborts before or after a subsequent write when ownership is lost. Renewal beyond the original TTL remains exclusive.
+- Added `/api/capture-queue/lease/mutate`. It holds the server authority lock, validates the active owner/token/fence, permits only capture-backlog-scoped `put`, `link`, and `unlink` operations and relationship types, performs the GBrain mutation, and verifies its exact readback. Every managed backlog write now routes through this endpoint; stale generations cannot write.
+- After every atomic ledger `os.replace`, Stargraph now opens and `fsync`s the containing runtime directory. Private root, runtime, lock, ledger, and temporary-file handling uses resolved containment checks, `lstat` symlink rejection, `O_NOFOLLOW` where available, regular-file/directory descriptor validation, and descriptor-based chmod.
+- Existing ledger-only authority, canonical request fingerprint binding, projection reconciliation, finalizing recovery, planned-last parent/child visibility, exact graph readback, and pre-upload `upload_started` durability remain intact.
+
+### Red/green evidence
+
+The closure regressions first failed because `verify_capture_queue_attachment`, `record_capture_queue_attachment_upload`, and `mutate_capture_queue_under_lease` did not exist; leases returned no fence and had no manager renewal constants; finalize accepted client attachment objects and read `/media`; symlinked private paths were followed; and no directory descriptor was synced after ledger replacement. The skill's independent attachment-verify response also initially failed because its client required capture identity fields instead of an opaque receipt. Each regression was observed red before the corresponding production change and then green after it.
+
+Added coverage includes cache-exists-but-GBrain-upload-failed, fabricated client attachment/receipt selection, exact GBrain-only ambiguous recovery, opaque server receipt finalization without a local cache, renewal identity preservation, exclusivity beyond the initial TTL, renewal loss, old-owner fenced writes, manager mutation routing, runtime/ledger/lock symlinks, and runtime-directory fsync.
+
+### Fresh verification evidence
+
+```text
+python3 -W error::ResourceWarning -m unittest tests.test_api_endpoints
+# Ran 47 tests in 3.333s — OK
+
+python3 -W error::ResourceWarning -m unittest discover -s skills/add-capture-link/tests
+# Ran 25 tests in 0.315s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_capture_backlog tests.test_backlog_compaction
+# Ran 33 tests in 0.160s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_todo_backlog_compaction
+# Ran 5 tests in 0.048s — OK
+
+python3 -m py_compile server.py scripts/automation/manage_capture_backlog.py skills/add-capture-link/scripts/add_capture_link.py skills/add-capture-link/tests/test_add_capture_link.py tests/test_api_endpoints.py tests/test_capture_backlog.py
+# exit 0
+
+python3 /Users/tony/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/add-capture-link
+# Skill is valid!
+
+git diff --check
+# exit 0
+```
+
+### Concerns
+
+No blocking concerns. The production-safety tests use isolated fake GBrain/Stargraph boundaries and intentionally do not enqueue a real capture or upload user data. The authority contract applies to the queue skill and managed capture-backlog worker; unrelated deliberate GBrain CLI writes remain outside this scoped queue authority.

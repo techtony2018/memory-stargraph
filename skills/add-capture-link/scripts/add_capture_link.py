@@ -221,7 +221,7 @@ def check_stargraph_health(base_url: str) -> dict:
 
 
 def queue_authority_request(base_url: str, action: str, payload: dict) -> dict:
-    if action not in {"reserve", "finalize"}:
+    if action not in {"reserve", "finalize", "attachment/verify"}:
         raise QueueFailure(f"Unsupported queue authority action: {action}")
     endpoint = f"{base_url}/api/capture-queue/{action}"
     req = request.Request(
@@ -249,7 +249,15 @@ def queue_authority_request(base_url: str, action: str, payload: dict) -> dict:
             f"Capture queue {action} request failed: {exc}", {"error": str(exc)},
             may_have_persisted=True,
         ) from exc
-    if result.get("ok") is not True or not result.get("capture_id") or not result.get("child_slug"):
+    complete = (
+        result.get("ok") is True
+        and (
+            bool(result.get("receipt"))
+            if action == "attachment/verify"
+            else bool(result.get("capture_id") and result.get("child_slug"))
+        )
+    )
+    if not complete:
         raise AttachmentRequestError(
             f"Capture queue {action} response was incomplete.", result,
             may_have_persisted=True,
@@ -257,11 +265,15 @@ def queue_authority_request(base_url: str, action: str, payload: dict) -> dict:
     return result
 
 
-def upload_attachment(base_url: str, slug: str, file_path: Path, description: str) -> dict:
+def upload_attachment(base_url: str, slug: str, file_path: Path, description: str, authority: dict | None = None) -> dict:
     boundary = f"add-capture-link-{secrets.token_hex(12)}"
     content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     body = bytearray()
     body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="description"\r\n\r\n{description}\r\n'.encode())
+    for name, value in (authority or {}).items():
+        body.extend(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        )
     body.extend(
         f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'
         f"Content-Type: {content_type}\r\n\r\n".encode()
@@ -303,27 +315,6 @@ def sanitize_evidence(evidence: dict) -> dict:
             value = str(value)[:1000]
         sanitized[key] = value
     return sanitized or {"error": "Attachment queueing failed; detailed endpoint evidence was omitted."}
-
-
-def durable_reference_candidates(payload: dict, child_slug: str, filename: str) -> list[str]:
-    media = payload.get("local_media")
-    if (
-        not isinstance(media, dict)
-        or media.get("durable_storage_verified") is not True
-        or media.get("served_available") is not True
-        or not isinstance(media.get("size_bytes"), int)
-        or int(media.get("size_bytes")) < 0
-        or not re.fullmatch(r"[0-9a-f]{64}", str(media.get("sha256") or ""))
-    ):
-        return []
-    relative = str(media.get("canonical_relative_path") or f"{child_slug}/{filename}").strip("/")
-    if not relative.startswith(f"{child_slug.strip('/')}/"):
-        return []
-    reported = str(media.get("served_url") or "").strip()
-    served_path = parse.unquote(parse.urlsplit(reported).path).rstrip("/")
-    if not reported or served_path != f"/media/{relative}".rstrip("/"):
-        return []
-    return [reported]
 
 
 def _spool(paths: list[Path], slug_part: str, now: dt.datetime) -> tuple[Path, list[Path]]:
@@ -587,7 +578,8 @@ def fetch_served_attachment(base_url: str, served_url: str) -> bytes:
 
 
 def _verify_saved_receipt(receipt: dict, path: Path, base_url: str) -> dict:
-    required = {"filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
+    del base_url
+    required = {"receipt", "filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
     if not isinstance(receipt, dict) or not required.issubset(receipt):
         raise AttachmentRequestError(
             "Saved attachment receipt is incomplete.", {"error": "saved_receipt_invalid"},
@@ -606,43 +598,25 @@ def _verify_saved_receipt(receipt: dict, path: Path, base_url: str) -> dict:
             {"error": "saved_receipt_integrity_mismatch", "filenames": [path.name]},
             may_have_persisted=True,
         )
-    served_bytes = fetch_served_attachment(base_url, str(receipt["served_url"]))
-    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
-        raise AttachmentRequestError(
-            "Served attachment does not match the recovery bytes.",
-            {"error": "served_integrity_mismatch", "filenames": [path.name]},
-            may_have_persisted=True,
-        )
-    return dict(receipt)
+    return {key: receipt[key] for key in sorted(required)}
 
 
 def _receipt(payload: dict, child_slug: str, path: Path, base_url: str) -> dict:
-    candidates = durable_reference_candidates(payload, child_slug, path.name)
-    media = payload.get("local_media") if isinstance(payload, dict) else None
+    del base_url
+    receipt = payload.get("attachment_receipt") if isinstance(payload, dict) else None
     local_bytes = path.read_bytes()
     digest = hashlib.sha256(local_bytes).hexdigest()
-    if not candidates or not isinstance(media, dict):
-        raise AttachmentRequestError("Attachment response did not report supported durable storage.", {"error": "durable_storage_missing", "filenames": [path.name]}, may_have_persisted=True)
-    if media.get("size_bytes") != path.stat().st_size or media.get("sha256") != digest:
+    required = {"receipt", "filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
+    if not isinstance(receipt, dict) or not required.issubset(receipt):
+        raise AttachmentRequestError("Attachment response did not report an authoritative server receipt.", {"error": "durable_receipt_missing", "filenames": [path.name]}, may_have_persisted=True)
+    if (
+        receipt.get("filename") != path.name
+        or receipt.get("canonical_relative_path") != f"{child_slug}/{path.name}"
+        or receipt.get("size_bytes") != path.stat().st_size
+        or receipt.get("sha256") != digest
+    ):
         raise AttachmentRequestError("Durable attachment byte or SHA-256 verification failed.", {"error": "durable_integrity_mismatch", "filenames": [path.name]}, may_have_persisted=True)
-    reported_url = candidates[0]
-    relative = str(media.get("canonical_relative_path") or "").strip("/")
-    served_url = f"/media/{parse.quote(relative, safe='/')}"
-    served_bytes = fetch_served_attachment(base_url, reported_url)
-    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
-        raise AttachmentRequestError(
-            "Served attachment byte or SHA-256 verification failed.",
-            {"error": "served_integrity_mismatch", "filenames": [path.name]},
-            may_have_persisted=True,
-        )
-    return {
-        "filename": path.name,
-        "reference": served_url,
-        "served_url": served_url,
-        "canonical_relative_path": relative,
-        "size_bytes": len(local_bytes),
-        "sha256": digest,
-    }
+    return {key: receipt[key] for key in sorted(required)}
 
 
 def _blocker(owner: str, evidence: dict, manifest: Path) -> dict:
@@ -847,44 +821,48 @@ def _queue_capture_locked(
             saved = saved_by_name.get(path.name)
             progress = progress_by_name[path.name]
             expected_relative = str(progress["expected_canonical_relative_path"])
-            expected_url = f"/media/{parse.quote(expected_relative, safe='/')}"
             if saved is not None:
                 receipt = _verify_saved_receipt(saved, path, base_url)
             else:
-                hosted = None
-                if prior:
-                    try:
-                        hosted = fetch_served_attachment(base_url, expected_url)
-                    except AttachmentRequestError:
-                        if progress.get("ambiguous_persistence") or progress.get("upload_started"):
-                            raise AttachmentRequestError(
-                                "Ambiguous upload could not be reconciled at its expected canonical path.",
-                                {"error": "ambiguous_upload_unavailable", "filenames": [path.name]},
-                                may_have_persisted=True,
-                            )
-                if hosted is not None:
+                verified = None
+                if prior and (progress.get("ambiguous_persistence") or progress.get("upload_started")):
                     local = path.read_bytes()
                     digest = hashlib.sha256(local).hexdigest()
-                    if len(hosted) != len(local) or hashlib.sha256(hosted).hexdigest() != digest:
+                    try:
+                        verified = queue_authority_request(base_url, "attachment/verify", {
+                            "idempotency_key": idempotency_key,
+                            "canonical_relative_path": expected_relative,
+                            "filename": path.name,
+                            "size_bytes": len(local),
+                            "sha256": digest,
+                        })
+                    except AttachmentRequestError:
                         raise AttachmentRequestError(
-                            "Hosted bytes at the expected canonical path do not match the recovery spool.",
-                            {"error": "ambiguous_upload_integrity_mismatch", "filenames": [path.name]},
+                            "Ambiguous upload could not be reconciled with exact GBrain durable evidence.",
+                            {"error": "ambiguous_upload_unavailable", "filenames": [path.name]},
                             may_have_persisted=True,
                         )
-                    receipt = {
-                        "filename": path.name,
-                        "reference": expected_url,
-                        "served_url": expected_url,
-                        "canonical_relative_path": expected_relative,
-                        "size_bytes": len(local),
-                        "sha256": digest,
-                    }
+                if verified is not None:
+                    receipt = _receipt({"attachment_receipt": verified}, child_slug, path, base_url)
                 else:
                     progress["upload_started"] = True
                     manifest_data["attachment_progress"] = list(progress_by_name.values())
                     _write_manifest(bundle, manifest_data)
                     try:
-                        payload = upload_attachment(base_url, child_slug, path, f"Attachment for {capture_id}")
+                        local = path.read_bytes()
+                        payload = upload_attachment(
+                            base_url,
+                            child_slug,
+                            path,
+                            f"Attachment for {capture_id}",
+                            {
+                                "idempotency_key": idempotency_key,
+                                "canonical_relative_path": expected_relative,
+                                "filename": path.name,
+                                "size_bytes": len(local),
+                                "sha256": hashlib.sha256(local).hexdigest(),
+                            },
+                        )
                     except AttachmentRequestError as exc:
                         evidence = exc.evidence
                         if exc.may_have_persisted:
@@ -902,11 +880,15 @@ def _queue_capture_locked(
 
         finalized = queue_authority_request(base_url, "finalize", {
             "idempotency_key": idempotency_key,
-            "attachments": receipts,
         })
         if str(finalized["capture_id"]) != capture_id or str(finalized["child_slug"]) != child_slug or finalized.get("status") not in {"planned", "finalized"}:
             raise AttachmentRequestError(
                 "Capture queue finalize response did not match the reservation.", finalized,
+                may_have_persisted=True,
+            )
+        if finalized.get("attachments") != receipts:
+            raise AttachmentRequestError(
+                "Capture queue finalize did not return the exact authoritative server receipts.", finalized,
                 may_have_persisted=True,
             )
         _remove_recovery_bundle(manifest_path)
