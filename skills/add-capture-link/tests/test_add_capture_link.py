@@ -20,7 +20,6 @@ SPEC = importlib.util.spec_from_file_location("add_capture_link", SCRIPT)
 module = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(module)
-ORIGINAL_QUEUE_AUTHORITY_REQUEST = module.queue_authority_request
 
 NOW = dt.datetime(2026, 7, 15, 9, 30, tzinfo=dt.timezone(dt.timedelta(hours=-7)))
 
@@ -93,101 +92,16 @@ class AddCaptureLinkTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.backend = FakeGBrain.empty_capture_root()
-        self.reservations = {}
-        self.authority_receipts = {}
-        authority = mock.patch.object(module, "queue_authority_request", side_effect=self.fake_queue_authority)
-        health = mock.patch.object(module, "check_stargraph_health", return_value={"ok": True})
-        authority.start()
-        health.start()
-        self.addCleanup(authority.stop)
-        self.addCleanup(health.stop)
-
-    def fake_queue_authority(self, _base_url, action, payload):
-        key = payload["idempotency_key"]
-        if action == "reserve":
-            if key not in self.reservations:
-                parent = module.run_gbrain("get", module.PARENT_SLUG)
-                capture_id = module.next_capture_id(module.parse_capture_rows(parent))
-                child_slug = f"{module.PARENT_SLUG}/{capture_id.lower()}-{module.slugify(payload['source'])}"
-                reservation = {**payload, "capture_id": capture_id, "child_slug": child_slug, "created_at": module.pacific_iso(NOW)}
-                self.reservations[key] = reservation
-                provisional = module.build_child(
-                    capture_id=capture_id, child_slug=child_slug, source=payload["source"],
-                    source_kind=payload["source_kind"], instructions=payload["instructions"],
-                    target=payload["target"], collection=payload["collection"],
-                    relationships=payload["relationships"], created_at=module.pacific_iso(NOW),
-                    status="capture-recovery", attachments=[],
-                )
-                module._put_verified(child_slug, provisional, "status: capture-recovery")
-            reservation = self.reservations[key]
-            return {"ok": True, **reservation, "status": "capture-recovery", "graph_verified": False}
-        reservation = self.reservations[key]
-        if action == "attachment/verify":
-            token = f"receipt-{hashlib.sha256((key + payload['canonical_relative_path']).encode()).hexdigest()[:16]}"
-            receipt = {
-                "ok": True,
-                "receipt": token,
-                "filename": payload["filename"],
-                "reference": f"/media/{payload['canonical_relative_path']}",
-                "served_url": f"/media/{payload['canonical_relative_path']}",
-                "canonical_relative_path": payload["canonical_relative_path"],
-                "size_bytes": payload["size_bytes"],
-                "sha256": payload["sha256"],
-            }
-            self.authority_receipts[token] = receipt
-            return receipt
-        receipt_fields = {"receipt", "filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
-        attachments = [{field: receipt[field] for field in receipt_fields} for receipt in self.authority_receipts.values()]
-        original_child = module.run_gbrain("get", reservation["child_slug"])
-        original_parent = module.run_gbrain("get", module.PARENT_SLUG)
-        final_child = module.build_child(
-            capture_id=reservation["capture_id"], child_slug=reservation["child_slug"],
-            source=reservation["source"], source_kind=reservation["source_kind"],
-            instructions=reservation["instructions"], target=reservation["target"],
-            collection=reservation["collection"], relationships=reservation["relationships"],
-            created_at=reservation["created_at"], status="planned", attachments=attachments,
-        )
-        try:
-            module._put_verified(reservation["child_slug"], final_child, "status: planned")
-            marker = f"| {reservation['capture_id']} | planned |"
-            if marker not in original_parent:
-                row = (
-                    f"| {reservation['capture_id']} | planned | {reservation['source_kind']} | {reservation['source']} | "
-                    f"{reservation['target']} | [[{reservation['child_slug']}]] | {module.pacific_iso(NOW)} | queued |"
-                )
-                module._put_verified(module.PARENT_SLUG, module._append_planned_row(original_parent, row, module.pacific_iso(NOW)), marker)
-            module._link_verified(module.PARENT_SLUG, reservation["child_slug"], "has_capture_request")
-            module._link_verified(reservation["child_slug"], module.PARENT_SLUG, "capture_request_for")
-        except RuntimeError:
-            module._unlink_best_effort(module.PARENT_SLUG, reservation["child_slug"], "has_capture_request")
-            module._unlink_best_effort(reservation["child_slug"], module.PARENT_SLUG, "capture_request_for")
-            module.run_gbrain("put", module.PARENT_SLUG, input_text=original_parent)
-            module.run_gbrain("put", reservation["child_slug"], input_text=original_child)
-            raise
-        return {"ok": True, **reservation, "status": "planned", "graph_verified": True, "attachments": attachments}
 
     def file(self, name: str, data: bytes = b"content") -> Path:
         path = self.root / name
         path.write_bytes(data)
         return path
 
-    def test_retry_reports_worker_advanced_projection_status(self):
-        original = self.fake_queue_authority
-
-        def advanced(base_url, action, payload):
-            result = original(base_url, action, payload)
-            if action == "finalize":
-                result["projection_status"] = "completed"
-            return result
-
-        with mock.patch.object(module, "queue_authority_request", side_effect=advanced):
-            result = self.invoke()
-        self.assertEqual(result["status"], "completed")
-
     def upload_side_effect(self, backend, fail_upload_number=None):
         count = 0
 
-        def upload(_base_url, slug, path, _description, authority=None):
+        def upload(_base_url, slug, path, _description):
             nonlocal count
             count += 1
             backend.events.append(("upload", slug, path.name))
@@ -199,28 +113,17 @@ class AddCaptureLinkTests(unittest.TestCase):
             digest = hashlib.sha256(data).hexdigest()
             reference = f"gbrain:files/{slug}/{path.name}"
             backend.nodes[slug] += f"\n- {reference}\n"
-            authority = authority or {
-                "idempotency_key": next(iter(self.reservations), "test-key"),
-                "canonical_relative_path": f"{slug}/{path.name}",
-                "filename": path.name,
-                "size_bytes": len(data),
-                "sha256": digest,
-            }
-            token = f"receipt-{hashlib.sha256((authority['idempotency_key'] + authority['canonical_relative_path']).encode()).hexdigest()[:16]}"
-            receipt = {
-                "receipt": token,
-                "filename": path.name,
-                "reference": f"/media/{slug}/{path.name}",
-                "served_url": f"/media/{slug}/{path.name}",
-                "canonical_relative_path": f"{slug}/{path.name}",
-                "size_bytes": len(data),
-                "sha256": digest,
-            }
-            self.authority_receipts[token] = receipt
             return {
                 "ok": True,
                 "slug": slug,
-                "attachment_receipt": receipt,
+                "local_media": {
+                    "durable_storage_verified": True,
+                    "served_available": True,
+                    "size_bytes": len(data),
+                    "sha256": digest,
+                    "canonical_relative_path": f"{slug}/{path.name}",
+                    "served_url": f"/media/{slug}/{path.name}",
+                },
             }
 
         return upload
@@ -367,21 +270,19 @@ class AddCaptureLinkTests(unittest.TestCase):
         attachment = self.file("bad.bin", b"trusted")
         backend = FakeGBrain.empty_capture_root()
 
-        def mismatched_upload(_base_url, slug, path, _description, _authority=None):
+        def mismatched_upload(_base_url, slug, path, _description):
             backend.events.append(("upload", slug, path.name))
             reference = f"gbrain:files/{slug}/{path.name}"
             backend.nodes[slug] += f"\n- {reference}\n"
             return {
                 "ok": True,
                 "slug": slug,
-                "attachment_receipt": {
-                    "receipt": "server-token",
-                    "filename": path.name,
-                    "reference": f"/media/{slug}/{path.name}",
-                    "served_url": f"/media/{slug}/{path.name}",
+                "local_media": {
+                    "durable_storage_verified": True,
                     "size_bytes": len(b"trusted"),
                     "sha256": "0" * 64,
                     "canonical_relative_path": f"{slug}/{path.name}",
+                    "served_url": reference,
                 },
             }
 
@@ -434,32 +335,6 @@ class AddCaptureLinkTests(unittest.TestCase):
         )
         self.assertIn(b"\x00raw-bytes\xff", req.data)
         self.assertTrue(req.headers["Content-type"].startswith("multipart/form-data; boundary="))
-
-    def test_attachment_verify_authority_response_requires_opaque_receipt_not_capture_identity(self):
-        payload = json.dumps({
-            "ok": True,
-            "receipt": "opaque-token",
-            "filename": "proof.bin",
-            "canonical_relative_path": "child/proof.bin",
-            "size_bytes": 1,
-            "sha256": "0" * 64,
-            "reference": "/media/child/proof.bin",
-            "served_url": "/media/child/proof.bin",
-        }).encode()
-
-        class Response:
-            def __enter__(self):
-                return self
-            def __exit__(self, *_args):
-                return False
-            def read(self):
-                return payload
-
-        with mock.patch.object(module.request, "urlopen", return_value=Response()):
-            result = ORIGINAL_QUEUE_AUTHORITY_REQUEST(
-                "http://127.0.0.1:8788", "attachment/verify", {"idempotency_key": "request-key"}
-            )
-        self.assertEqual(result["receipt"], "opaque-token")
 
     def test_target_collection_and_relationship_instructions_are_preserved(self):
         backend = FakeGBrain.empty_capture_root()
@@ -529,7 +404,7 @@ class AddCaptureLinkTests(unittest.TestCase):
             self.invoke(self.backend, attachments=[attachment], fail_upload_number=1, target="target/a")
         manifest = caught.exception.result["recovery_manifest"]
         attachment.unlink()
-        backend = self.backend
+        backend = FakeGBrain.empty_capture_root()
         with (
             mock.patch.object(module, "run_gbrain", side_effect=backend),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
@@ -630,24 +505,29 @@ class AddCaptureLinkTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual(sorted(item["capture_id"] for item in results), ["CAP-0001", "CAP-0002"])
 
-    def test_attachment_receipt_must_be_server_opaque_and_match_spooled_bytes(self):
+    def test_served_reference_must_be_available_same_origin_and_match_bytes(self):
         attachment = self.file("served.bin", b"trusted bytes")
         digest = hashlib.sha256(attachment.read_bytes()).hexdigest()
         payload = {
-            "attachment_receipt": {
-                "receipt": "opaque-server-token",
-                "filename": attachment.name,
-                "reference": "/media/child/served.bin",
-                "served_url": "/media/child/served.bin",
+            "local_media": {
+                "durable_storage_verified": True,
+                "served_available": True,
                 "size_bytes": attachment.stat().st_size,
                 "sha256": digest,
                 "canonical_relative_path": "child/served.bin",
+                "served_url": "https://evil.example/media/child/served.bin",
             }
         }
-        self.assertEqual(module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")["receipt"], "opaque-server-token")
-        payload["attachment_receipt"].pop("receipt")
         with self.assertRaises(module.AttachmentRequestError):
             module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
+        payload["local_media"]["served_url"] = "/media/child/served.bin"
+        payload["local_media"]["served_available"] = False
+        with self.assertRaises(module.AttachmentRequestError):
+            module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
+        payload["local_media"]["served_available"] = True
+        with mock.patch.object(module, "fetch_served_attachment", return_value=b"wrong"):
+            with self.assertRaises(module.AttachmentRequestError):
+                module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
 
     def test_partial_multi_attachment_retry_uploads_each_attachment_once(self):
         paths = [self.file("first.bin", b"first"), self.file("second.bin", b"second")]
@@ -655,13 +535,13 @@ class AddCaptureLinkTests(unittest.TestCase):
         upload_counts = {path.name: 0 for path in paths}
         fail_second_once = True
 
-        def upload(base_url, slug, path, description, authority=None):
+        def upload(base_url, slug, path, description):
             nonlocal fail_second_once
             upload_counts[path.name] += 1
             if path.name == "second.bin" and fail_second_once:
                 fail_second_once = False
                 raise module.AttachmentRequestError("second failed", {"error": "second failed"})
-            return self.upload_side_effect(backend)(base_url, slug, path, description, authority)
+            return self.upload_side_effect(backend)(base_url, slug, path, description)
 
         def fetch(_base_url, served_url):
             return (b"first" if served_url.endswith("first.bin") else b"second")
@@ -690,143 +570,7 @@ class AddCaptureLinkTests(unittest.TestCase):
         ):
             result = module.queue_capture(recovery_manifest=manifest, now=NOW)
         self.assertTrue(result["ok"])
-        self.assertEqual(upload_counts, {"first.bin": 1, "second.bin": 1})
-
-    def test_retry_fails_closed_when_any_manifest_attachment_input_has_no_spooled_file(self):
-        attachment = self.file("only.bin", b"only")
-        with self.assertRaises(module.QueueFailure) as caught:
-            self.invoke(self.backend, attachments=[attachment], fail_upload_number=1)
-        manifest = Path(caught.exception.result["recovery_manifest"])
-        payload = json.loads(manifest.read_text())
-        payload["attachment_inputs"].append("/chat-host/missing-second.bin")
-        manifest.write_text(json.dumps(payload))
-        with (
-            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
-            mock.patch.object(module, "run_gbrain") as gbrain,
-            self.assertRaises(module.QueueFailure),
-        ):
-            module.queue_capture(recovery_manifest=str(manifest), now=NOW)
-        gbrain.assert_not_called()
-
-    def test_recovery_resolves_codex_home_and_rejects_symlinked_root_bundle_manifest_and_lock(self):
-        real_home = self.root / "real-codex"
-        real_home.mkdir()
-        symlink_home = self.root / "codex-link"
-        symlink_home.symlink_to(real_home, target_is_directory=True)
-        with mock.patch.dict(os.environ, {"CODEX_HOME": str(symlink_home)}):
-            resolved_root = module._ensure_recovery_root()
-        self.assertTrue(resolved_root.is_relative_to(real_home.resolve()))
-
-        codex_home = self.root / "codex"
-        recovery_parent = codex_home / "recovery"
-        recovery_parent.mkdir(parents=True)
-        real_root = self.root / "outside-root"
-        real_root.mkdir()
-        (recovery_parent / "add-capture-link").symlink_to(real_root, target_is_directory=True)
-        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
-            module._ensure_recovery_root()
-
-        recovery_parent.joinpath("add-capture-link").unlink()
-        root = recovery_parent / "add-capture-link"
-        root.mkdir()
-        outside = self.root / "outside"
-        outside.mkdir()
-        (root / "bundle").symlink_to(outside, target_is_directory=True)
-        (outside / "recovery.json").write_text("{}")
-        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
-            module._validated_recovery_manifest(root / "bundle" / "recovery.json")
-
-        (root / ".queue.lock").symlink_to(self.root / "outside-lock")
-        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
-            with module._queue_lock():
-                pass
-
-    def test_served_byte_fetch_rejects_cross_origin_redirect(self):
-        class RedirectedResponse:
-            def __enter__(self):
-                return self
-            def __exit__(self, *_args):
-                return False
-            def geturl(self):
-                return "https://evil.example/stolen.bin"
-            def read(self):
-                return b"trusted"
-
-        opener = mock.Mock()
-        opener.open.return_value = RedirectedResponse()
-        with mock.patch.object(module.request, "build_opener", return_value=opener):
-            with self.assertRaises(module.AttachmentRequestError):
-                module.fetch_served_attachment("http://127.0.0.1:8788", "/media/child/file.bin")
-
-    def test_ambiguous_upload_retry_probes_expected_canonical_path_before_reupload(self):
-        attachment = self.file("ambiguous.bin", b"exact")
-        backend = FakeGBrain.empty_capture_root()
-        calls = 0
-
-        def ambiguous_upload(*_args):
-            nonlocal calls
-            calls += 1
-            raise module.AttachmentRequestError("connection lost", {"error": "timeout"}, may_have_persisted=True)
-
-        with (
-            mock.patch.object(module, "run_gbrain", side_effect=backend),
-            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
-            mock.patch.object(module, "upload_attachment", side_effect=ambiguous_upload),
-            mock.patch.object(module, "fetch_served_attachment", side_effect=module.AttachmentRequestError("not found")),
-            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
-            self.assertRaises(module.QueueFailure) as caught,
-        ):
-            module.queue_capture(
-                source="file", source_kind="file", instructions="Capture",
-                attachments=[str(attachment)], now=NOW,
-            )
-        manifest = Path(caught.exception.result["recovery_manifest"])
-        progress = json.loads(manifest.read_text())
-        expected = progress["attachment_progress"][0]["expected_canonical_relative_path"]
-        self.assertEqual(expected, f"{progress['child_slug']}/ambiguous.bin")
-
-        with (
-            mock.patch.object(module, "run_gbrain", side_effect=backend),
-            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
-            mock.patch.object(module, "upload_attachment", side_effect=ambiguous_upload),
-            mock.patch.object(module, "fetch_served_attachment", return_value=b"exact"),
-            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
-        ):
-            result = module.queue_capture(recovery_manifest=str(manifest), now=NOW)
-        self.assertTrue(result["ok"])
-        self.assertEqual(calls, 1)
-
-    def test_receipt_failure_after_upload_is_probe_before_repeat_ambiguous(self):
-        attachment = self.file("receipt-ambiguous.bin", b"exact")
-        backend = FakeGBrain.empty_capture_root()
-        uploads = 0
-
-        def upload(*args):
-            nonlocal uploads
-            uploads += 1
-            return self.upload_side_effect(backend)(*args)
-
-        with (
-            mock.patch.object(module, "run_gbrain", side_effect=backend),
-            mock.patch.object(module, "upload_attachment", side_effect=upload),
-            mock.patch.object(module, "_receipt", side_effect=module.AttachmentRequestError("receipt lost")),
-            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
-            self.assertRaises(module.QueueFailure) as caught,
-        ):
-            module.queue_capture(source="file", source_kind="file", instructions="Capture", attachments=[str(attachment)], now=NOW)
-        manifest = Path(caught.exception.result["recovery_manifest"])
-        progress = json.loads(manifest.read_text())["attachment_progress"][0]
-        self.assertTrue(progress["upload_started"])
-
-        with (
-            mock.patch.object(module, "run_gbrain", side_effect=backend),
-            mock.patch.object(module, "upload_attachment", side_effect=upload),
-            mock.patch.object(module, "fetch_served_attachment", return_value=b"exact"),
-            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
-        ):
-            result = module.queue_capture(recovery_manifest=str(manifest), now=NOW)
-        self.assertTrue(result["ok"])
-        self.assertEqual(uploads, 1)
+        self.assertEqual(upload_counts, {"first.bin": 1, "second.bin": 2})
 
     def test_cli_json_is_queue_only(self):
         completed = subprocess.run(

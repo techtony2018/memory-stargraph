@@ -18,7 +18,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 from urllib import error, parse, request
 from zoneinfo import ZoneInfo
 
@@ -119,11 +118,6 @@ def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:56] or "source"
 
 
-def capture_idempotency_key(source: str, now: dt.datetime) -> str:
-    seed = f"{pacific_iso(now)}\0{source}\0{secrets.token_hex(16)}".encode("utf-8")
-    return f"add-capture-link.{hashlib.sha256(seed).hexdigest()}"
-
-
 def unique_child_slug(parent_slug: str, capture_id: str, source: str, parent: str) -> str:
     base = f"{parent_slug}/{capture_id.lower()}-{slugify(source)}"
     occupied = {row.get("node", "").strip("[]") for row in parse_capture_rows(parent)}
@@ -220,60 +214,11 @@ def check_stargraph_health(base_url: str) -> dict:
     return payload
 
 
-def queue_authority_request(base_url: str, action: str, payload: dict) -> dict:
-    if action not in {"reserve", "finalize", "attachment/verify"}:
-        raise QueueFailure(f"Unsupported queue authority action: {action}")
-    endpoint = f"{base_url}/api/capture-queue/{action}"
-    req = request.Request(
-        endpoint,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with request.urlopen(req, timeout=120) as response:
-            result = _read_json_response(response)
-    except error.HTTPError as exc:
-        try:
-            evidence = json.loads(exc.read().decode("utf-8", errors="replace"))
-        except (json.JSONDecodeError, AttributeError):
-            evidence = {"error": f"HTTP {exc.code}"}
-        raise AttachmentRequestError(
-            f"Capture queue {action} failed with HTTP {exc.code}.", evidence,
-            may_have_persisted=True,
-        ) from exc
-    except (error.URLError, TimeoutError, AttachmentRequestError) as exc:
-        if isinstance(exc, AttachmentRequestError):
-            raise
-        raise AttachmentRequestError(
-            f"Capture queue {action} request failed: {exc}", {"error": str(exc)},
-            may_have_persisted=True,
-        ) from exc
-    complete = (
-        result.get("ok") is True
-        and (
-            bool(result.get("receipt"))
-            if action == "attachment/verify"
-            else bool(result.get("capture_id") and result.get("child_slug"))
-        )
-    )
-    if not complete:
-        raise AttachmentRequestError(
-            f"Capture queue {action} response was incomplete.", result,
-            may_have_persisted=True,
-        )
-    return result
-
-
-def upload_attachment(base_url: str, slug: str, file_path: Path, description: str, authority: dict | None = None) -> dict:
+def upload_attachment(base_url: str, slug: str, file_path: Path, description: str) -> dict:
     boundary = f"add-capture-link-{secrets.token_hex(12)}"
     content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     body = bytearray()
     body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="description"\r\n\r\n{description}\r\n'.encode())
-    for name, value in (authority or {}).items():
-        body.extend(
-            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
-        )
     body.extend(
         f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'
         f"Content-Type: {content_type}\r\n\r\n".encode()
@@ -317,6 +262,27 @@ def sanitize_evidence(evidence: dict) -> dict:
     return sanitized or {"error": "Attachment queueing failed; detailed endpoint evidence was omitted."}
 
 
+def durable_reference_candidates(payload: dict, child_slug: str, filename: str) -> list[str]:
+    media = payload.get("local_media")
+    if (
+        not isinstance(media, dict)
+        or media.get("durable_storage_verified") is not True
+        or media.get("served_available") is not True
+        or not isinstance(media.get("size_bytes"), int)
+        or int(media.get("size_bytes")) < 0
+        or not re.fullmatch(r"[0-9a-f]{64}", str(media.get("sha256") or ""))
+    ):
+        return []
+    relative = str(media.get("canonical_relative_path") or f"{child_slug}/{filename}").strip("/")
+    if not relative.startswith(f"{child_slug.strip('/')}/"):
+        return []
+    reported = str(media.get("served_url") or "").strip()
+    served_path = parse.unquote(parse.urlsplit(reported).path).rstrip("/")
+    if not reported or served_path != f"/media/{relative}".rstrip("/"):
+        return []
+    return [reported]
+
+
 def _spool(paths: list[Path], slug_part: str, now: dt.datetime) -> tuple[Path, list[Path]]:
     stamp = now.astimezone(PACIFIC).strftime("%Y%m%dT%H%M%S%z")
     bundle = _ensure_recovery_root() / f"{stamp}-{slug_part}"
@@ -343,55 +309,22 @@ def _spool(paths: list[Path], slug_part: str, now: dt.datetime) -> tuple[Path, l
 
 
 def _recovery_root() -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     return codex_home / "recovery" / "add-capture-link"
 
 
-def _reject_symlink(path: Path, label: str) -> None:
-    try:
-        if path.is_symlink():
-            raise QueueFailure(f"{label} must not be a symlink: {path}")
-    except OSError as exc:
-        raise QueueFailure(f"Could not inspect {label}: {exc}") from exc
-
-
-def _codex_home() -> Path:
-    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
-    home.mkdir(parents=True, mode=0o700, exist_ok=True)
-    return home.resolve(strict=True)
-
-
 def _ensure_recovery_root() -> Path:
-    home = _codex_home()
-    recovery = home / "recovery"
-    _reject_symlink(recovery, "recovery directory")
-    recovery.mkdir(mode=0o700, exist_ok=True)
-    _reject_symlink(recovery, "recovery directory")
-    root = recovery / "add-capture-link"
-    _reject_symlink(root, "recovery root")
-    root.mkdir(mode=0o700, exist_ok=True)
-    _reject_symlink(root, "recovery root")
-    resolved = root.resolve(strict=True)
-    if resolved.parent.parent != home:
-        raise QueueFailure("Recovery root must remain beneath CODEX_HOME.")
+    root = _recovery_root().expanduser()
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
     os.chmod(root, 0o700)
-    return resolved
+    return root.resolve()
 
 
 @contextmanager
 def _queue_lock():
     root = _ensure_recovery_root()
     lock_path = root / ".queue.lock"
-    _reject_symlink(lock_path, "queue lock")
-    flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, flags, 0o600)
-    except OSError as exc:
-        raise QueueFailure(f"Could not open queue lock safely: {exc}") from exc
-    with os.fdopen(descriptor, "a+b") as lock_file:
-        _reject_symlink(lock_path, "queue lock")
+    with lock_path.open("a+b") as lock_file:
         os.chmod(lock_path, 0o600)
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
@@ -404,8 +337,6 @@ def _validated_recovery_manifest(raw_path: str | Path) -> Path:
     supplied = Path(raw_path).expanduser()
     if supplied.name != "recovery.json":
         raise QueueFailure("Recovery manifest must be named recovery.json.")
-    _reject_symlink(supplied, "recovery manifest")
-    _reject_symlink(supplied.parent, "recovery bundle")
     try:
         root = _ensure_recovery_root()
         resolved = supplied.resolve(strict=True)
@@ -418,38 +349,13 @@ def _validated_recovery_manifest(raw_path: str | Path) -> Path:
 
 def _remove_recovery_bundle(manifest_path: str | Path) -> None:
     validated = _validated_recovery_manifest(manifest_path)
-    _reject_symlink(validated, "recovery manifest")
-    _reject_symlink(validated.parent, "recovery bundle")
     shutil.rmtree(validated.parent)
 
 
 def _write_manifest(bundle: Path, data: dict) -> Path:
-    _reject_symlink(bundle, "recovery bundle")
     path = bundle / "recovery.json"
-    _reject_symlink(path, "recovery manifest")
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=bundle, prefix=".recovery.", suffix=".tmp", delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            os.chmod(temporary, 0o600)
-            handle.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, 0o600)
-        directory_fd = os.open(bundle, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
     return path
 
 
@@ -535,51 +441,21 @@ def _trusted_served_url(base_url: str, served_url: str) -> str:
     return parse.urlunsplit(absolute)
 
 
-class _NoRedirectHandler(request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def fetch_served_attachment(base_url: str, served_url: str) -> bytes:
-    current = _trusted_served_url(base_url, served_url)
-    opener = request.build_opener(_NoRedirectHandler())
-    for _hop in range(6):
-        try:
-            with opener.open(current, timeout=120) as response:
-                final_url = response.geturl() if hasattr(response, "geturl") else current
-                _trusted_served_url(base_url, final_url)
-                return response.read()
-        except error.HTTPError as exc:
-            if exc.code not in {301, 302, 303, 307, 308}:
-                raise AttachmentRequestError(
-                    f"Could not fetch the served attachment: HTTP {exc.code}",
-                    {"error": "served_reference_unavailable"},
-                    may_have_persisted=True,
-                ) from exc
-            location = exc.headers.get("Location") if exc.headers else None
-            if not location:
-                raise AttachmentRequestError(
-                    "Served attachment redirect omitted Location.",
-                    {"error": "served_redirect_invalid"},
-                    may_have_persisted=True,
-                ) from exc
-            current = _trusted_served_url(base_url, parse.urljoin(current, location))
-        except (error.URLError, TimeoutError) as exc:
-            raise AttachmentRequestError(
-                f"Could not fetch the served attachment: {exc}",
-                {"error": "served_reference_unavailable"},
-                may_have_persisted=True,
-            ) from exc
-    raise AttachmentRequestError(
-        "Served attachment exceeded the redirect limit.",
-        {"error": "served_redirect_limit"},
-        may_have_persisted=True,
-    )
+    trusted_url = _trusted_served_url(base_url, served_url)
+    try:
+        with request.urlopen(trusted_url, timeout=120) as response:
+            return response.read()
+    except (error.URLError, TimeoutError) as exc:
+        raise AttachmentRequestError(
+            f"Could not fetch the served attachment: {exc}",
+            {"error": "served_reference_unavailable"},
+            may_have_persisted=True,
+        ) from exc
 
 
 def _verify_saved_receipt(receipt: dict, path: Path, base_url: str) -> dict:
-    del base_url
-    required = {"receipt", "filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
+    required = {"filename", "reference", "served_url", "size_bytes", "sha256"}
     if not isinstance(receipt, dict) or not required.issubset(receipt):
         raise AttachmentRequestError(
             "Saved attachment receipt is incomplete.", {"error": "saved_receipt_invalid"},
@@ -598,25 +474,40 @@ def _verify_saved_receipt(receipt: dict, path: Path, base_url: str) -> dict:
             {"error": "saved_receipt_integrity_mismatch", "filenames": [path.name]},
             may_have_persisted=True,
         )
-    return {key: receipt[key] for key in sorted(required)}
+    served_bytes = fetch_served_attachment(base_url, str(receipt["served_url"]))
+    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
+        raise AttachmentRequestError(
+            "Served attachment does not match the recovery bytes.",
+            {"error": "served_integrity_mismatch", "filenames": [path.name]},
+            may_have_persisted=True,
+        )
+    return dict(receipt)
 
 
 def _receipt(payload: dict, child_slug: str, path: Path, base_url: str) -> dict:
-    del base_url
-    receipt = payload.get("attachment_receipt") if isinstance(payload, dict) else None
+    candidates = durable_reference_candidates(payload, child_slug, path.name)
+    media = payload.get("local_media") if isinstance(payload, dict) else None
     local_bytes = path.read_bytes()
     digest = hashlib.sha256(local_bytes).hexdigest()
-    required = {"receipt", "filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
-    if not isinstance(receipt, dict) or not required.issubset(receipt):
-        raise AttachmentRequestError("Attachment response did not report an authoritative server receipt.", {"error": "durable_receipt_missing", "filenames": [path.name]}, may_have_persisted=True)
-    if (
-        receipt.get("filename") != path.name
-        or receipt.get("canonical_relative_path") != f"{child_slug}/{path.name}"
-        or receipt.get("size_bytes") != path.stat().st_size
-        or receipt.get("sha256") != digest
-    ):
+    if not candidates or not isinstance(media, dict):
+        raise AttachmentRequestError("Attachment response did not report supported durable storage.", {"error": "durable_storage_missing", "filenames": [path.name]}, may_have_persisted=True)
+    if media.get("size_bytes") != path.stat().st_size or media.get("sha256") != digest:
         raise AttachmentRequestError("Durable attachment byte or SHA-256 verification failed.", {"error": "durable_integrity_mismatch", "filenames": [path.name]}, may_have_persisted=True)
-    return {key: receipt[key] for key in sorted(required)}
+    served_url = candidates[0]
+    served_bytes = fetch_served_attachment(base_url, served_url)
+    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
+        raise AttachmentRequestError(
+            "Served attachment byte or SHA-256 verification failed.",
+            {"error": "served_integrity_mismatch", "filenames": [path.name]},
+            may_have_persisted=True,
+        )
+    return {
+        "filename": path.name,
+        "reference": served_url,
+        "served_url": served_url,
+        "size_bytes": len(local_bytes),
+        "sha256": digest,
+    }
 
 
 def _blocker(owner: str, evidence: dict, manifest: Path) -> dict:
@@ -742,11 +633,10 @@ def _queue_capture_locked(
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
             raise QueueFailure(f"Could not read recovery manifest: {exc}") from exc
 
-    paths = validate_inputs(source, source_kind, instructions, target, collection, relationships, attachments)
-    if prior:
-        attachment_inputs = prior.get("attachment_inputs")
-        if not isinstance(attachment_inputs, list) or len(attachment_inputs) != len(paths):
-            raise QueueFailure("Recovery manifest does not preserve one readable spool file for every attachment input.")
+    paths = validate_inputs(
+        source, source_kind, instructions, target, collection, relationships, attachments
+    )
+    stamp = pacific_iso(now)
     if manifest_path:
         bundle, spooled = manifest_path.parent, paths
     else:
@@ -754,164 +644,124 @@ def _queue_capture_locked(
         manifest_path = bundle / "recovery.json"
 
     effective_base = stargraph_url or os.environ.get("MEMORY_STARGRAPH_UPLOAD_URL") or os.environ.get("MEMORY_STARGRAPH_URL") or DEFAULT_STARGRAPH_URL
-    idempotency_key = str(prior.get("idempotency_key") or capture_idempotency_key(source, now))
     manifest_data = {
-        "version": 3,
+        "version": 2,
         "source": source,
         "source_kind": source_kind,
         "instructions": instructions,
         "target": target,
         "collection": collection,
         "relationships": relationships,
-        "attachment_inputs": list(prior.get("attachment_inputs", attachments)),
         "attachments": [str(path) for path in spooled],
         "stargraph_url": effective_base,
-        "idempotency_key": idempotency_key,
         "receipts": list(prior.get("receipts", [])),
-        "attachment_progress": list(prior.get("attachment_progress", [])),
     }
     for key in ("capture_id", "child_slug", "remind_after"):
         if prior.get(key):
             manifest_data[key] = prior[key]
     _write_manifest(bundle, manifest_data)
 
+    parent: str | None = None
     capture_id = str(prior.get("capture_id") or "")
     child_slug = str(prior.get("child_slug") or "")
+    provisional = ""
     receipts: list[dict] = []
+    parent_written = False
+    child_finalized = False
     evidence: dict = {}
     try:
-        base_url = validate_stargraph_url(effective_base)
-        check_stargraph_health(base_url)
-        reservation = queue_authority_request(base_url, "reserve", {
-            "idempotency_key": idempotency_key,
-            "source": source,
-            "source_kind": source_kind,
-            "instructions": instructions,
-            "target": target,
-            "collection": collection,
-            "relationships": relationships,
-        })
-        authoritative_id = str(reservation["capture_id"])
-        authoritative_slug = str(reservation["child_slug"])
-        if (capture_id and capture_id != authoritative_id) or (child_slug and child_slug != authoritative_slug):
-            raise QueueFailure("Server reservation does not match the preserved recovery identity.")
-        capture_id, child_slug = authoritative_id, authoritative_slug
+        parent = run_gbrain("get", PARENT_SLUG)
+        rows = parse_capture_rows(parent)
+        capture_id = capture_id or next_capture_id(rows)
+        child_slug = child_slug or unique_child_slug(PARENT_SLUG, capture_id, source, parent)
         manifest_data.update(capture_id=capture_id, child_slug=child_slug)
-        progress_by_name = {
-            item.get("filename"): dict(item)
-            for item in manifest_data.get("attachment_progress", [])
-            if isinstance(item, dict) and item.get("filename")
-        }
-        for path in spooled:
-            progress = progress_by_name.setdefault(path.name, {
-                "filename": path.name,
-                "expected_canonical_relative_path": f"{child_slug}/{path.name}",
-                "ambiguous_persistence": False,
-                "upload_started": False,
-            })
-        manifest_data["attachment_progress"] = list(progress_by_name.values())
         _write_manifest(bundle, manifest_data)
+        if any(row["id"] == capture_id or row["node"] == f"[[{child_slug}]]" for row in rows):
+            raise QueueFailure(f"Capture ID or child is already planned: {capture_id}")
 
-        saved_by_name = {
-            item.get("filename"): item
-            for item in manifest_data.get("receipts", [])
-            if isinstance(item, dict) and item.get("filename")
-        }
-        for path in spooled:
-            saved = saved_by_name.get(path.name)
-            progress = progress_by_name[path.name]
-            expected_relative = str(progress["expected_canonical_relative_path"])
-            if saved is not None:
-                receipt = _verify_saved_receipt(saved, path, base_url)
-            else:
-                verified = None
-                if prior and (progress.get("ambiguous_persistence") or progress.get("upload_started")):
-                    local = path.read_bytes()
-                    digest = hashlib.sha256(local).hexdigest()
-                    try:
-                        verified = queue_authority_request(base_url, "attachment/verify", {
-                            "idempotency_key": idempotency_key,
-                            "canonical_relative_path": expected_relative,
-                            "filename": path.name,
-                            "size_bytes": len(local),
-                            "sha256": digest,
-                        })
-                    except AttachmentRequestError:
-                        raise AttachmentRequestError(
-                            "Ambiguous upload could not be reconciled with exact GBrain durable evidence.",
-                            {"error": "ambiguous_upload_unavailable", "filenames": [path.name]},
-                            may_have_persisted=True,
-                        )
-                if verified is not None:
-                    receipt = _receipt({"attachment_receipt": verified}, child_slug, path, base_url)
+        provisional = build_child(
+            capture_id=capture_id, child_slug=child_slug, source=source, source_kind=source_kind,
+            instructions=instructions, target=target, collection=collection,
+            relationships=relationships, created_at=stamp, status="capture-recovery",
+            attachments=[],
+        )
+        existing = _get_optional(child_slug)
+        if existing is not None and not (prior and "status: capture-recovery" in existing):
+            raise QueueFailure(f"Capture child slug is occupied: {child_slug}")
+        if existing is None:
+            _put_verified(child_slug, provisional, "status: capture-recovery")
+
+        if spooled:
+            base_url = validate_stargraph_url(effective_base)
+            check_stargraph_health(base_url)
+            saved_by_name = {
+                item.get("filename"): item
+                for item in manifest_data.get("receipts", [])
+                if isinstance(item, dict) and item.get("filename")
+            }
+            for path in spooled:
+                saved = saved_by_name.get(path.name)
+                if saved is not None:
+                    receipt = _verify_saved_receipt(saved, path, base_url)
                 else:
-                    progress["upload_started"] = True
-                    manifest_data["attachment_progress"] = list(progress_by_name.values())
-                    _write_manifest(bundle, manifest_data)
                     try:
-                        local = path.read_bytes()
                         payload = upload_attachment(
-                            base_url,
-                            child_slug,
-                            path,
-                            f"Attachment for {capture_id}",
-                            {
-                                "idempotency_key": idempotency_key,
-                                "canonical_relative_path": expected_relative,
-                                "filename": path.name,
-                                "size_bytes": len(local),
-                                "sha256": hashlib.sha256(local).hexdigest(),
-                            },
+                            base_url, child_slug, path, f"Attachment for {capture_id}"
                         )
                     except AttachmentRequestError as exc:
                         evidence = exc.evidence
-                        if exc.may_have_persisted:
-                            progress["ambiguous_persistence"] = True
-                            manifest_data["attachment_progress"] = list(progress_by_name.values())
-                            _write_manifest(bundle, manifest_data)
                         raise
                     receipt = _receipt(payload, child_slug, path, base_url)
-            receipts.append(receipt)
-            manifest_data["receipts"] = list(receipts)
-            progress["ambiguous_persistence"] = False
-            progress["upload_started"] = False
-            manifest_data["attachment_progress"] = list(progress_by_name.values())
-            _write_manifest(bundle, manifest_data)
+                receipts.append(receipt)
+                manifest_data["receipts"] = list(receipts)
+                _write_manifest(bundle, manifest_data)
 
-        finalized = queue_authority_request(base_url, "finalize", {
-            "idempotency_key": idempotency_key,
-        })
-        if str(finalized["capture_id"]) != capture_id or str(finalized["child_slug"]) != child_slug or finalized.get("status") not in {"planned", "finalized"}:
-            raise AttachmentRequestError(
-                "Capture queue finalize response did not match the reservation.", finalized,
-                may_have_persisted=True,
-            )
-        if finalized.get("attachments") != receipts:
-            raise AttachmentRequestError(
-                "Capture queue finalize did not return the exact authoritative server receipts.", finalized,
-                may_have_persisted=True,
-            )
-        projection_status = finalized.get("projection_status") or "planned"
-        if projection_status not in {"planned", "capturing", "completed", "failed"}:
-            raise AttachmentRequestError(
-                "Capture queue finalize returned an invalid projection state.", finalized,
-                may_have_persisted=True,
-            )
+        final_child = build_child(
+            capture_id=capture_id, child_slug=child_slug, source=source, source_kind=source_kind,
+            instructions=instructions, target=target, collection=collection,
+            relationships=relationships, created_at=stamp, status="planned",
+            attachments=receipts,
+        )
+        _put_verified(child_slug, final_child, "status: planned")
+        child_finalized = True
+        note = f"{len(receipts)} durable attachment(s)" if receipts else "queued; capture not started"
+        row = (
+            f"| {capture_id} | planned | {escape_cell(source_kind)} | {escape_cell(source)} | "
+            f"{escape_cell(target)} | [[{child_slug}]] | {stamp} | {escape_cell(note)} |"
+        )
+        final_parent = _append_planned_row(parent, row, stamp)
+        parent_written = True
+        _put_verified(PARENT_SLUG, final_parent, f"| {capture_id} | planned |")
+        _link_verified(PARENT_SLUG, child_slug, "has_capture_request")
+        _link_verified(child_slug, PARENT_SLUG, "capture_request_for")
+        verified_child = run_gbrain("get", child_slug)
+        if any(receipt["reference"] not in verified_child for receipt in receipts):
+            raise RuntimeError("Final child receipt readback failed")
         _remove_recovery_bundle(manifest_path)
         return {
             "ok": True,
             "capture_id": capture_id,
             "child_slug": child_slug,
-            "status": projection_status,
+            "status": "planned",
             "attachments": receipts,
             "durable_storage_verified": True,
-            "graph_verified": finalized.get("graph_verified") is True,
+            "graph_verified": True,
         }
     except (AttachmentRequestError, RuntimeError, QueueFailure) as exc:
         if isinstance(exc, AttachmentRequestError):
             evidence = evidence or exc.evidence
         else:
             evidence = {"owner": "gbrain", "error": str(exc)}
+        if parent is not None and (parent_written or child_finalized):
+            try:
+                _unlink_best_effort(PARENT_SLUG, child_slug, "has_capture_request")
+                _unlink_best_effort(child_slug, PARENT_SLUG, "capture_request_for")
+                if parent_written:
+                    run_gbrain("put", PARENT_SLUG, input_text=parent)
+                if provisional:
+                    run_gbrain("put", child_slug, input_text=provisional)
+            except RuntimeError:
+                evidence["cleanup_error"] = "Could not restore the provisional transaction state."
         evidence = sanitize_evidence(evidence)
         remind_after = pacific_iso(now + dt.timedelta(days=1))
         blocker = _blocker(_failure_owner(evidence), evidence, manifest_path)
@@ -934,12 +784,18 @@ def _queue_capture_locked(
         if child_slug:
             manifest_data["child_slug"] = child_slug
         _write_manifest(bundle, manifest_data)
+        parent_unchanged = False
+        if parent is not None:
+            try:
+                parent_unchanged = run_gbrain("get", PARENT_SLUG) == parent
+            except RuntimeError:
+                parent_unchanged = False
         result = {
             "ok": False,
             "error": str(exc),
             "capture_id": capture_id or None,
             "child_slug": child_slug or None,
-            "parent_unchanged": True,
+            "parent_unchanged": parent_unchanged,
             "recovery_manifest": str(manifest_path),
             "proposed_blocker": blocker,
             "retry_command": retry_command,

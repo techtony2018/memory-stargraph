@@ -2,20 +2,13 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-import contextvars
 import datetime as dt
-import functools
 import json
-import os
 import re
 import subprocess
 import sys
-import threading
-import time
 import uuid
 from pathlib import Path
-from urllib import error, request
 from zoneinfo import ZoneInfo
 
 if __package__ in {None, ""}:
@@ -38,12 +31,6 @@ FAILED_COLLECTION_SLUG = f"{ROOT_SLUG}/failed-items"
 ARCHIVE_PREFIX = f"{ROOT_SLUG}/completed-archive-"
 ALLOWED_STATUSES = {"planned", "capturing", "completed", "failed"}
 PACIFIC = ZoneInfo("America/Los_Angeles")
-DEFAULT_STARGRAPH_URL = "http://127.0.0.1:8788"
-LEASE_TTL_SECONDS = 300
-LEASE_RENEW_INTERVAL_SECONDS = 90.0
-LEASE_HTTP_TIMEOUT_SECONDS = 15
-FENCED_MUTATION_HTTP_TIMEOUT_SECONDS = 180
-_LEASE_CONTEXT = contextvars.ContextVar("capture_queue_lease", default=None)
 CAPTURE_SPEC = BacklogSpec(
     root_slug=ROOT_SLUG,
     section_heading="Capture Items",
@@ -59,116 +46,6 @@ def pacific_iso(now: dt.datetime | None = None) -> str:
     if value.tzinfo is None:
         raise ValueError("timestamp must be timezone-aware")
     return value.astimezone(PACIFIC).replace(microsecond=0).isoformat()
-
-
-def _queue_authority_post(
-    path: str,
-    payload: dict[str, object],
-    timeout: int | float = LEASE_HTTP_TIMEOUT_SECONDS,
-) -> dict[str, object]:
-    base = os.environ.get("MEMORY_STARGRAPH_URL", DEFAULT_STARGRAPH_URL).rstrip("/")
-    body = json.dumps(payload).encode("utf-8")
-    req = request.Request(base + path, data=body, method="POST", headers={"Content-Type": "application/json"})
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"capture queue authority HTTP {exc.code}: {detail}") from exc
-    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"capture queue authority unavailable: {exc}") from exc
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        raise RuntimeError("capture queue authority returned an invalid response")
-    return result
-
-
-@contextmanager
-def queue_authority_lease(operation: str):
-    owner = f"manage-capture-backlog:{os.getpid()}:{operation}:{uuid.uuid4()}"
-    lease = None
-    last_error = None
-    for delay in (0.0, 0.1, 0.25):
-        if delay:
-            time.sleep(delay)
-        try:
-            lease = _queue_authority_post(
-                "/api/capture-queue/lease/acquire",
-                {"owner": owner, "ttl_seconds": LEASE_TTL_SECONDS},
-            )
-            break
-        except RuntimeError as exc:
-            last_error = exc
-    if lease is None:
-        raise RuntimeError(f"could not acquire capture queue authority lease: {last_error}")
-    if not lease.get("token") or not isinstance(lease.get("fence"), int):
-        raise RuntimeError("capture queue authority returned an unfenced lease")
-    stop_renewal = threading.Event()
-    renewal_error = []
-
-    def renew():
-        while not stop_renewal.wait(LEASE_RENEW_INTERVAL_SECONDS):
-            try:
-                renewed = _queue_authority_post(
-                    "/api/capture-queue/lease/renew",
-                    {
-                        "owner": owner,
-                        "token": lease["token"],
-                        "fence": lease["fence"],
-                        "ttl_seconds": LEASE_TTL_SECONDS,
-                    },
-                )
-                if (
-                    renewed.get("owner") != owner
-                    or renewed.get("token") != lease["token"]
-                    or renewed.get("fence") != lease["fence"]
-                ):
-                    raise RuntimeError("capture queue lease renewal changed owner, token, or fence")
-                lease["expires_at_epoch"] = renewed.get("expires_at_epoch")
-            except Exception as exc:  # noqa: BLE001 - delivered to the owning operation
-                renewal_error.append(exc)
-                stop_renewal.set()
-                return
-
-    renewal_thread = threading.Thread(target=renew, name="capture-queue-lease-renewal", daemon=True)
-    renewal_thread.start()
-    context = {"owner": owner, "token": lease["token"], "fence": lease["fence"], "renewal_error": renewal_error}
-    context_token = _LEASE_CONTEXT.set(context)
-    body_error = None
-    try:
-        yield lease
-        if renewal_error:
-            raise RuntimeError(f"capture queue lease was lost during {operation}: {renewal_error[0]}")
-    except BaseException as exc:  # preserve the operation failure if release also fails
-        body_error = exc
-        raise
-    finally:
-        _LEASE_CONTEXT.reset(context_token)
-        stop_renewal.set()
-        renewal_thread.join()
-        renewal_failure = renewal_error[0] if body_error is None and renewal_error else None
-        release_failure = None
-        try:
-            _queue_authority_post(
-                "/api/capture-queue/lease/release",
-                {"owner": owner, "token": lease["token"], "fence": lease["fence"]},
-            )
-        except Exception as exc:  # lease expiry/loss is reported after the renewal thread is stopped
-            release_failure = exc
-        if body_error is None:
-            if renewal_failure is not None:
-                raise RuntimeError(f"capture queue lease was lost during {operation}: {renewal_failure}")
-            if release_failure is not None:
-                raise release_failure
-
-
-def _uses_queue_authority(operation: str):
-    def decorate(function):
-        @functools.wraps(function)
-        def wrapped(*args, **kwargs):
-            with queue_authority_lease(operation):
-                return function(*args, **kwargs)
-        return wrapped
-    return decorate
 
 
 def build_root(now: dt.datetime | None = None) -> str:
@@ -366,24 +243,10 @@ def get_optional(slug: str) -> str | None:
 
 
 def put_readback(slug: str, markdown: str) -> str:
-    result = _queue_authority_mutate({"operation": "put", "slug": slug, "markdown": markdown})
-    return str(result["readback"])
-
-
-def _queue_authority_mutate(payload: dict[str, object]) -> dict[str, object]:
-    lease = _LEASE_CONTEXT.get()
-    if not isinstance(lease, dict):
-        raise RuntimeError("capture queue mutation requires an active authority lease")
-    if lease["renewal_error"]:
-        raise RuntimeError(f"capture queue lease was lost before mutation: {lease['renewal_error'][0]}")
-    result = _queue_authority_post(
-        "/api/capture-queue/lease/mutate",
-        {**payload, "owner": lease["owner"], "token": lease["token"], "fence": lease["fence"]},
-        timeout=FENCED_MUTATION_HTTP_TIMEOUT_SECONDS,
-    )
-    if lease["renewal_error"]:
-        raise RuntimeError(f"capture queue lease was lost during mutation: {lease['renewal_error'][0]}")
-    return result
+    result = run_gbrain(["put", slug], input_text=markdown)
+    if result.returncode:
+        raise RuntimeError(result_error(result))
+    return get_required(slug)
 
 
 def graph_edges(source: str, relation: str) -> list[dict[str, object]]:
@@ -417,14 +280,39 @@ def verify_link(source: str, target: str, relation: str, present: bool) -> None:
 
 
 def link(source: str, target: str, relation: str) -> None:
-    _queue_authority_mutate({"operation": "link", "source": source, "target": target, "relation": relation})
+    result = run_gbrain(
+        [
+            "link",
+            source,
+            target,
+            "--link-type",
+            relation,
+            "--link-source",
+            "memory-stargraph-capture-backlog",
+        ]
+    )
+    if result.returncode and "already" not in result_error(result).lower():
+        raise RuntimeError(result_error(result))
+    verify_link(source, target, relation, True)
 
 
 def unlink(source: str, target: str, relation: str) -> None:
-    _queue_authority_mutate({"operation": "unlink", "source": source, "target": target, "relation": relation})
+    result = run_gbrain(
+        [
+            "unlink",
+            source,
+            target,
+            "--link-type",
+            relation,
+            "--link-source",
+            "memory-stargraph-capture-backlog",
+        ]
+    )
+    if result.returncode and "not found" not in result_error(result).lower():
+        raise RuntimeError(result_error(result))
+    verify_link(source, target, relation, False)
 
 
-@_uses_queue_authority("init")
 def apply_init(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_optional(ROOT_SLUG)
     failed = get_optional(FAILED_COLLECTION_SLUG)
@@ -454,7 +342,6 @@ def apply_init(now: dt.datetime | None = None) -> dict[str, object]:
     }
 
 
-@_uses_queue_authority("snapshot")
 def create_snapshot(
     now: dt.datetime | None = None,
     invocation_id: str | None = None,
@@ -573,7 +460,6 @@ def verify_failed_mirror(markdown: str, expected_rows: list[dict[str, str]]) -> 
         raise RuntimeError("failed mirror readback mismatch")
 
 
-@_uses_queue_authority("transition")
 def apply_transition(
     capture_id: str,
     expected: str,
@@ -742,7 +628,6 @@ def compaction_preview(
     return plan_compaction(parse_capture_rows(root_markdown), archives, CAPTURE_SPEC), archives
 
 
-@_uses_queue_authority("compact")
 def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_required(ROOT_SLUG)
     plan, indexed_archives = compaction_preview(root)
@@ -796,7 +681,6 @@ def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
     }
 
 
-@_uses_queue_authority("list")
 def list_backlog(status: str | None = None) -> dict[str, object]:
     rows = parse_capture_rows(get_required(ROOT_SLUG))
     if status:
@@ -804,25 +688,6 @@ def list_backlog(status: str | None = None) -> dict[str, object]:
             raise ValueError("unsupported status")
         rows = [row for row in rows if row.get("status") == status]
     return {"root_slug": ROOT_SLUG, "count": len(rows), "rows": rows}
-
-
-@_uses_queue_authority("transition-preview")
-def preview_transition(capture_id: str, expected: str, target: str, notes: str) -> dict[str, object]:
-    root = get_required(ROOT_SLUG)
-    transition(root, capture_id, expected, target, pacific_iso(), notes)
-    return {"capture_id": capture_id, "status": target, "applied": False}
-
-
-@_uses_queue_authority("compact-preview")
-def preview_compaction() -> dict[str, object]:
-    root = get_required(ROOT_SLUG)
-    plan, _ = compaction_preview(root)
-    return {
-        "created_archives": [str(archive["slug"]) for archive in plan.archives_to_create],
-        "active_rows": len(plan.active_rows),
-        "failed_rows": len(plan.failed_rows),
-        "applied": False,
-    }
 
 
 def emit(result: dict[str, object], as_json: bool) -> None:
@@ -875,12 +740,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.apply:
             result = apply_transition(args.capture_id, args.expected, args.target, args.notes)
         else:
-            result = preview_transition(args.capture_id, args.expected, args.target, args.notes)
+            root = get_required(ROOT_SLUG)
+            transition(root, args.capture_id, args.expected, args.target, pacific_iso(), args.notes)
+            result = {"capture_id": args.capture_id, "status": args.target, "applied": False}
     else:
         if args.apply:
             result = apply_compaction()
         else:
-            result = preview_compaction()
+            root = get_required(ROOT_SLUG)
+            plan, _ = compaction_preview(root)
+            result = {
+                "created_archives": [str(archive["slug"]) for archive in plan.archives_to_create],
+                "active_rows": len(plan.active_rows),
+                "failed_rows": len(plan.failed_rows),
+                "applied": False,
+            }
     emit(result, args.json)
     return 0
 
