@@ -260,3 +260,42 @@ git diff --check
 ```
 
 Total fresh automated tests: 118. No blocking concerns. The concurrency, authority, lease, mutation-timeout, and worker-handoff boundaries are covered with isolated deterministic fakes; no live capture item or user attachment was created.
+
+## Finalizing crash-window reconciliation closure
+
+- Added one reconciliation path for private-ledger entries in `finalizing`, invoked before reserve or finalize can perform projection repair. It reads the parent and deterministic child first, then validates the exact CAP identity, request-fingerprint marker, allowed and consistent parent/child status, authoritative attachment receipt projection, and both required graph edges.
+- A completely published projection is never rewritten or relinked. Reconciliation atomically promotes only the private ledger to `finalized`, records `graph_verified: true` plus the observed `projection_status`, and returns the live `planned`, `capturing`, `completed`, or `failed` status. Reserve and finalize retries preserve both projection documents byte-for-byte.
+- A missing parent row remains the pre-publication boundary. Either reserve or finalize can finish the interrupted publication from the private ledger, preserving the existing repair guarantee.
+- Once a parent row is visible, missing graph edges, inconsistent statuses, tampered identities/fingerprints, or altered receipt projections fail closed. The retry performs no projection or relationship write and cannot roll a worker-advanced child back to `planned`.
+- The same published-projection validator now protects already-finalized retries, including exact graph-edge and authoritative-receipt readback.
+
+### Red/green evidence
+
+The crash simulation first left the private ledger in `finalizing` after both projections and links had published. Reserve retries returned no `projection_status` and rewrote the child, while an advanced projection with a removed reverse edge did not raise. The new planned/capturing/completed/failed and incomplete-graph tests failed at that boundary before implementation, then passed after reconciliation was centralized. Additional regressions cover parent/child status mismatch, tampered attachment receipt projection, atomic ledger promotion fields, and reserve as well as finalize repair before parent publication.
+
+### Fresh verification evidence
+
+```text
+python3 -W error::ResourceWarning -m unittest tests.test_api_endpoints
+# Ran 57 tests in 3.569s — OK
+
+python3 -W error::ResourceWarning -m unittest discover -s skills/add-capture-link/tests
+# Ran 26 tests in 0.305s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_capture_backlog tests.test_backlog_compaction
+# Ran 35 tests in 1.268s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_todo_backlog_compaction
+# Ran 5 tests in 0.045s — OK
+
+python3 -m py_compile server.py scripts/automation/manage_capture_backlog.py skills/add-capture-link/scripts/add_capture_link.py skills/add-capture-link/tests/test_add_capture_link.py tests/test_api_endpoints.py tests/test_capture_backlog.py tests/test_backlog_compaction.py tests/test_todo_backlog_compaction.py
+# exit 0
+
+python3 /Users/tony/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/add-capture-link
+# Skill is valid!
+
+git diff --check
+# exit 0
+```
+
+Total fresh automated tests: 123. No blocking concerns. Crash and graph behavior is verified with deterministic isolated state; no live capture item, attachment, deployment, or GBrain mutation was performed.

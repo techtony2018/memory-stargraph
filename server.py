@@ -987,13 +987,46 @@ def _capture_queue_result(reservation, projection_status=None):
     return result
 
 
-def _capture_queue_finalized_projection_status(reservation):
+def _capture_queue_authoritative_attachments(reservation):
+    records = reservation.get("attachment_receipts", {})
+    if not isinstance(records, dict):
+        raise RuntimeError("capture attachment receipt ledger is malformed")
+    receipt_tokens = reservation.get("attachment_receipt_order", list(records))
+    if (
+        not isinstance(receipt_tokens, list)
+        or len(receipt_tokens) != len(records)
+        or len(set(receipt_tokens)) != len(receipt_tokens)
+        or any(token not in records or not isinstance(records[token], dict) for token in receipt_tokens)
+    ):
+        raise RuntimeError("capture attachment receipt order is malformed")
+    attachments = [dict(records[token]) for token in receipt_tokens]
+    return receipt_tokens, attachments
+
+
+def _capture_queue_required_edge_exists(source, target, relation):
+    raw_edges = STORE.graph_query(source, relation, "out", "1")
+    edges = extract_json_list(str(raw_edges or ""))
+    return isinstance(edges, list) and any(
+        isinstance(edge, dict)
+        and str(edge.get("from_slug") or edge.get("source") or "") == source
+        and str(edge.get("to_slug") or edge.get("target") or "") == target
+        and str(edge.get("link_type") or relation) == relation
+        for edge in edges
+    )
+
+
+def _capture_queue_published_projection_status(reservation):
     child_slug = reservation["child_slug"]
+    if child_slug != _capture_queue_child_slug(reservation["idempotency_key"]):
+        raise RuntimeError("capture queue projection child slug is not deterministic")
     parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
     if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
         raise RuntimeError("finalized capture queue parent projection is unavailable or malformed")
+    child = STORE.get_entity_raw(child_slug)
     rows = _capture_queue_rows(parent)
     matching = [row for row in rows if row["id"] == reservation["capture_id"] or row["node"].strip("[]") == child_slug]
+    if not matching:
+        return None
     if len(matching) != 1:
         raise RuntimeError("finalized capture queue projection identity is missing or ambiguous")
     row = matching[0]
@@ -1009,7 +1042,6 @@ def _capture_queue_finalized_projection_status(reservation):
     status = row.get("status")
     if status not in {"planned", "capturing", "completed", "failed"}:
         raise RuntimeError("finalized capture queue projection status is invalid")
-    child = STORE.get_entity_raw(child_slug)
     if not isinstance(child, str):
         raise RuntimeError("finalized capture queue child projection identity is missing")
     frontmatter_end = child.find("\n---", 4) if child.startswith("---\n") else -1
@@ -1025,11 +1057,106 @@ def _capture_queue_finalized_projection_status(reservation):
         or not marker or marker.group(1) != reservation["request_fingerprint"]
     ):
         raise RuntimeError("finalized capture queue child projection identity or status mismatch")
+    _, attachments = _capture_queue_authoritative_attachments(reservation)
+    expected_attachment_lines = [
+        f"- `{item['reference']}` | bytes={item['size_bytes']} | sha256={item['sha256']}"
+        for item in attachments
+    ] or ["- None"]
+    attachment_section = re.search(
+        r"(?ms)^## Durable Attachments\s*$\n\n(.*?)(?=\n\n## |\Z)", child
+    )
+    if not attachment_section or attachment_section.group(1).splitlines() != expected_attachment_lines:
+        raise RuntimeError("finalized capture queue child authoritative receipts mismatch")
     if status == "planned":
         expected_child = _capture_queue_render_child(reservation, "planned", reservation.get("receipts", []))
         if child != expected_child:
             raise RuntimeError("finalized planned child projection identity mismatch")
+    for source, target, relation in (
+        (CAPTURE_QUEUE_PARENT_SLUG, child_slug, "has_capture_request"),
+        (child_slug, CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"),
+    ):
+        if not _capture_queue_required_edge_exists(source, target, relation):
+            raise RuntimeError(f"finalized capture queue graph readback mismatch for {relation}")
     return status
+
+
+def _capture_queue_finalized_projection_status(reservation):
+    status = _capture_queue_published_projection_status(reservation)
+    if status is None:
+        raise RuntimeError("finalized capture queue projection identity is missing or ambiguous")
+    return status
+
+
+def _capture_queue_reconcile_finalizing(ledger, reservation):
+    status = _capture_queue_published_projection_status(reservation)
+    if status is None:
+        return None
+    receipt_tokens, attachments = _capture_queue_authoritative_attachments(reservation)
+    if receipt_tokens != reservation.get("receipt_tokens", []) or attachments != reservation.get("receipts", []):
+        raise RuntimeError("authoritative finalized attachment ledger changed unexpectedly")
+    reservation["state"] = "finalized"
+    reservation["graph_verified"] = True
+    reservation["projection_status"] = status
+    _capture_queue_save_ledger(ledger)
+    return status
+
+
+def _capture_queue_publish_finalization(ledger, reservation, now=None, stop_after_child_for_test=False):
+    child_slug = reservation["child_slug"]
+    attachments = reservation.get("receipts", [])
+    final_child = _capture_queue_render_child(reservation, "planned", attachments)
+    parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
+    if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
+        raise RuntimeError("authoritative capture queue parent is unavailable or malformed")
+    rows = _capture_queue_rows(parent)
+    matching = [row for row in rows if row["id"] == reservation["capture_id"] or row["node"].strip("[]") == child_slug]
+    if matching and not all(row["id"] == reservation["capture_id"] and row["node"].strip("[]") == child_slug for row in matching):
+        raise RuntimeError("capture queue parent conflicts with the reservation")
+    updated = parent
+    if not matching:
+        stamp = capture_queue_timestamp(now)
+        note = f"{len(attachments)} durable attachment(s)" if attachments else "queued; capture not started"
+        row = (
+            f"| {reservation['capture_id']} | planned | {_capture_queue_escape(reservation['source_kind'])} | "
+            f"{_capture_queue_escape(reservation['source'])} | {_capture_queue_escape(reservation['target'])} | "
+            f"[[{child_slug}]] | {stamp} | {_capture_queue_escape(note)} |"
+        )
+        lines = parent.splitlines()
+        index = lines.index(CAPTURE_QUEUE_TABLE_SEPARATOR) + 1
+        while index < len(lines) and lines[index].startswith("| CAP-"):
+            index += 1
+        lines.insert(index, row)
+        updated = "\n".join(lines).rstrip() + "\n"
+        updated = re.sub(r"(?m)^updated_at: '.*'$", f"updated_at: '{stamp}'", updated, count=1)
+    for source, target, relation in (
+        (CAPTURE_QUEUE_PARENT_SLUG, child_slug, "has_capture_request"),
+        (child_slug, CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"),
+    ):
+        try:
+            STORE.add_relationship(source, target, relation, "add-capture-link")
+        except RuntimeError as exc:
+            if "already" not in str(exc).lower():
+                raise
+        if not _capture_queue_required_edge_exists(source, target, relation):
+            raise RuntimeError(f"capture queue graph readback mismatch for {relation}")
+    child = STORE.get_entity_raw(child_slug)
+    if child != final_child:
+        STORE.save_entity_raw(child_slug, final_child)
+    if STORE.get_entity_raw(child_slug) != final_child:
+        raise RuntimeError("capture child projection readback mismatch")
+    if stop_after_child_for_test:
+        return _capture_queue_result(reservation)
+    if updated != parent:
+        STORE.save_entity_raw(CAPTURE_QUEUE_PARENT_SLUG, updated)
+    parent_readback = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
+    expected_rows = [row for row in _capture_queue_rows(parent_readback) if row["id"] == reservation["capture_id"]]
+    if len(expected_rows) != 1 or expected_rows[0]["status"] != "planned" or expected_rows[0]["node"].strip("[]") != child_slug:
+        raise RuntimeError("capture queue parent projection readback mismatch")
+    reservation["state"] = "finalized"
+    reservation["graph_verified"] = True
+    reservation["projection_status"] = "planned"
+    _capture_queue_save_ledger(ledger)
+    return _capture_queue_result(reservation, "planned")
 
 
 def reserve_capture_request(payload, now=None):
@@ -1045,6 +1172,11 @@ def reserve_capture_request(payload, now=None):
                 raise ValueError("idempotency key is already bound to a different metadata fingerprint")
             if recorded.get("child_slug") != child_slug:
                 raise RuntimeError("capture queue reservation ledger child is invalid")
+            if recorded.get("state") == "finalizing":
+                projection_status = _capture_queue_reconcile_finalizing(ledger, recorded)
+                if projection_status is not None:
+                    return _capture_queue_result(recorded, projection_status)
+                return _capture_queue_publish_finalization(ledger, recorded, now)
             if recorded.get("state") == "finalized":
                 return _capture_queue_result(recorded, _capture_queue_finalized_projection_status(recorded))
             existing = STORE.get_entity_raw(child_slug)
@@ -1100,13 +1232,7 @@ def finalize_capture_request(payload, now=None, stop_after_child_for_test=False)
             raise ValueError("capture reservation does not exist")
         if reservation.get("child_slug") != child_slug:
             raise RuntimeError("capture queue reservation ledger child is invalid")
-        records = reservation.get("attachment_receipts", {})
-        if not isinstance(records, dict):
-            raise RuntimeError("capture attachment receipt ledger is malformed")
-        receipt_tokens = reservation.get("attachment_receipt_order", list(records))
-        if not isinstance(receipt_tokens, list) or len(receipt_tokens) != len(records) or any(token not in records for token in receipt_tokens):
-            raise RuntimeError("capture attachment receipt order is malformed")
-        attachments = [dict(records[token]) for token in receipt_tokens]
+        receipt_tokens, attachments = _capture_queue_authoritative_attachments(reservation)
         if reservation["state"] in {"finalizing", "finalized"}:
             if receipt_tokens != reservation.get("receipt_tokens", []) or attachments != reservation.get("receipts", []):
                 raise RuntimeError("authoritative finalized attachment ledger changed unexpectedly")
@@ -1116,68 +1242,13 @@ def finalize_capture_request(payload, now=None, stop_after_child_for_test=False)
             reservation["receipt_tokens"] = receipt_tokens
             reservation["graph_verified"] = False
             _capture_queue_save_ledger(ledger)
+        if reservation["state"] == "finalizing":
+            projection_status = _capture_queue_reconcile_finalizing(ledger, reservation)
+            if projection_status is not None:
+                return _capture_queue_result(reservation, projection_status)
         if reservation["state"] == "finalized":
             return _capture_queue_result(reservation, _capture_queue_finalized_projection_status(reservation))
-        final_child = _capture_queue_render_child(reservation, "planned", attachments)
-        parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
-        if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
-            raise RuntimeError("authoritative capture queue parent is unavailable or malformed")
-        rows = _capture_queue_rows(parent)
-        matching = [row for row in rows if row["id"] == reservation["capture_id"] or row["node"].strip("[]") == child_slug]
-        if matching and not all(row["id"] == reservation["capture_id"] and row["node"].strip("[]") == child_slug for row in matching):
-            raise RuntimeError("capture queue parent conflicts with the reservation")
-        updated = parent
-        if not matching:
-            stamp = capture_queue_timestamp(now)
-            note = f"{len(attachments)} durable attachment(s)" if attachments else "queued; capture not started"
-            row = (
-                f"| {reservation['capture_id']} | planned | {_capture_queue_escape(reservation['source_kind'])} | "
-                f"{_capture_queue_escape(reservation['source'])} | {_capture_queue_escape(reservation['target'])} | "
-                f"[[{child_slug}]] | {stamp} | {_capture_queue_escape(note)} |"
-            )
-            lines = parent.splitlines()
-            index = lines.index(CAPTURE_QUEUE_TABLE_SEPARATOR) + 1
-            while index < len(lines) and lines[index].startswith("| CAP-"):
-                index += 1
-            lines.insert(index, row)
-            updated = "\n".join(lines).rstrip() + "\n"
-            updated = re.sub(r"(?m)^updated_at: '.*'$", f"updated_at: '{stamp}'", updated, count=1)
-        for source, target, relation in (
-            (CAPTURE_QUEUE_PARENT_SLUG, child_slug, "has_capture_request"),
-            (child_slug, CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"),
-        ):
-            try:
-                STORE.add_relationship(source, target, relation, "add-capture-link")
-            except RuntimeError as exc:
-                if "already" not in str(exc).lower():
-                    raise
-            raw_edges = STORE.graph_query(source, relation, "out", "1")
-            edges = extract_json_list(str(raw_edges or ""))
-            if not isinstance(edges, list) or not any(
-                isinstance(edge, dict)
-                and str(edge.get("from_slug") or edge.get("source") or "") == source
-                and str(edge.get("to_slug") or edge.get("target") or "") == target
-                and str(edge.get("link_type") or relation) == relation
-                for edge in edges
-            ):
-                raise RuntimeError(f"capture queue graph readback mismatch for {relation}")
-        child = STORE.get_entity_raw(child_slug)
-        if child != final_child:
-            STORE.save_entity_raw(child_slug, final_child)
-        if STORE.get_entity_raw(child_slug) != final_child:
-            raise RuntimeError("capture child projection readback mismatch")
-        if stop_after_child_for_test:
-            return _capture_queue_result(reservation)
-        if updated != parent:
-            STORE.save_entity_raw(CAPTURE_QUEUE_PARENT_SLUG, updated)
-        parent_readback = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
-        expected_rows = [row for row in _capture_queue_rows(parent_readback) if row["id"] == reservation["capture_id"]]
-        if len(expected_rows) != 1 or expected_rows[0]["status"] != "planned" or expected_rows[0]["node"].strip("[]") != child_slug:
-            raise RuntimeError("capture queue parent projection readback mismatch")
-        reservation["state"] = "finalized"
-        reservation["graph_verified"] = True
-        _capture_queue_save_ledger(ledger)
-        return _capture_queue_result(reservation, "planned")
+        return _capture_queue_publish_finalization(ledger, reservation, now, stop_after_child_for_test)
 
 
 SECRET_RE = re.compile(r"(?i)(\bsk-[a-z0-9_-]+|token[=:]\s*\S+|api[_-]?key[=:]\s*\S+|password[=:]\s*\S+)")

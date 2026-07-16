@@ -206,6 +206,28 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
                 payload["attachment_receipts"] = list(attachment_receipts)
             return server.finalize_capture_request(payload, now="2026-07-15T09:31:00-07:00")
 
+    def crash_after_publishing_finalizing(self, key=None):
+        original_save = server._capture_queue_save_ledger
+        idempotency_key = key or self.payload["idempotency_key"]
+        ledger_key = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+
+        def crash_before_finalized_ledger(ledger):
+            entry = ledger.get("entries", {}).get(ledger_key, {})
+            if entry.get("state") == "finalized":
+                raise RuntimeError("simulated crash before finalized ledger commit")
+            return original_save(ledger)
+
+        with (
+            mock.patch("server.DATA_DIR", self.data_dir),
+            mock.patch("server.STORE", self.store),
+            mock.patch("server._capture_queue_save_ledger", side_effect=crash_before_finalized_ledger),
+            self.assertRaisesRegex(RuntimeError, "simulated crash"),
+        ):
+            server.finalize_capture_request(
+                {"idempotency_key": idempotency_key},
+                now="2026-07-15T09:31:00-07:00",
+            )
+
     def dispatch(self, path, payload):
         handler = object.__new__(MemoryStargraphHandler)
         handler.path = path
@@ -310,6 +332,130 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
                 save.assert_not_called()
                 link.assert_not_called()
 
+    def test_finalizing_crash_reconciles_planned_and_worker_advanced_projections_without_writes(self):
+        for target in ("planned", "capturing", "completed", "failed"):
+            with self.subTest(target=target):
+                payload = dict(self.payload, idempotency_key=f"codex-host_a.finalizing_{target}")
+                reserved = self.reserve(payload)
+                self.crash_after_publishing_finalizing(payload["idempotency_key"])
+                child_slug = reserved["child_slug"]
+                if target != "planned":
+                    parent = capture_backlog.transition(
+                        self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG],
+                        reserved["capture_id"], "planned", "capturing",
+                        "2026-07-15T09:32:00-07:00", "worker claimed",
+                    )
+                    child = capture_backlog.update_child_status(
+                        self.store.nodes[child_slug], "planned", "capturing",
+                        "2026-07-15T09:32:00-07:00", "worker claimed",
+                    )
+                    if target != "capturing":
+                        parent = capture_backlog.transition(
+                            parent, reserved["capture_id"], "capturing", target,
+                            "2026-07-15T09:33:00-07:00", f"worker {target}",
+                        )
+                        child = capture_backlog.update_child_status(
+                            child, "capturing", target,
+                            "2026-07-15T09:33:00-07:00", f"worker {target}",
+                        )
+                    self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG] = parent
+                    self.store.nodes[child_slug] = child
+                before_nodes = dict(self.store.nodes)
+                before_edges = set(self.store.edges)
+                with (
+                    mock.patch.object(self.store, "save_entity_raw", wraps=self.store.save_entity_raw) as save,
+                    mock.patch.object(self.store, "add_relationship", wraps=self.store.add_relationship) as link,
+                ):
+                    reserve_retry = self.reserve(payload)
+                    finalize_retry = self.finalize(key=payload["idempotency_key"])
+                self.assertEqual(reserve_retry["projection_status"], target)
+                self.assertEqual(finalize_retry["projection_status"], target)
+                ledger_key = hashlib.sha256(payload["idempotency_key"].encode("utf-8")).hexdigest()
+                with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+                    with server._capture_queue_lock():
+                        reconciled = server._capture_queue_load_ledger()["entries"][ledger_key]
+                self.assertEqual(reconciled["state"], "finalized")
+                self.assertTrue(reconciled["graph_verified"])
+                self.assertEqual(reconciled["projection_status"], target)
+                self.assertEqual(self.store.nodes, before_nodes)
+                self.assertEqual(self.store.edges, before_edges)
+                save.assert_not_called()
+                link.assert_not_called()
+
+    def test_finalizing_published_projection_with_missing_graph_edge_fails_closed(self):
+        reserved = self.reserve()
+        self.crash_after_publishing_finalizing()
+        child_slug = reserved["child_slug"]
+        self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG] = capture_backlog.transition(
+            self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG], reserved["capture_id"],
+            "planned", "capturing", "2026-07-15T09:32:00-07:00", "worker claimed",
+        )
+        self.store.nodes[child_slug] = capture_backlog.update_child_status(
+            self.store.nodes[child_slug], "planned", "capturing",
+            "2026-07-15T09:32:00-07:00", "worker claimed",
+        )
+        self.store.edges.remove((child_slug, server.CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"))
+        before_nodes = dict(self.store.nodes)
+        before_edges = set(self.store.edges)
+        with mock.patch.object(self.store, "save_entity_raw", wraps=self.store.save_entity_raw) as save, mock.patch.object(
+            self.store, "add_relationship", wraps=self.store.add_relationship
+        ) as link:
+            with self.assertRaisesRegex(RuntimeError, "graph"):
+                self.reserve()
+            with self.assertRaisesRegex(RuntimeError, "graph"):
+                self.finalize()
+        self.assertEqual(self.store.nodes, before_nodes)
+        self.assertEqual(self.store.edges, before_edges)
+        save.assert_not_called()
+        link.assert_not_called()
+
+    def test_finalizing_published_projection_with_inconsistent_status_fails_closed(self):
+        reserved = self.reserve()
+        self.crash_after_publishing_finalizing()
+        self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG] = capture_backlog.transition(
+            self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG], reserved["capture_id"],
+            "planned", "capturing", "2026-07-15T09:32:00-07:00", "worker claimed",
+        )
+        before_nodes = dict(self.store.nodes)
+        before_edges = set(self.store.edges)
+        with self.assertRaisesRegex(RuntimeError, "status"):
+            self.reserve()
+        with self.assertRaisesRegex(RuntimeError, "status"):
+            self.finalize()
+        self.assertEqual(self.store.nodes, before_nodes)
+        self.assertEqual(self.store.edges, before_edges)
+
+    def test_finalizing_published_projection_with_tampered_receipt_fails_closed(self):
+        reserved = self.reserve()
+        ledger_key = hashlib.sha256(self.payload["idempotency_key"].encode("utf-8")).hexdigest()
+        receipt = {
+            "filename": "proof.bin",
+            "canonical_relative_path": f"{reserved['child_slug']}/proof.bin",
+            "size_bytes": 5,
+            "sha256": hashlib.sha256(b"proof").hexdigest(),
+            "reference": f"/media/{reserved['child_slug']}/proof.bin",
+            "served_url": f"/media/{reserved['child_slug']}/proof.bin",
+        }
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            with server._capture_queue_lock():
+                ledger = server._capture_queue_load_ledger()
+                ledger["entries"][ledger_key]["attachment_receipts"] = {"opaque": receipt}
+                ledger["entries"][ledger_key]["attachment_receipt_order"] = ["opaque"]
+                server._capture_queue_save_ledger(ledger)
+        self.crash_after_publishing_finalizing()
+        child_slug = reserved["child_slug"]
+        self.store.nodes[child_slug] = self.store.nodes[child_slug].replace(
+            f"sha256={receipt['sha256']}", f"sha256={'0' * 64}", 1
+        )
+        before_nodes = dict(self.store.nodes)
+        before_edges = set(self.store.edges)
+        with self.assertRaisesRegex(RuntimeError, "receipts"):
+            self.reserve()
+        with self.assertRaisesRegex(RuntimeError, "receipts"):
+            self.finalize()
+        self.assertEqual(self.store.nodes, before_nodes)
+        self.assertEqual(self.store.edges, before_edges)
+
     def test_finalized_retries_leave_original_planned_projection_untouched(self):
         self.reserve()
         self.finalize()
@@ -356,6 +502,22 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         self.assertEqual(parent.count(f"| {reservation['capture_id']} | planned |"), 1)
         self.assertIn((server.CAPTURE_QUEUE_PARENT_SLUG, reservation["child_slug"], "has_capture_request"), self.store.edges)
         self.assertIn((reservation["child_slug"], server.CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"), self.store.edges)
+        self.assertTrue(result["graph_verified"])
+
+    def test_reserve_repairs_finalizing_child_missing_parent_projection(self):
+        reservation = self.reserve()
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            partial = server.finalize_capture_request(
+                {"idempotency_key": self.payload["idempotency_key"]},
+                now="2026-07-15T09:31:00-07:00",
+                stop_after_child_for_test=True,
+            )
+        self.assertEqual(partial["status"], "finalizing")
+        result = self.reserve()
+        self.assertEqual(result["status"], "finalized")
+        self.assertEqual(result["projection_status"], "planned")
+        parent = self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG]
+        self.assertEqual(parent.count(f"| {reservation['capture_id']} | planned |"), 1)
         self.assertTrue(result["graph_verified"])
 
     def test_authority_ledger_and_runtime_directory_are_private(self):
