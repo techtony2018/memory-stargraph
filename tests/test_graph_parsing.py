@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -28,6 +29,7 @@ from server import (
     parse_neighbors,
     parse_search_results,
     remote_media_url_for_relative_path,
+    relationship_matches_question,
     resolve_media_file_path,
     run_openclaw_agent,
     run_gbrain,
@@ -42,6 +44,13 @@ from server import (
 
 
 class GraphParsingTests(unittest.TestCase):
+    def test_relationship_question_matching_ignores_structural_stopwords(self):
+        question = "which of my X posts were reposted by Garry Tan?"
+
+        self.assertTrue(relationship_matches_question("reposted_by", question))
+        self.assertFalse(relationship_matches_question("authored_by", question))
+        self.assertFalse(relationship_matches_question("ceo of", question))
+
     def test_default_media_discovery_roots_avoid_user_folders(self):
         roots = DEFAULT_CONFIG["media_discovery_roots"]
 
@@ -1051,6 +1060,83 @@ cover_image: companies/example-inc/logo.jpg
             any_order=True,
         )
 
+    def test_ask_yoda_uses_named_entity_backlinks_for_relationship_lookup(self):
+        store = GraphStore()
+        broad_search = "[1.19] platforms/tony-guan-x -- Tony Guan X Posts"
+        entity_search = "[1.29] people/garry-tan -- Garry Tan"
+        garry_backlinks = json.dumps(
+            [
+                {
+                    "from_slug": "media/x-ecalifornians-status-2071774149987680569",
+                    "to_slug": "people/garry-tan",
+                    "link_type": "reposted_by",
+                    "context": "",
+                    "link_source": "manual",
+                }
+            ]
+        )
+        captured_prompt = {}
+
+        def gbrain_result(*args, **kwargs):
+            del kwargs
+            if args == ("get", "people/tony-guan"):
+                return "# Tony Guan"
+            if args[0] == "graph-query":
+                return "large broad graph"
+            if args == ("backlinks", "people/tony-guan"):
+                return "selected backlinks"
+            if args[0] == "query":
+                return broad_search
+            if args == ("search", "Garry Tan", "--limit", "5"):
+                return entity_search
+            if args == ("get", "platforms/tony-guan-x"):
+                return "# Tony Guan X Posts"
+            if args == ("get", "people/garry-tan"):
+                return "# Garry Tan"
+            if args == ("backlinks", "people/garry-tan"):
+                return garry_backlinks
+            if args == ("get", "media/x-ecalifornians-status-2071774149987680569"):
+                return "# Introducing Memory Stargraph\n\nTony's X post."
+            raise AssertionError(args)
+
+        def answer_from_prompt(prompt, return_details=False):
+            captured_prompt["value"] = prompt
+            result = {
+                "output": "The Memory Stargraph post was reposted by Garry Tan.",
+                "backend": "openclaw",
+                "model_status": "answered",
+                "openclaw_status": "ok",
+            }
+            return result if return_details else result["output"]
+
+        with (
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch("server.run_yoda_model", side_effect=answer_from_prompt),
+        ):
+            result = store.ask_yoda(
+                "people/tony-guan",
+                "which of my X posts were reposted by Garry Tan?",
+                depth=4,
+            )
+
+        self.assertEqual(result["source"], "openclaw")
+        self.assertIn("Targeted entity relationship evidence", captured_prompt["value"])
+        self.assertIn("people/garry-tan", captured_prompt["value"])
+        self.assertIn("reposted_by", captured_prompt["value"])
+        self.assertIn("media/x-ecalifornians-status-2071774149987680569", captured_prompt["value"])
+        self.assertIn("Tony's X post", captured_prompt["value"])
+        self.assertIn("possibly truncated", captured_prompt["value"])
+        run.assert_has_calls(
+            [
+                mock.call("search", "Garry Tan", "--limit", "5"),
+                mock.call("backlinks", "people/garry-tan"),
+                mock.call("get", "media/x-ecalifornians-status-2071774149987680569"),
+            ],
+            any_order=True,
+        )
+        self.assertEqual(result["diagnostics"]["context_counts"]["targeted_entities"], 1)
+        self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
+
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
 
@@ -1079,11 +1165,19 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("context_subphases_ms", cold["diagnostics"])
         self.assertEqual(
             set(cold["diagnostics"]["context_subphases_ms"]),
-            {"selected_node", "graph", "backlinks", "search", "direct_reads", "assembly"},
+            {"selected_node", "graph", "backlinks", "search", "direct_reads", "targeted_relationships", "assembly"},
         )
         self.assertEqual(
             set(cold["diagnostics"]["context_counts"]),
-            {"prompt_chars", "history_messages", "search_results", "direct_reads"},
+            {
+                "prompt_chars",
+                "history_messages",
+                "search_results",
+                "direct_reads",
+                "targeted_entities",
+                "targeted_backlink_reads",
+                "relationship_source_reads",
+            },
         )
         self.assertNotIn("prompt", cold["diagnostics"])
         store.invalidate()

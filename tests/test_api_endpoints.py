@@ -667,7 +667,8 @@ class ApiEndpointTests(unittest.TestCase):
                 status, data = self.dispatch_post("/api/yoda-system-prompt", {"reset": True})
                 self.assertEqual(status, 200)
                 self.assertFalse(data["override"])
-                self.assertIn("avoid unconstrained graph-query --depth 4", data["prompt"])
+            self.assertIn("Broad graph context may be truncated", data["prompt"])
+            self.assertIn("Prefer targeted entity relationship evidence", data["prompt"])
 
     def test_yoda_log_store_is_bounded_and_read_by_slug(self):
         with tempfile.TemporaryDirectory() as tmpdir:

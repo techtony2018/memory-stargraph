@@ -154,7 +154,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.145"
+UI_VERSION = "V1.0.146"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -209,9 +209,9 @@ DEFAULT_YODA_SYSTEM_PROMPT = """You are Ask Yoda inside Memory Stargraph.
 Answer from GBrain evidence. Start with the selected node when useful, then use graph expansion, backlinks, targeted search, and direct source-node reads.
 Be concise, cite relevant slugs or source node names, and say when the graph does not contain enough evidence.
 
-Before traversing the graph, classify the question intent. For writing, post, note, article, or publication questions, prefer typed/container enumeration over broad expansion. Enumerate publication, platform, collection, or feed nodes through has_member/member_of, has_post/has_entry, authored_by, and similar typed edges. Verify candidate writing evidence with author or holder relationships and container membership before treating a title/content hit as relevant.
+Before interpreting the graph, classify the question intent. For writing, post, note, article, or publication questions, prefer typed/container evidence over broad expansion. Enumerate publication, platform, collection, or feed nodes through has_member/member_of, has_post/has_entry, authored_by, and similar typed edges. Verify candidate writing evidence with author or holder relationships and container membership before treating a title/content hit as relevant.
 
-avoid unconstrained graph-query --depth 4 --direction both from high-degree hub nodes. If broad traversal times out or the selected node has large fanout, explain the hub fanout and retry with constrained typed traversals such as --type authored_by --direction in --depth 1, has_member/member_of, has_post/has_entry, or topic-filtered container scans.
+Broad graph context may be truncated for high-degree hubs. Never conclude that a relationship or member does not exist merely because it is absent from a truncated broad graph section. Prefer targeted entity relationship evidence and direct relationship-source reads when those sections are present.
 
 Cite evidence from backlinks and relationships. Distinguish direct content/title matches from noisy metadata or frontmatter matches."""
 
@@ -1595,6 +1595,80 @@ def parse_search_results(output):
             }
         )
     return results
+
+
+def extract_question_entities(question, limit=3):
+    text = str(question or "")
+    matches = re.findall(
+        r"(?<![\w@])@[A-Za-z0-9_]{2,}|(?<![\w])(?:[A-Z][A-Za-z0-9'’-]+(?:\s+[A-Z][A-Za-z0-9'’-]+)+)",
+        text,
+    )
+    ignored = {"Ask Yoda", "GBrain", "Memory Stargraph"}
+    seen = set()
+    entities = []
+    for match in matches:
+        clean = match.strip()
+        key = clean.lower()
+        if not clean or clean in ignored or key in seen:
+            continue
+        seen.add(key)
+        entities.append(clean)
+        if len(entities) >= limit:
+            break
+    return entities
+
+
+def relationship_matches_question(link_type, question):
+    stopwords = {"a", "an", "and", "at", "by", "for", "from", "has", "in", "is", "of", "on", "or", "the", "to", "with"}
+    relation_words = {
+        word
+        for word in re.findall(r"[a-z0-9]+", str(link_type or "").lower())
+        if word not in stopwords and len(word) >= 3
+    }
+    question_words = {
+        word
+        for word in re.findall(r"[a-z0-9]+", str(question or "").lower())
+        if word not in stopwords and len(word) >= 3
+    }
+    if relation_words & question_words:
+        return True
+    aliases = (
+        ({"repost", "reposts", "reposted", "retweet", "retweets", "retweeted"}, {"repost", "reposts", "reposted", "retweet", "retweets", "retweeted"}),
+        ({"like", "likes", "liked"}, {"like", "likes", "liked"}),
+        ({"write", "writes", "wrote", "written", "author", "authored"}, {"write", "writes", "wrote", "written", "author", "authored"}),
+        ({"comment", "comments", "commented", "reply", "replied"}, {"comment", "comments", "commented", "reply", "replied"}),
+        ({"share", "shares", "shared"}, {"share", "shares", "shared"}),
+    )
+    for question_aliases, relation_aliases in aliases:
+        if question_words & question_aliases and relation_words & relation_aliases:
+            return True
+    return False
+
+
+def preferred_entity_slug(search_output, phrase):
+    results = parse_search_results(str(search_output or ""))
+    if not results:
+        return ""
+    phrase_key = re.sub(r"[^a-z0-9]+", "-", str(phrase or "").lower()).strip("-")
+
+    def score(item):
+        slug = str(item.get("slug") or "")
+        preview = str(item.get("preview") or "").lower()
+        rank = 0
+        if slug.startswith("people/"):
+            rank += 50
+        elif slug.startswith(("organizations/", "companies/")):
+            rank += 40
+        elif slug.startswith("media/") and "-status-" not in slug and "/status/" not in slug:
+            rank += 30
+        if phrase_key and phrase_key in slug.lower().replace("_", "-"):
+            rank += 25
+        if str(phrase or "").lower() in preview:
+            rank += 10
+        rank += float(item.get("score") or 0)
+        return rank
+
+    return max(results, key=score).get("slug") or ""
 
 
 def safe_upload_filename(filename):
@@ -3537,6 +3611,89 @@ class GraphStore:
             },
         }
 
+    def build_yoda_targeted_context(self, question, excluded_slugs=None):
+        excluded = set(excluded_slugs or [])
+        phrases = extract_question_entities(question)
+        lines = []
+        relationship_sources = []
+        seen_candidates = set()
+        seen_sources = set()
+        backlink_reads = 0
+
+        for phrase in phrases:
+            try:
+                search_output = run_gbrain("search", phrase, "--limit", "5")
+            except Exception:  # noqa: BLE001
+                continue
+            candidate = preferred_entity_slug(search_output, phrase)
+            if not candidate or candidate in seen_candidates or candidate in excluded:
+                continue
+            seen_candidates.add(candidate)
+            lines.extend([f"### {phrase} -> {candidate}"])
+            try:
+                entity_raw = run_gbrain("get", candidate)
+            except Exception as exc:  # noqa: BLE001
+                entity_raw = f"Unable to read {candidate}: {exc}"
+            if entity_raw:
+                lines.append(str(entity_raw)[:1800])
+            try:
+                backlinks_raw = run_gbrain("backlinks", candidate)
+                backlink_reads += 1
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"Backlinks unavailable for {candidate}: {exc}")
+                continue
+            records = extract_json_list(str(backlinks_raw or ""))
+            if not isinstance(records, list):
+                lines.append(str(backlinks_raw or "")[:3000])
+                continue
+            compact_edges = []
+            for record in records[:60]:
+                if not isinstance(record, dict):
+                    continue
+                source = str(record.get("from_slug") or "").strip()
+                target = str(record.get("to_slug") or candidate).strip()
+                link_type = str(record.get("link_type") or "").strip()
+                if not source or not link_type:
+                    continue
+                compact_edges.append(f"- {source} --[{link_type}]--> {target}")
+                if (
+                    source not in excluded
+                    and source not in seen_sources
+                    and relationship_matches_question(link_type, question)
+                ):
+                    seen_sources.add(source)
+                    relationship_sources.append((source, link_type, candidate))
+            if compact_edges:
+                lines.append("Backlink relationships:")
+                lines.extend(compact_edges)
+
+        source_reads = 0
+        if relationship_sources:
+            lines.append("")
+            lines.append("Relationship source node reads:")
+        for source, link_type, candidate in relationship_sources[:6]:
+            try:
+                source_raw = run_gbrain("get", source)
+            except Exception as exc:  # noqa: BLE001
+                source_raw = f"Unable to read {source}: {exc}"
+            lines.extend(
+                [
+                    f"## {source}",
+                    f"Relationship: {source} --[{link_type}]--> {candidate}",
+                    str(source_raw or "")[:3000],
+                ]
+            )
+            source_reads += 1
+
+        return {
+            "text": "\n".join(lines),
+            "counts": {
+                "targeted_entities": len(seen_candidates),
+                "targeted_backlink_reads": backlink_reads,
+                "relationship_source_reads": source_reads,
+            },
+        }
+
     def build_yoda_prompt(
         self,
         slug,
@@ -3571,10 +3728,24 @@ class GraphStore:
         raw = stable_context.get("selected_node") or ""
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
-        graph_output = stable_context.get("graph") or ""
-        lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
-        backlink_output = stable_context.get("backlinks") or ""
-        lines.extend(["", "Backlink context:", str(backlink_output or "")[:4000]])
+        graph_text = str(stable_context.get("graph") or "")
+        graph_preview = graph_text[:6000]
+        lines.extend(
+            [
+                "",
+                f"Broad graph context (possibly truncated; showing {len(graph_preview)} of {len(graph_text)} characters):",
+                graph_preview,
+            ]
+        )
+        backlink_text = str(stable_context.get("backlinks") or "")
+        backlink_preview = backlink_text[:4000]
+        lines.extend(
+            [
+                "",
+                f"Selected-node backlink context (possibly truncated; showing {len(backlink_preview)} of {len(backlink_text)} characters):",
+                backlink_preview,
+            ]
+        )
         phase_started = time.perf_counter()
         try:
             search_output = run_gbrain(
@@ -3608,6 +3779,23 @@ class GraphStore:
                     candidate_raw = f"Unable to read {candidate}: {exc}"
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
         trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
+        phase_started = time.perf_counter()
+        targeted_context = self.build_yoda_targeted_context(
+            question,
+            excluded_slugs={slug, *likely_slugs},
+        )
+        targeted_text = targeted_context.get("text") or ""
+        if targeted_text:
+            lines.extend(
+                [
+                    "",
+                    "Targeted entity relationship evidence:",
+                    "Treat this question-specific evidence as more authoritative than absence from a truncated broad graph.",
+                    targeted_text,
+                ]
+            )
+        counts.update(targeted_context.get("counts") or {})
+        trace["targeted_relationships"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
         prompt = "\n".join(lines)
         trace["assembly"] = int((time.perf_counter() - phase_started) * 1000)
@@ -3665,6 +3853,9 @@ class GraphStore:
                 "history_messages": len(history or []),
                 "search_results": context_counts.get("search_results", 0),
                 "direct_reads": context_counts.get("direct_reads", 0),
+                "targeted_entities": context_counts.get("targeted_entities", 0),
+                "targeted_backlink_reads": context_counts.get("targeted_backlink_reads", 0),
+                "relationship_source_reads": context_counts.get("relationship_source_reads", 0),
             },
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
