@@ -1,0 +1,4 @@
+interface:
+  display_name: "Get Capture Link"
+  short_description: "Read and filter capture backlog status"
+  default_prompt: "Use $get-capture-link to read the Memory Stargraph capture backlog without changing it."
