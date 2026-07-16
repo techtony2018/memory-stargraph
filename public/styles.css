@@ -792,6 +792,10 @@ h2 {
   outline-offset: -2px;
 }
 
+.js-hud-tooltips .filter-sidebar-drawer::before {
+  display: block;
+}
+
 .filter-sidebar {
   position: absolute;
   left: 14px;

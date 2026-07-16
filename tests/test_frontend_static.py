@@ -792,6 +792,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('content: "‹"', styles)
         self.assertIn(".filter-sidebar-drawer:hover::before", styles)
         self.assertIn(".filter-sidebar-drawer:focus-visible::before", styles)
+        self.assertIn(
+            ".js-hud-tooltips .filter-sidebar-drawer::before {\n  display: block;",
+            styles,
+        )
         self.assertIn("opacity: 0.9", styles)
         self.assertIn("right: 18px", styles)
         self.assertIn("width: min(238px, calc(100% - 34px))", styles)
