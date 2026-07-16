@@ -3,12 +3,31 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Iterable
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.automation.backlog_compaction import (
+    BacklogSpec,
+    CompactionPlan,
+    archive_sequence as generic_archive_sequence,
+    escape_cell,
+    find_table_start,
+    item_number,
+    node_slug,
+    parse_rows,
+    plan_compaction as generic_plan_compaction,
+    render_archive_index,
+    render_table,
+    replace_root_table,
+    split_markdown_row,
+    strip_section,
+)
 
 
 ROOT_SLUG = "notes/memory-starmap-todo-list"
@@ -17,179 +36,37 @@ ARCHIVE_PREFIX = f"{ROOT_SLUG}/completed-archive-"
 ARCHIVE_SIZE = 50
 TODO_COLUMNS = ["id", "status", "priority", "title", "node", "updated", "notes"]
 INCOMPLETE_STATUSES = {"planned", "implementing", "failed"}
-
-
-@dataclass
-class CompactionPlan:
-    active_rows: list[dict[str, str]]
-    archives_to_create: list[dict[str, object]]
-    archive_index: list[dict[str, object]]
-    failed_rows: list[dict[str, str]]
-
-
-def split_markdown_row(line: str) -> list[str]:
-    text = line.strip()
-    if text.startswith("|"):
-        text = text[1:]
-    if text.endswith("|"):
-        text = text[:-1]
-    cells: list[str] = []
-    current: list[str] = []
-    escaped = False
-    for char in text:
-        if escaped:
-            current.append(char)
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "|":
-            cells.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-    if escaped:
-        current.append("\\")
-    cells.append("".join(current).strip())
-    return cells
-
-
-def escape_cell(value: object) -> str:
-    text = "" if value is None else str(value)
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
+TODO_SPEC = BacklogSpec(
+    root_slug=ROOT_SLUG,
+    section_heading="Todo Items",
+    columns=tuple(TODO_COLUMNS),
+    completed_status="completed",
+    archive_size=ARCHIVE_SIZE,
+    archive_prefix=ARCHIVE_PREFIX,
+)
 
 
 def render_todo_table(rows: Iterable[dict[str, str]]) -> str:
-    lines = [
-        "| id | status | priority | title | node | updated | notes |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for row in rows:
-        lines.append("| " + " | ".join(escape_cell(row.get(column, "")) for column in TODO_COLUMNS) + " |")
-    return "\n".join(lines)
+    return render_table(rows, TODO_SPEC)
 
 
 def parse_todo_rows(markdown: str) -> list[dict[str, str]]:
-    lines = markdown.splitlines()
-    start = find_todo_table_start(lines)
-    if start is None:
-        return []
-    rows: list[dict[str, str]] = []
-    for line in lines[start + 2 :]:
-        if not line.strip().startswith("|"):
-            break
-        cells = split_markdown_row(line)
-        if len(cells) < len(TODO_COLUMNS):
-            continue
-        rows.append({column: cells[index] for index, column in enumerate(TODO_COLUMNS)})
-    return rows
+    return parse_rows(markdown, TODO_SPEC)
 
 
 def find_todo_table_start(lines: list[str]) -> int | None:
-    for index, line in enumerate(lines):
-        if line.strip().lower() != "## todo items":
-            continue
-        for table_index in range(index + 1, len(lines)):
-            stripped = lines[table_index].strip()
-            if not stripped:
-                continue
-            cells = [cell.lower() for cell in split_markdown_row(stripped)]
-            if cells[: len(TODO_COLUMNS)] == TODO_COLUMNS:
-                return table_index
-            return None
-    for index, line in enumerate(lines):
-        cells = [cell.lower() for cell in split_markdown_row(line.strip())]
-        if cells[: len(TODO_COLUMNS)] == TODO_COLUMNS:
-            return index
-    return None
-
-
-def item_number(row: dict[str, str]) -> int:
-    match = re.search(r"(\d+)", row.get("id", ""))
-    return int(match.group(1)) if match else 10**9
+    return find_table_start(lines, TODO_SPEC)
 
 
 def archive_sequence(slug: str) -> int | None:
-    match = re.fullmatch(re.escape(ARCHIVE_PREFIX) + r"(\d{4})", slug)
-    return int(match.group(1)) if match else None
-
-
-def node_slug(row: dict[str, str]) -> str | None:
-    match = re.search(r"\[\[([^\]]+)\]\]", row.get("node", ""))
-    return match.group(1).strip() if match else None
+    return generic_archive_sequence(slug, TODO_SPEC)
 
 
 def plan_compaction(
     rows: list[dict[str, str]],
     existing_archives: dict[str, list[dict[str, str]]],
 ) -> CompactionPlan:
-    existing_archive_items = {
-        row["id"]
-        for archive_rows in existing_archives.values()
-        for row in archive_rows
-        if row.get("id")
-    }
-    completed = sorted((row for row in rows if row.get("status") == "completed"), key=item_number)
-    incomplete = sorted((row for row in rows if row.get("status") != "completed"), key=item_number)
-    unarchived_completed = [row for row in completed if row.get("id") not in existing_archive_items]
-
-    next_sequence = max([archive_sequence(slug) or 0 for slug in existing_archives] or [0]) + 1
-    archives_to_create: list[dict[str, object]] = []
-    while len(unarchived_completed) >= ARCHIVE_SIZE:
-        batch = unarchived_completed[:ARCHIVE_SIZE]
-        unarchived_completed = unarchived_completed[ARCHIVE_SIZE:]
-        archives_to_create.append(
-            {
-                "slug": f"{ARCHIVE_PREFIX}{next_sequence:04d}",
-                "sequence": next_sequence,
-                "rows": batch,
-            }
-        )
-        next_sequence += 1
-
-    newly_archived_items = {
-        row["id"]
-        for archive in archives_to_create
-        for row in archive["rows"]  # type: ignore[index]
-    }
-    active_completed = [
-        row
-        for row in completed
-        if row.get("id") not in existing_archive_items and row.get("id") not in newly_archived_items
-    ]
-    active_rows = incomplete + active_completed
-
-    archive_index: list[dict[str, object]] = []
-    for slug, archive_rows in existing_archives.items():
-        if not archive_rows:
-            continue
-        archive_index.append(
-            {
-                "slug": slug,
-                "sequence": archive_sequence(slug) or 0,
-                "first_id": archive_rows[0]["id"],
-                "last_id": archive_rows[-1]["id"],
-                "count": len(archive_rows),
-            }
-        )
-    for archive in archives_to_create:
-        archive_rows = archive["rows"]  # type: ignore[assignment]
-        archive_index.append(
-            {
-                "slug": archive["slug"],
-                "sequence": archive["sequence"],
-                "first_id": archive_rows[0]["id"],
-                "last_id": archive_rows[-1]["id"],
-                "count": len(archive_rows),
-            }
-        )
-    archive_index.sort(key=lambda item: int(item["sequence"]))
-
-    return CompactionPlan(
-        active_rows=active_rows,
-        archives_to_create=archives_to_create,
-        archive_index=archive_index,
-        failed_rows=[row for row in active_rows if row.get("status") == "failed"],
-    )
+    return generic_plan_compaction(rows, existing_archives, TODO_SPEC)
 
 
 def render_archive(slug: str, sequence: int, rows: list[dict[str, str]]) -> str:
@@ -248,45 +125,8 @@ This collection is a synchronized current-state view. Failed rows remain in the 
 """
 
 
-def render_archive_index(index_rows: list[dict[str, object]]) -> str:
-    if not index_rows:
-        return ""
-    lines = [
-        "## Completed Archives",
-        "",
-        "| archive | sequence | first id | last id | count |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for row in index_rows:
-        lines.append(
-            f"| [[{row['slug']}]] | {row['sequence']} | {row['first_id']} | {row['last_id']} | {row['count']} |"
-        )
-    return "\n".join(lines)
-
-
-def strip_section(markdown: str, heading: str) -> str:
-    pattern = re.compile(rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\Z)")
-    return pattern.sub("", markdown).rstrip()
-
-
 def replace_root_todo_table(markdown: str, rows: list[dict[str, str]], archive_index: list[dict[str, object]]) -> str:
-    lines = markdown.splitlines()
-    start = find_todo_table_start(lines)
-    if start is None:
-        raise ValueError("Could not find ## Todo Items table in root backlog")
-    end = start + 2
-    while end < len(lines) and lines[end].strip().startswith("|"):
-        end += 1
-    prefix = "\n".join(lines[:start])
-    suffix = "\n".join(lines[end:])
-    suffix = strip_section(suffix, "Completed Archives")
-    archive_section = render_archive_index(archive_index)
-    parts = [prefix.rstrip(), render_todo_table(rows)]
-    if archive_section:
-        parts.extend(["", archive_section])
-    if suffix.strip():
-        parts.extend(["", suffix.strip()])
-    return "\n".join(parts).rstrip() + "\n"
+    return replace_root_table(markdown, rows, archive_index, TODO_SPEC)
 
 
 def run_gbrain(args: list[str], input_text: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:

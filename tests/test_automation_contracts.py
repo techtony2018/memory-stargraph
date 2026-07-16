@@ -1,4 +1,5 @@
 from pathlib import Path
+import tomllib
 import unittest
 
 
@@ -6,6 +7,68 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AutomationContractTests(unittest.TestCase):
+    def test_every_worker_uses_dst_aware_pacific_reporting(self):
+        workers = (
+            "gbrain-x-intelligence-capture",
+            "memory-stargraph-daily-learning-intake",
+            "memory-stargraph-wish-to-reallity",
+            "memory-stargraph-divergent-product-discovery",
+            "memory-stargraph-goal-steward-daily-review",
+            "memory-stargraph-capture-link-drain",
+        )
+        required = (
+            "America/Los_Angeles",
+            "timezone-aware ISO 8601",
+            "PDT in summer",
+            "PST in winter",
+            "Do not use a fixed UTC-8 offset",
+        )
+        for worker in workers:
+            prompt = (ROOT / "automations" / worker / "prompt.md").read_text()
+            for phrase in required:
+                self.assertIn(phrase, prompt, f"{worker} missing {phrase}")
+
+    def test_capture_worker_is_persistent_midnight_and_manually_triggerable(self):
+        definition = tomllib.loads(
+            (
+                ROOT
+                / "automations/memory-stargraph-capture-link-drain/automation.toml"
+            ).read_text()
+        )
+        prompt = (
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
+        ).read_text()
+        self.assertEqual(definition["id"], "memory-stargraph-capture-link-drain")
+        self.assertEqual(
+            definition["rrule"], "FREQ=DAILY;BYHOUR=0;BYMINUTE=0;BYSECOND=0"
+        )
+        self.assertEqual(definition["timezone"], "America/Los_Angeles")
+        self.assertEqual(definition["destination"], "thread")
+        self.assertIn("{{CAPTURE_LINK_THREAD_ID}}", definition["target_thread_id"])
+        self.assertIn("manual", prompt.lower())
+        self.assertIn("there is no fixed cutoff", prompt.lower())
+
+    def test_capture_worker_freezes_and_drains_every_selected_item(self):
+        prompt = (
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
+        ).read_text()
+        self.assertIn("first authoritative snapshot", prompt)
+        self.assertIn("planned` to `capturing", prompt)
+        self.assertIn("every frozen item", prompt)
+        self.assertIn("completed` or `failed", prompt)
+        self.assertIn("created after the frozen snapshot", prompt)
+
+    def test_capture_worker_routes_to_most_specific_local_skill_and_reuses_media(self):
+        prompt = (
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
+        ).read_text()
+        self.assertIn("~/.codex/skills/<skill>/SKILL.md", prompt)
+        self.assertIn("~/.openclaw/skills/<skill>/SKILL.md", prompt)
+        self.assertIn("gbrain-capture-link", prompt)
+        self.assertIn("gbrain-pdf-capture", prompt)
+        self.assertIn("gb-capture-linkedin", prompt)
+        self.assertIn("must not upload or copy the bytes again", prompt)
+
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()
         self.assertIn("context.pages()", probe)

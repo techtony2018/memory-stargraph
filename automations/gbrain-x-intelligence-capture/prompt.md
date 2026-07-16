@@ -27,3 +27,5 @@ Purpose: discover and preserve useful public knowledge shared on X about GBrain 
 10. Preserve public content only. Do not save login cookies, tokens, private messages, hidden account data, or unsupported identity claims. Respect source availability and quote minimally when copyright limits apply.
 11. Record this execution as a Run under `goals/memory-stargraph-continuous-learning-local-knowledge-os` with sources, counts, errors, and durable Learnings.
 12. Final report: query window, posts reviewed/captured/skipped, new feature or usage findings, top evidence-backed inspirations, created slugs and links, watermark, and Run/Learning records.
+
+Pacific-time reporting contract: worker-generated logs, Run records, batch reports, status-transition evidence, timestamped filenames, and final reports must use timezone-aware ISO 8601 values in `America/Los_Angeles`. This means PDT in summer (`-07:00`) and PST in winter (`-08:00`). Do not use a fixed UTC-8 offset or label UTC values as Pacific time. Preserve source-native timestamps as provenance when needed, but add a Pacific-normalized value for worker evidence.

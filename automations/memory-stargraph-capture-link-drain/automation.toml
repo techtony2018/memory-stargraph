@@ -1,0 +1,12 @@
+version = 1
+id = "memory-stargraph-capture-link-drain"
+kind = "heartbeat"
+name = "Memory Stargraph Capture Link Worker"
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=0;BYMINUTE=0;BYSECOND=0"
+timezone = "America/Los_Angeles"
+destination = "thread"
+target_thread_id = "{{CAPTURE_LINK_THREAD_ID}}"
+prompt_file = "heartbeat-prompt.md"
+worker_prompt_file = "prompt.md"
+thread_bootstrap_file = "thread-bootstrap.md"
