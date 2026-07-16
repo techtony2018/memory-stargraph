@@ -200,8 +200,8 @@ try {
   if (!initial.pointerHint?.includes("Hover for full names. Click to select") || initial.pointerHint.includes("Long-press")) {
     throw new Error(`Expected desktop pointer hint to use hover/click wording: ${initial.pointerHint}`);
   }
-  if (initial.lastRefreshPresent || initial.refreshInlineControls || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Yoda", "Cache"]) || !initial.flushCachePresent || !initial.selectionYodaPresent) {
-    throw new Error(`Expected Settings Display/Yoda/Cache with Flush, no refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
+  if (initial.lastRefreshPresent || initial.refreshInlineControls || JSON.stringify(initial.settingsSections) !== JSON.stringify(["Display", "Yoda", "Setup", "Cache"]) || !initial.flushCachePresent || !initial.selectionYodaPresent) {
+    throw new Error(`Expected Settings Display/Yoda/Setup/Cache with Flush, no refresh controls, no Last refresh, and selection Yoda button: ${JSON.stringify(initial)}`);
   }
   if (!/^V1\.0\.\d+$/.test(initial.uiVersion || "")) {
     throw new Error(`Expected UI version like V1.0.x to render, got ${initial.uiVersion}`);
