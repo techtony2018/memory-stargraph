@@ -1119,20 +1119,16 @@ memory-stargraph-goal-steward-daily-review
 
 Read each automation back and verify `America/Los_Angeles`, timezone-aware ISO 8601, PDT/PST language, existing target task id, and unchanged schedule/status.
 
-- [ ] **Step 8: Run a queue-only live smoke test without draining the worker**
+- [ ] **Step 8: Run a non-mutating live skill smoke test**
 
 Run:
 
 ```bash
-python3 ~/.codex/skills/add-capture-link/scripts/add_capture_link.py \
-  --source "https://example.com/memory-stargraph-capture-smoke" \
-  --source-kind url \
-  --instructions "Queue-only smoke fixture; do not publish or create speculative relationships." \
-  --json
-python3 ~/.codex/skills/get-capture-link/scripts/get_capture_link.py --status planned --json
+python3 ~/.codex/skills/add-capture-link/scripts/add_capture_link.py --help
+python3 ~/.codex/skills/get-capture-link/scripts/get_capture_link.py --json
 ```
 
-Expected: one new `planned` `CAP-*` request with verified parent/child links; no final captured node and no capture skill invocation. Remove or mark the fixture failed only through the documented state command, preserving truthful evidence; do not delete graph history.
+Expected: the add helper exposes the documented queue-only arguments, and the get helper reads the live initialized root with `ok: true` without mutation. Attachment and parent/child transaction behavior remains covered by the endpoint-mocked tests; do not create an artificial live request that a later worker could mistake for user-authorized capture work.
 
 - [ ] **Step 9: Final verification and handoff**
 
@@ -1140,4 +1136,4 @@ Run: `git status --short && git log --oneline --decorate -8`
 
 Expected: clean tracked worktree and the plan's focused commits.
 
-Report: installed skill paths, initialized root and failed slugs, persistent task id, automation id/status/schedule/destination, live parity for all six worker prompts, smoke request id, tests, and any authority-gated follow-up. Present every GBrain slug as an exact clickable local Memory Stargraph link.
+Report: installed skill paths, initialized root and failed slugs, persistent task id, automation id/status/schedule/destination, live parity for all six worker prompts, non-mutating smoke results, tests, and any authority-gated follow-up. Present every GBrain slug as an exact clickable local Memory Stargraph link.
