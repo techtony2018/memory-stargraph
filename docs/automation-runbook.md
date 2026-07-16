@@ -61,6 +61,30 @@ rg -n "^(title: [\"\x27]?(---|title:|tags:|type:|slug:)|# (---|title:|tags:|type
 
 Both commands should return no matches for newly generated capture pages. Also spot-check at least one content-rich page and one low/no-text fallback page.
 
+## Attachment Regression Release Gate
+
+[GBrain Attachment Safety and Verification](gbrain-attachment-runbook.md) is the single source of truth for attachment writes, replacement, repair, evidence, cold-cache recovery, backup/restore, and release acceptance. The [remote media topology runbook](memory-stargraph-remote-gbrain-media-import-runbook.md) may extend host-routing guidance but must not define a competing upload path.
+
+Attachment-related automation must obey these rules:
+
+1. Upload only through Memory Stargraph's `POST /api/entity-attach-file/<URL-encoded-slug>` boundary, normally via the UI, `upload_attachment_via_stargraph.py`, or `add_sg_todo.py --attachment`.
+2. Never call host-local file-upload commands directly from a thin client, capture skill, or ad hoc agent script.
+3. Require `durable_storage_verified: true`, canonical relative path, exact byte count, exact SHA-256, one matching ledger row, and served-byte readback before reporting success.
+4. Treat Stargraph `media/` directories as disposable caches. A warm cache or ledger row alone is not completion evidence.
+5. On replacement, preserve prior bytes or a verified backup before a same-path overwrite. Keep deletion/legacy cleanup in a separate explicitly reviewed operation.
+6. Do not mark an attachment/storage TODO completed until a real upload, idempotent retry, target durable-object check, and cold-cache recovery pass on every required target.
+
+Every attachment/storage release must run:
+
+```bash
+python3 -m unittest discover -s tests
+python3 -m unittest tests.test_documentation_contracts
+python3 -m unittest discover -s "$HOME/.codex/skills/gbrain-capture-link/tests"
+python3 -m unittest discover -s "$HOME/.codex/skills/add-sg-todo/tests"
+```
+
+Run the GBrain durable-storage tests and TypeScript check in the active GBrain implementation worktree, then follow the canonical runbook's real integration gate. If any required layer is unavailable, record a concrete failure and recovery action instead of weakening the contract.
+
 ## Deployment Targets
 
 Keep deployment target details in local Codex memory/config and GBrain, not in tracked GitHub files. The deploy helper reads:

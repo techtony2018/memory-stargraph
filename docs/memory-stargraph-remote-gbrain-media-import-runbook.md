@@ -1,6 +1,6 @@
 ---
 type: runbook
-title: Memory Stargraph Remote GBrain Media Import Runbook
+title: Memory Stargraph Remote Media Topology and Cache Recovery Runbook
 tags:
   - gbrain
   - media
@@ -9,168 +9,42 @@ tags:
   - runbook
 ---
 
-# Memory Stargraph Remote GBrain Media Import Runbook
+# Memory Stargraph Remote Media Topology and Cache Recovery Runbook
 
-Use this when importing images, videos, PDFs, or other supported attachments into a remote GBrain backend so every Memory Stargraph web-service host can later render the media without manual file copying.
+Use this runbook to configure and verify remote Memory Stargraph hosts after attachment bytes have entered the supported durable upload boundary.
 
-This runbook complements [[docs/memory-stargraph-remote-media-runbook]], which focuses on rendering and cache-miss recovery after media already exists in GBrain.
+The canonical write, replacement, repair, evidence, backup, and release contract is [GBrain Attachment Safety and Verification](gbrain-attachment-runbook.md). Follow that runbook for every attachment mutation. This document only adds multi-host read routing and cache-recovery guidance.
 
 ## Goal
 
-For every attachment, store both layers:
+Every Memory Stargraph host must render the same attachment from the same canonical relative path without manual copying. A host with an empty local media cache must recover exact bytes from durable GBrain storage or the trusted hosting endpoint.
 
-1. The page reference: a relative media path in the GBrain node markdown or frontmatter.
-2. The file bytes: the actual media file uploaded into GBrain files/storage at the same relative path.
+## Source of truth and cache roles
 
-If only the markdown is updated, remote Stargraph hosts may show a broken image. If only the file is uploaded, users cannot discover it from the node. Both layers are required.
+| Layer | Role | Authoritative? |
+| --- | --- | --- |
+| GBrain page Markdown/frontmatter | Makes the attachment discoverable from the node. | Yes, for the reference. |
+| GBrain files ledger | Maps page, filename, storage path, size, and content hash. | Yes, for metadata, but insufficient alone. |
+| Configured GBrain storage backend | Stores the exact backing object. | Yes, for bytes. |
+| Hosting Stargraph `media/` | Accelerates browser reads. | No; rebuildable cache. |
+| Non-host Stargraph `media/` | Accelerates local browser reads. | No; rebuildable cache. |
+| Original source/recovery bundle | Enables rollback or repair. | Preserve until durable verification and backup succeed. |
 
-## Recommended Path Convention
+Never promote a Stargraph `media/` directory to the durable source simply because it currently renders.
 
-Use stable relative paths that are safe to serve under `/media/...`.
+## Hosting topology
 
-Examples:
+### GBrain storage host
 
-```text
-people/example-person/profile.jpg
-companies/example-company/logo.png
-assets/posts/example-post/001-photo.jpg
-assets/blogs/example-blog/diagram.pdf
-```
+The storage host needs:
 
-Rules:
+1. A configured GBrain storage backend.
+2. A stable durable root outside Memory Stargraph caches when using the local backend.
+3. Hosting Stargraph `gbrain_file_store_roots` set to that durable root.
+4. Read and write permissions for the service user.
+5. Backup coverage for the durable root, ledger, page Markdown, and graph links.
 
-- Use relative paths only.
-- Do not use absolute paths, `..`, or machine-specific folders.
-- Prefer lowercase slugs and simple filenames.
-- Keep the path aligned with the owning node slug when possible.
-- Use supported preview formats for browser display: images, video, audio, and PDFs.
-
-## Web UI Attach Flow
-
-The easiest path is Memory Stargraph's node menu:
-
-1. Select the target node.
-2. Open `Attach file`.
-3. Pick the file from Finder.
-4. Add an optional description.
-5. Submit.
-
-The Stargraph service should then:
-
-1. Accept the browser upload.
-2. Save a temporary copy under its runtime upload area.
-3. Materialize a stable relative media path for the selected node.
-4. Run `gbrain files upload <local-file> --page <node-slug>`.
-5. Copy supported preview media into the local web media root.
-6. Copy the same file into any configured local GBrain file-store mirror if available.
-7. Append a markdown reference such as `![description](relative/path.jpg)` or `[description](relative/path.pdf)` to the selected node.
-8. Refresh the graph/cache for the selected node.
-
-When the local CLI is a thin-client/localOnly install, configure `gbrain_files_bridge_ssh` with a trusted GBrain storage host and optionally `gbrain_files_bridge_path`. The service copies the temporary upload with `scp`, runs upload and ledger readback under a minimal deterministic remote `bash` environment, removes only its remote temporary file, and updates markdown only after the returned ledger contains the page and filename. Environment variables `MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_SSH` and `MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_PATH` override the local-only config.
-
-This is the preferred user-facing workflow because it updates the page reference and the stored file bytes together.
-
-## Manual Single-File Import
-
-Use this when operating from a shell or an agent.
-
-1. Choose the target page slug:
-
-```bash
-PAGE_SLUG="people/example-person"
-```
-
-2. Choose the intended relative media path:
-
-```bash
-REL_PATH="people/example-person/profile.jpg"
-```
-
-3. Upload the local file to GBrain storage/files:
-
-```bash
-gbrain files upload "/path/to/profile.jpg" --page "$PAGE_SLUG"
-```
-
-4. Update the GBrain page markdown/frontmatter so it references the same relative path:
-
-```markdown
-profile_image: people/example-person/profile.jpg
-
-![Profile image](people/example-person/profile.jpg)
-```
-
-5. Verify readback:
-
-```bash
-gbrain get "$PAGE_SLUG"
-gbrain files list "$PAGE_SLUG"
-```
-
-If `gbrain files list "$PAGE_SLUG"` does not show the file, also check the relative directory or exact path used by your GBrain storage implementation.
-
-## Batch Import Pattern
-
-For many files:
-
-1. Build a manifest with columns like:
-
-```text
-page_slug,local_file,relative_path,description
-```
-
-2. For each row:
-
-- Validate that `local_file` exists.
-- Validate that `relative_path` is relative and safe.
-- Upload the file with `gbrain files upload`.
-- Update the page markdown with the relative path and description.
-- Record success/failure in a progress file so the import can resume.
-
-3. After the batch:
-
-- Run spot checks with `gbrain get`.
-- Run `gbrain files list` for representative pages/directories.
-- Open Memory Stargraph `View` and `View media` for representative nodes on each web-service host.
-
-Existing Stargraph helper scripts should follow this resumable pattern and never rely on a local-only media mirror as the source of truth.
-
-## Remote Stargraph Rendering Requirement
-
-After import, a Stargraph host that does not already have the file in its local `media/` cache should still work.
-
-Expected cache-miss behavior:
-
-1. The node markdown/frontmatter references either a normal relative media path, such as `people/example/profile.jpg`, or an explicit `gbrain:files/...` path. Both forms must work and neither form should overwrite or disable the other.
-2. `/api/entity-media/<slug>` or rendered `View` detects that path.
-3. The service checks its local media root first.
-4. If missing, it tries configured discovery roots, configured GBrain file-store roots, and trusted `remote_media_base_urls` or `gbrain_file_base_urls` HTTP endpoints.
-5. **Do not call `gbrain files signed-url` from Memory Stargraph.** Stargraph has its own media resolution path, and signed-url is unsafe in this deployment because GBrain may have no storage backend and the CLI may be a remote thin-client. Calling it can spawn many stuck `bun ... gbrain files signed-url ...` processes and overload the GBrain host.
-6. The service downloads/copies the file into its local media root.
-7. The browser receives a local `/media/<relative-path>` URL.
-
-On the GBrain host itself, do not configure `remote_media_base_urls` or `gbrain_file_base_urls` to point back to the same Stargraph service unless a non-recursive backing file store is configured. Otherwise a cache miss can recursively call the same host.
-
-This means new web-service hosts should not need a full pre-synced `media/` mirror. The mirror is a cache, not the durable source of truth.
-
-## Attachment Consistency Rule
-
-The attach flow must never create a markdown-only media reference. A successful
-attachment requires all of the following:
-
-1. Memory Stargraph canonicalizes the filename once and uses that exact name for multipart staging, bridge paths, ledger verification, and Markdown.
-2. `gbrain files upload <file> --page <slug>` succeeds against a configured durable backend.
-3. GBrain reads the stored bytes back and emits `durable_storage_verified: true` with the canonical path, exact size, and SHA-256.
-4. `gbrain files list <slug>` shows exactly one matching page/filename row.
-5. Memory Stargraph returns the same structured evidence and updates Markdown only afterward.
-
-A ledger row or warm Stargraph cache is not proof that bytes are durable. Missing,
-unreadable, or unwritable storage must fail nonzero and leave Markdown unchanged.
-
-## Durable hosted local backend
-
-For a single trusted hosting machine, GBrain may use its `local` storage backend
-with a stable root outside disposable Stargraph caches, for example:
+Example shape, with deployment-specific paths kept in private configuration:
 
 ```json
 {
@@ -182,63 +56,133 @@ with a stable root outside disposable Stargraph caches, for example:
 }
 ```
 
-Configure the hosting Stargraph `gbrain_file_store_roots` to read that same root.
-Other Stargraph instances use the hosting `/gbrain-files/` HTTPS endpoint and keep
-only rebuildable caches. Do not configure a cache directory as the source root.
-
-`gbrain files verify` must read every backing object and compare its size and
-SHA-256 with the ledger. Inventory missing objects before migration, copy trusted
-legacy bytes without deleting their sources, then rerun verification. Cleanup of
-legacy copies requires a separate explicit review.
-
-## Backup and restore
-
-The durable storage root is part of the GBrain disaster-recovery set alongside
-Markdown, graph links, and the files ledger. A backup must retain relative paths,
-sizes, and SHA-256 values. Restore into the configured durable root, run
-`gbrain files verify`, clear only disposable Stargraph caches, and confirm a cold
-`/gbrain-files/<path>` read reproduces the ledger hash before declaring recovery.
-
-Only after both checks pass may Stargraph append or update markdown/frontmatter
-references such as `![Label](people/example/photo.jpg)`. If the upload command
-fails, or the file ledger does not show the file after upload, report the error
-and leave the page markdown unchanged.
-
-If an older node already contains a relative media reference but
-`gbrain files list <slug>` says `No files for page`, treat that as a data
-consistency bug. Repair it by uploading the original bytes to the GBrain files
-ledger for the same page; copying into one web service's `media/` directory is
-only a cache repair and is not sufficient.
-
-## Verification Checklist
-
-For a representative imported node:
-
-```bash
-gbrain get <node-slug>
-gbrain files list <node-slug>
+```json
+{
+  "gbrain_file_store_roots": [
+    "/path/to/durable/gbrain-data/files"
+  ]
+}
 ```
 
-Then test from each Memory Stargraph host:
+Do not configure the hosting Stargraph to fetch from its own `/media/` or `/gbrain-files/` URL. A self-reference can recurse forever on a cache miss.
 
-1. Open the node.
-2. Open `View`; markdown images/links should render.
-3. Open `View media`; the same media should appear.
-4. Delete or rename the local cached file on a non-storage web host.
-5. Reload `View media`.
-6. Confirm the service recreates the local cached file from GBrain storage/files or a trusted remote media endpoint.
+### Non-host Stargraph
 
-## Common Failure Modes
+A non-host service needs:
 
-- Markdown references a local filesystem path like `/Users/...`; fix it to a relative media path.
-- The file was copied into one host's `media/` directory but never uploaded to GBrain files/storage; remote hosts cannot recover it.
-- The file was uploaded but the page markdown/frontmatter was not updated; users cannot discover it from the node.
-- The relative path in markdown does not match the storage path.
-- The web-service host lacks `media_roots`, `gbrain_file_store_roots`, trusted `remote_media_base_urls`, or trusted `gbrain_file_base_urls` for its topology. Stargraph must not depend on `gbrain files signed-url`.
-- Browser cache is serving old markdown or old JS/CSS; refresh after verifying the backend response.
+1. A writable local `media/` cache.
+2. `gbrain_file_base_urls` pointing to the trusted hosting Stargraph.
+3. A trusted `gbrain_files_bridge_ssh` route when the local GBrain CLI cannot perform host-local file operations.
+4. An optional `gbrain_files_bridge_path` when `gbrain` is not on the bridge host's deterministic PATH.
 
-## Related Notes
+Example shape:
 
-- [[docs/memory-stargraph-remote-media-runbook]]
-- [[docs/memory-stargraph-three-host-deployment-runbook]]
-- [[products/memory-stargraph]]
+```json
+{
+  "media_roots": ["media"],
+  "gbrain_file_store_roots": [],
+  "gbrain_file_base_urls": ["https://trusted-memory-stargraph.example"],
+  "gbrain_files_bridge_ssh": "user@trusted-gbrain-host",
+  "gbrain_files_bridge_path": "/absolute/path/to/gbrain"
+}
+```
+
+Do not commit concrete private hosts, usernames, credentials, keys, or local storage paths.
+
+## Supported attachment entry points
+
+Remote topology does not change the write contract. Use one of these:
+
+- Memory Stargraph **Attach file** UI.
+- `gbrain-capture-link`'s `upload_attachment_via_stargraph.py` helper.
+- `add-sg-todo.py --attachment` for TODO capture with recovery spooling.
+
+All three routes call `POST /api/entity-attach-file/<URL-encoded-slug>` and require the canonical runbook's durable evidence. Direct file-ledger commands from a thin client or ad hoc script are unsupported.
+
+## Cache-miss flow
+
+When a page references `notes/example/photo.jpg` or `gbrain:files/notes/example/photo.jpg`:
+
+1. Memory Stargraph validates the path and rejects traversal.
+2. It checks its local media cache.
+3. A hosting service checks configured durable file-store roots.
+4. A non-host service tries trusted remote media/file endpoints.
+5. It downloads or copies the bytes into the local media cache.
+6. The browser receives `/media/notes/example/photo.jpg`.
+
+Memory Stargraph must not call `gbrain files signed-url` during this flow. Signed URLs are unnecessary for this topology and can create stuck processes when the active CLI is a remote thin client.
+
+## Cold-cache verification
+
+Test every required host independently:
+
+1. Record the source size and SHA-256.
+2. Locate the specific cached file under that host's Memory Stargraph media root.
+3. Rename only that file to a temporary backup.
+4. Request `/media/<canonical-relative-path>`.
+5. Request `/gbrain-files/<canonical-relative-path>`.
+6. Confirm both responses return HTTP 200 with the source size and SHA-256.
+7. Confirm the local cache was rebuilt with the same bytes.
+8. Remove only the test backup after a byte-for-byte comparison succeeds.
+9. Open **View** and **View media** in a refreshed browser.
+
+Do not bulk-delete cache directories. Do not copy a file into a cache as the "fix". A cache must rebuild from the durable route without manual intervention.
+
+## Adding a new host
+
+1. Create a host-local `config/local.json` from the tracked example.
+2. Configure only that host's cache and trusted durable read route.
+3. Start the service and check:
+
+   ```bash
+   curl -sS http://127.0.0.1:8788/api/health | python3 -m json.tool
+   curl -sS http://127.0.0.1:8788/api/setup-diagnostics | python3 -m json.tool
+   ```
+
+4. Require `attachment_storage.available: true`.
+5. Choose an existing verified attachment and run the cold-cache procedure.
+6. Verify the served UI version and browser behavior.
+
+The host is not ready for attachments if it can render only after someone manually copies media into its cache.
+
+## Troubleshooting
+
+### The ledger has a row but the host returns 404
+
+The backing object may be missing, or the host's durable read route may be wrong. Find the exact original bytes, upload them through the supported Memory Stargraph attachment boundary, require `storage_disposition: repaired`, then rerun cold-cache verification.
+
+### Hosting works but a non-host returns 404
+
+Check `gbrain_file_base_urls`, network reachability, TLS trust, and the requested canonical path. Do not add a one-off cache copy.
+
+### Only a warm cache works
+
+Treat the attachment as incomplete. Rename the cache file and verify recovery. If recovery fails, inspect storage and routing before changing page Markdown.
+
+### The hosting service loops or times out on a file request
+
+Check for a self-referential upstream URL. The host that reads the durable root must not call itself as a remote media source.
+
+### The filename differs between Markdown and the ledger
+
+Reattach the exact source through Memory Stargraph so the one canonical filename is used for staging, bridge transfer, storage, ledger, and Markdown. Do not patch each layer by hand.
+
+### A remote upload reports success but no durable evidence
+
+The caller must reject it. Verify that the deployed GBrain build emits structured durable evidence and that Memory Stargraph requires exact path, size, and SHA-256 before updating Markdown.
+
+## Release gate
+
+Any change to remote media routing or caching must still pass the full [attachment regression firewall](gbrain-attachment-runbook.md#regression-firewall). In addition:
+
+- test at least one hosting Stargraph with a local durable root;
+- test at least one non-host Stargraph with an empty cache;
+- compare exact bytes from both `/media/` and `/gbrain-files/`;
+- verify the expected UI version and service process directory on each target;
+- preserve unrelated remote files and private configuration.
+
+## Related documentation
+
+- [GBrain Attachment Safety and Verification Runbook](gbrain-attachment-runbook.md)
+- [Memory Stargraph Automation Runbook](automation-runbook.md)
+- [Add SG TODO Attachment Capture Design](superpowers/specs/2026-07-15-add-sg-todo-attachment-capture-design.md)

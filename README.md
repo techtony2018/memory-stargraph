@@ -95,8 +95,8 @@ Memory Stargraph works best when `gbrain` is already initialized and healthy on 
 - `gbrain` is installed and runnable from the service process. If it is installed through a user-local runtime, add that runtime's `bin` directory to `PATH` or set `"gbrain_path"` in `config/local.json`.
 - The host has a valid gbrain configuration. A storage host should have a normal local database configuration; a client-only machine should have a working `remote_mcp` configuration and pass `gbrain remote doctor`.
 - Basic read commands work: `gbrain list`, `gbrain get <slug>`, `gbrain graph <slug> --depth 1`, `gbrain backlinks <slug>`, and `gbrain search <query>`.
-- Mutation commands you plan to expose from the UI work in your topology: `put`, `link`, `unlink`, `tag`, `untag`, `timeline-add`, `files upload`, and `delete`.
-- Media files referenced by gbrain pages are reachable from the web service. Use local `media_roots` when the files are on the same host, or configure `remote_media_base_urls` when the web service is on a different host.
+- Mutation commands you plan to expose from the UI work in your topology: `put`, `link`, `unlink`, `tag`, `untag`, `timeline-add`, and `delete`. Attachment writes must use Memory Stargraph's attachment endpoint so storage-byte, ledger, Markdown, and served-byte verification remain one transaction; do not call host-local file commands directly from a thin client or capture agent.
+- Media files referenced by gbrain pages are reachable from the web service. Use `gbrain_file_store_roots` only for the hosting service's durable backing root, `gbrain_file_base_urls` for trusted non-host recovery, and `media_roots` only as disposable caches. See the [GBrain Attachment Safety and Verification Runbook](docs/gbrain-attachment-runbook.md).
 - The root `index` page exists and is useful, because Memory Stargraph expands it eagerly to give the graph a meaningful starting structure.
 
 For multi-machine setups, run the service on each web host with its own `config/local.json`. Keep runtime state local, keep secrets out of the repo, and verify `/api/health` plus one known entity search after every deployment.
@@ -251,9 +251,12 @@ Safety:
 - `public/styles.css` - visual system and responsive layout
 - `public/app.js` - graph rendering, interactions, and node operations
 - `tests/test_graph_parsing.py` - backend parser and command-construction tests
+- `tests/test_documentation_contracts.py` - attachment runbook discoverability and no-shortcut regression contract
 - `tests/browser_smoke.mjs` - Playwright end-to-end smoke test
 - `scripts/automation/` - preflight, deployment, Chrome CDP, and retrospective helpers for daily automation runs
 - `automations/` - Git-tracked prompts and portable definitions for the Memory Stargraph/GBrain learning pipeline
+- `docs/gbrain-attachment-runbook.md` - canonical attachment write, replacement, repair, evidence, cold-cache, backup/restore, and regression-prevention contract
+- `docs/memory-stargraph-remote-gbrain-media-import-runbook.md` - remote-host topology and cache-recovery extension to the canonical attachment contract
 - `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
 - `docs/resolver-feedback-loop-runbook.md` - Codex/OpenClaw resolver telemetry, human approval, release distribution, nightly learning, backup, and rollback
 - `dashboard-integration.json` - All Things Codex Dashboard launcher metadata
