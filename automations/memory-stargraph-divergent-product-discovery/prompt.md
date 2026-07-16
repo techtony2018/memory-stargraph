@@ -21,3 +21,5 @@ This automation runs even when there are no explicit TODO items. Its purpose is 
 8. Create a dated GBrain discovery report linked to the persistent Goal and `products/memory-stargraph`. Record this execution as a Run, with evidence inspected, ideas considered, scoring, proposals, promoted TODOs, rejected ideas and reasons, and durable Learnings.
 9. Explicitly identify one "make it easier for a new customer" opportunity and one "maximize recurring user value" opportunity in every non-no-op report.
 10. Final report: top opportunities and scores, experiments proposed, TODOs created or updated, duplicates suppressed, productization insight, missing evidence, and the Run/Learning records.
+
+Pacific-time reporting contract: worker-generated logs, Run records, batch reports, status-transition evidence, timestamped filenames, and final reports must use timezone-aware ISO 8601 values in `America/Los_Angeles`. This means PDT in summer (`-07:00`) and PST in winter (`-08:00`). Do not use a fixed UTC-8 offset or label UTC values as Pacific time. Preserve source-native timestamps as provenance when needed, but add a Pacific-normalized value for worker evidence.

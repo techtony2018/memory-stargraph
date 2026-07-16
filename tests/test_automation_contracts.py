@@ -7,6 +7,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AutomationContractTests(unittest.TestCase):
+    def test_every_worker_uses_dst_aware_pacific_reporting(self):
+        workers = (
+            "gbrain-x-intelligence-capture",
+            "memory-stargraph-daily-learning-intake",
+            "memory-stargraph-wish-to-reallity",
+            "memory-stargraph-divergent-product-discovery",
+            "memory-stargraph-goal-steward-daily-review",
+            "memory-stargraph-capture-link-drain",
+        )
+        required = (
+            "America/Los_Angeles",
+            "timezone-aware ISO 8601",
+            "PDT in summer",
+            "PST in winter",
+            "Do not use a fixed UTC-8 offset",
+        )
+        for worker in workers:
+            prompt = (ROOT / "automations" / worker / "prompt.md").read_text()
+            for phrase in required:
+                self.assertIn(phrase, prompt, f"{worker} missing {phrase}")
+
     def test_capture_worker_is_persistent_midnight_and_manually_triggerable(self):
         definition = tomllib.loads(
             (
