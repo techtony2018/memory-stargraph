@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import mimetypes
@@ -12,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -264,6 +267,7 @@ def durable_reference_candidates(payload: dict, child_slug: str, filename: str) 
     if (
         not isinstance(media, dict)
         or media.get("durable_storage_verified") is not True
+        or media.get("served_available") is not True
         or not isinstance(media.get("size_bytes"), int)
         or int(media.get("size_bytes")) < 0
         or not re.fullmatch(r"[0-9a-f]{64}", str(media.get("sha256") or ""))
@@ -272,16 +276,16 @@ def durable_reference_candidates(payload: dict, child_slug: str, filename: str) 
     relative = str(media.get("canonical_relative_path") or f"{child_slug}/{filename}").strip("/")
     if not relative.startswith(f"{child_slug.strip('/')}/"):
         return []
-    forms = (relative, f"/media/{relative}", f"gbrain:files/{relative}")
     reported = str(media.get("served_url") or "").strip()
-    if reported not in forms:
+    served_path = parse.unquote(parse.urlsplit(reported).path).rstrip("/")
+    if not reported or served_path != f"/media/{relative}".rstrip("/"):
         return []
-    return [reported, *[value for value in forms if value != reported]]
+    return [reported]
 
 
 def _spool(paths: list[Path], slug_part: str, now: dt.datetime) -> tuple[Path, list[Path]]:
     stamp = now.astimezone(PACIFIC).strftime("%Y%m%dT%H%M%S%z")
-    bundle = _recovery_root() / f"{stamp}-{slug_part}"
+    bundle = _ensure_recovery_root() / f"{stamp}-{slug_part}"
     suffix = 1
     while bundle.exists():
         bundle = bundle.with_name(f"{stamp}-{slug_part}-{suffix}")
@@ -307,6 +311,45 @@ def _spool(paths: list[Path], slug_part: str, now: dt.datetime) -> tuple[Path, l
 def _recovery_root() -> Path:
     codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     return codex_home / "recovery" / "add-capture-link"
+
+
+def _ensure_recovery_root() -> Path:
+    root = _recovery_root().expanduser()
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(root, 0o700)
+    return root.resolve()
+
+
+@contextmanager
+def _queue_lock():
+    root = _ensure_recovery_root()
+    lock_path = root / ".queue.lock"
+    with lock_path.open("a+b") as lock_file:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _validated_recovery_manifest(raw_path: str | Path) -> Path:
+    supplied = Path(raw_path).expanduser()
+    if supplied.name != "recovery.json":
+        raise QueueFailure("Recovery manifest must be named recovery.json.")
+    try:
+        root = _ensure_recovery_root()
+        resolved = supplied.resolve(strict=True)
+    except OSError as exc:
+        raise QueueFailure(f"Could not resolve recovery manifest: {exc}") from exc
+    if resolved.name != "recovery.json" or resolved.parent.parent != root or not resolved.is_file():
+        raise QueueFailure("Recovery manifest must be recovery.json in a direct recovery-root child.")
+    return resolved
+
+
+def _remove_recovery_bundle(manifest_path: str | Path) -> None:
+    validated = _validated_recovery_manifest(manifest_path)
+    shutil.rmtree(validated.parent)
 
 
 def _write_manifest(bundle: Path, data: dict) -> Path:
@@ -386,15 +429,85 @@ def _unlink_best_effort(source: str, target: str, relation: str) -> None:
         pass
 
 
-def _receipt(payload: dict, child_slug: str, path: Path) -> dict:
+def _trusted_served_url(base_url: str, served_url: str) -> str:
+    trusted = parse.urlsplit(validate_stargraph_url(base_url))
+    absolute = parse.urlsplit(parse.urljoin(f"{base_url.rstrip('/')}/", served_url))
+    if (absolute.scheme, absolute.netloc) != (trusted.scheme, trusted.netloc):
+        raise AttachmentRequestError(
+            "Attachment served URL did not use the trusted Stargraph origin.",
+            {"error": "served_url_cross_origin"},
+            may_have_persisted=True,
+        )
+    return parse.urlunsplit(absolute)
+
+
+def fetch_served_attachment(base_url: str, served_url: str) -> bytes:
+    trusted_url = _trusted_served_url(base_url, served_url)
+    try:
+        with request.urlopen(trusted_url, timeout=120) as response:
+            return response.read()
+    except (error.URLError, TimeoutError) as exc:
+        raise AttachmentRequestError(
+            f"Could not fetch the served attachment: {exc}",
+            {"error": "served_reference_unavailable"},
+            may_have_persisted=True,
+        ) from exc
+
+
+def _verify_saved_receipt(receipt: dict, path: Path, base_url: str) -> dict:
+    required = {"filename", "reference", "served_url", "size_bytes", "sha256"}
+    if not isinstance(receipt, dict) or not required.issubset(receipt):
+        raise AttachmentRequestError(
+            "Saved attachment receipt is incomplete.", {"error": "saved_receipt_invalid"},
+            may_have_persisted=True,
+        )
+    local_bytes = path.read_bytes()
+    digest = hashlib.sha256(local_bytes).hexdigest()
+    if (
+        receipt["filename"] != path.name
+        or receipt["reference"] != receipt["served_url"]
+        or receipt["size_bytes"] != len(local_bytes)
+        or receipt["sha256"] != digest
+    ):
+        raise AttachmentRequestError(
+            "Saved attachment receipt does not match the recovery bytes.",
+            {"error": "saved_receipt_integrity_mismatch", "filenames": [path.name]},
+            may_have_persisted=True,
+        )
+    served_bytes = fetch_served_attachment(base_url, str(receipt["served_url"]))
+    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
+        raise AttachmentRequestError(
+            "Served attachment does not match the recovery bytes.",
+            {"error": "served_integrity_mismatch", "filenames": [path.name]},
+            may_have_persisted=True,
+        )
+    return dict(receipt)
+
+
+def _receipt(payload: dict, child_slug: str, path: Path, base_url: str) -> dict:
     candidates = durable_reference_candidates(payload, child_slug, path.name)
     media = payload.get("local_media") if isinstance(payload, dict) else None
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    local_bytes = path.read_bytes()
+    digest = hashlib.sha256(local_bytes).hexdigest()
     if not candidates or not isinstance(media, dict):
         raise AttachmentRequestError("Attachment response did not report supported durable storage.", {"error": "durable_storage_missing", "filenames": [path.name]}, may_have_persisted=True)
     if media.get("size_bytes") != path.stat().st_size or media.get("sha256") != digest:
         raise AttachmentRequestError("Durable attachment byte or SHA-256 verification failed.", {"error": "durable_integrity_mismatch", "filenames": [path.name]}, may_have_persisted=True)
-    return {"filename": path.name, "reference": candidates[0], "size_bytes": path.stat().st_size, "sha256": digest}
+    served_url = candidates[0]
+    served_bytes = fetch_served_attachment(base_url, served_url)
+    if len(served_bytes) != len(local_bytes) or hashlib.sha256(served_bytes).hexdigest() != digest:
+        raise AttachmentRequestError(
+            "Served attachment byte or SHA-256 verification failed.",
+            {"error": "served_integrity_mismatch", "filenames": [path.name]},
+            may_have_persisted=True,
+        )
+    return {
+        "filename": path.name,
+        "reference": served_url,
+        "served_url": served_url,
+        "size_bytes": len(local_bytes),
+        "sha256": digest,
+    }
 
 
 def _blocker(owner: str, evidence: dict, manifest: Path) -> dict:
@@ -414,6 +527,61 @@ def _failure_owner(evidence: dict) -> str:
     return "GBrain" if owner == "gbrain" or code.startswith("gbrain_") else "Stargraph"
 
 
+def _preserve_input_failure(
+    *, exc: QueueFailure, source: str, source_kind: str, instructions: str,
+    attachments: list[str], target: str, collection: str, relationships: list[str],
+    stargraph_url: str | None, now: dt.datetime,
+) -> QueueFailure:
+    readable = []
+    for raw in attachments:
+        path = Path(raw).expanduser()
+        if path.is_file() and os.access(path, os.R_OK):
+            readable.append(path)
+    bundle, spooled = _spool(readable, slugify(source), now)
+    manifest_path = bundle / "recovery.json"
+    evidence = sanitize_evidence({"owner": "Stargraph", "error": str(exc)})
+    remind_after = pacific_iso(now + dt.timedelta(days=1))
+    blocker = _blocker(_failure_owner(evidence), evidence, manifest_path)
+    retry_command = " ".join(
+        shlex.quote(value)
+        for value in (
+            "python3", str(Path(__file__).resolve()), "--recovery-manifest",
+            str(manifest_path), "--json",
+        )
+    )
+    manifest_data = {
+        "version": 2,
+        "source": source,
+        "source_kind": source_kind,
+        "instructions": instructions,
+        "target": target,
+        "collection": collection,
+        "relationships": relationships,
+        "attachment_inputs": attachments,
+        "attachments": [str(path) for path in spooled],
+        "stargraph_url": stargraph_url or "",
+        "receipts": [],
+        "failure_evidence": evidence,
+        "remind_after": remind_after,
+        "proposed_blocker": blocker,
+        "retry_command": retry_command,
+    }
+    _write_manifest(bundle, manifest_data)
+    return QueueFailure(
+        str(exc),
+        {
+            "ok": False,
+            "error": str(exc),
+            "parent_unchanged": True,
+            "recovery_manifest": str(manifest_path),
+            "proposed_blocker": blocker,
+            "retry_command": retry_command,
+            "reminder_required": True,
+            "remind_after": remind_after,
+        },
+    )
+
+
 def queue_capture(
     *, source: str = "", source_kind: str = "", instructions: str = "",
     attachments: list[str] | None = None, target: str = "", collection: str = "",
@@ -421,74 +589,141 @@ def queue_capture(
     recovery_manifest: str | None = None, now: dt.datetime | None = None,
 ) -> dict:
     now = now or dt.datetime.now(dt.timezone.utc)
-    retry_bundle = None
-    prior = None
+    attachment_values = list(attachments or [])
+    relationship_values = list(relationships or [])
+    with _queue_lock():
+        try:
+            return _queue_capture_locked(
+                source=source, source_kind=source_kind, instructions=instructions,
+                attachments=attachment_values, target=target, collection=collection,
+                relationships=relationship_values, stargraph_url=stargraph_url,
+                recovery_manifest=recovery_manifest, now=now,
+            )
+        except QueueFailure as exc:
+            if recovery_manifest or exc.result.get("recovery_manifest"):
+                raise
+            raise _preserve_input_failure(
+                exc=exc, source=source, source_kind=source_kind, instructions=instructions,
+                attachments=attachment_values, target=target, collection=collection,
+                relationships=relationship_values, stargraph_url=stargraph_url, now=now,
+            ) from exc
+
+
+def _queue_capture_locked(
+    *, source: str, source_kind: str, instructions: str, attachments: list[str],
+    target: str, collection: str, relationships: list[str], stargraph_url: str | None,
+    recovery_manifest: str | None, now: dt.datetime,
+) -> dict:
+    prior: dict = {}
+    manifest_path: Path | None = None
     if recovery_manifest:
-        manifest_path = Path(recovery_manifest).expanduser()
+        manifest_path = _validated_recovery_manifest(recovery_manifest)
         try:
             prior = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            if not isinstance(prior, dict):
+                raise TypeError("manifest is not an object")
+            source = prior["source"]
+            source_kind = prior["source_kind"]
+            instructions = prior["instructions"]
+            target = prior.get("target", "")
+            collection = prior.get("collection", "")
+            relationships = list(prior.get("relationships", []))
+            attachments = list(prior.get("attachments", []))
+            stargraph_url = prior.get("stargraph_url") or stargraph_url
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
             raise QueueFailure(f"Could not read recovery manifest: {exc}") from exc
-        source = prior["source"]
-        source_kind = prior["source_kind"]
-        instructions = prior["instructions"]
-        target = prior.get("target", "")
-        collection = prior.get("collection", "")
-        relationships = prior.get("relationships", [])
-        attachments = prior.get("attachments", [])
-        retry_bundle = manifest_path.parent
-    relationships = list(relationships or [])
-    paths = validate_inputs(source, source_kind, instructions, target, collection, relationships, list(attachments or []))
-    stamp = pacific_iso(now)
-    if retry_bundle:
-        bundle, spooled = retry_bundle, paths
-    elif paths:
-        bundle, spooled = _spool(paths, slugify(source), now)
-    else:
-        bundle, spooled = None, []
 
-    parent = run_gbrain("get", PARENT_SLUG)
-    rows = parse_capture_rows(parent)
-    capture_id = prior.get("capture_id") if prior else next_capture_id(rows)
-    child_slug = prior.get("child_slug") if prior else unique_child_slug(PARENT_SLUG, capture_id, source, parent)
-    if any(row["id"] == capture_id or row["node"] == f"[[{child_slug}]]" for row in rows):
-        raise QueueFailure(f"Capture ID or child is already planned: {capture_id}")
-
-    provisional = build_child(
-        capture_id=capture_id, child_slug=child_slug, source=source, source_kind=source_kind,
-        instructions=instructions, target=target, collection=collection, relationships=relationships,
-        created_at=stamp, status="capture-recovery", attachments=[],
+    paths = validate_inputs(
+        source, source_kind, instructions, target, collection, relationships, attachments
     )
+    stamp = pacific_iso(now)
+    if manifest_path:
+        bundle, spooled = manifest_path.parent, paths
+    else:
+        bundle, spooled = _spool(paths, slugify(source), now)
+        manifest_path = bundle / "recovery.json"
+
+    effective_base = stargraph_url or os.environ.get("MEMORY_STARGRAPH_UPLOAD_URL") or os.environ.get("MEMORY_STARGRAPH_URL") or DEFAULT_STARGRAPH_URL
+    manifest_data = {
+        "version": 2,
+        "source": source,
+        "source_kind": source_kind,
+        "instructions": instructions,
+        "target": target,
+        "collection": collection,
+        "relationships": relationships,
+        "attachments": [str(path) for path in spooled],
+        "stargraph_url": effective_base,
+        "receipts": list(prior.get("receipts", [])),
+    }
+    for key in ("capture_id", "child_slug", "remind_after"):
+        if prior.get(key):
+            manifest_data[key] = prior[key]
+    _write_manifest(bundle, manifest_data)
+
+    parent: str | None = None
+    capture_id = str(prior.get("capture_id") or "")
+    child_slug = str(prior.get("child_slug") or "")
+    provisional = ""
     receipts: list[dict] = []
     parent_written = False
+    child_finalized = False
     evidence: dict = {}
     try:
+        parent = run_gbrain("get", PARENT_SLUG)
+        rows = parse_capture_rows(parent)
+        capture_id = capture_id or next_capture_id(rows)
+        child_slug = child_slug or unique_child_slug(PARENT_SLUG, capture_id, source, parent)
+        manifest_data.update(capture_id=capture_id, child_slug=child_slug)
+        _write_manifest(bundle, manifest_data)
+        if any(row["id"] == capture_id or row["node"] == f"[[{child_slug}]]" for row in rows):
+            raise QueueFailure(f"Capture ID or child is already planned: {capture_id}")
+
+        provisional = build_child(
+            capture_id=capture_id, child_slug=child_slug, source=source, source_kind=source_kind,
+            instructions=instructions, target=target, collection=collection,
+            relationships=relationships, created_at=stamp, status="capture-recovery",
+            attachments=[],
+        )
         existing = _get_optional(child_slug)
         if existing is not None and not (prior and "status: capture-recovery" in existing):
             raise QueueFailure(f"Capture child slug is occupied: {child_slug}")
         if existing is None:
             _put_verified(child_slug, provisional, "status: capture-recovery")
+
         if spooled:
-            base_url = validate_stargraph_url(stargraph_url or os.environ.get("MEMORY_STARGRAPH_UPLOAD_URL") or os.environ.get("MEMORY_STARGRAPH_URL") or DEFAULT_STARGRAPH_URL)
+            base_url = validate_stargraph_url(effective_base)
             check_stargraph_health(base_url)
+            saved_by_name = {
+                item.get("filename"): item
+                for item in manifest_data.get("receipts", [])
+                if isinstance(item, dict) and item.get("filename")
+            }
             for path in spooled:
-                try:
-                    payload = upload_attachment(base_url, child_slug, path, f"Attachment for {capture_id}")
-                except AttachmentRequestError as exc:
-                    evidence = exc.evidence
-                    raise
-                receipts.append(_receipt(payload, child_slug, path))
-            attached = run_gbrain("get", child_slug)
-            missing = [receipt["filename"] for receipt in receipts if receipt["reference"] not in attached]
-            if missing:
-                raise AttachmentRequestError("Durable references were not found in the child readback.", {"error": "durable_reference_missing", "filenames": missing}, may_have_persisted=True)
+                saved = saved_by_name.get(path.name)
+                if saved is not None:
+                    receipt = _verify_saved_receipt(saved, path, base_url)
+                else:
+                    try:
+                        payload = upload_attachment(
+                            base_url, child_slug, path, f"Attachment for {capture_id}"
+                        )
+                    except AttachmentRequestError as exc:
+                        evidence = exc.evidence
+                        raise
+                    receipt = _receipt(payload, child_slug, path, base_url)
+                receipts.append(receipt)
+                manifest_data["receipts"] = list(receipts)
+                _write_manifest(bundle, manifest_data)
 
         final_child = build_child(
             capture_id=capture_id, child_slug=child_slug, source=source, source_kind=source_kind,
-            instructions=instructions, target=target, collection=collection, relationships=relationships,
-            created_at=stamp, status="planned", attachments=receipts,
+            instructions=instructions, target=target, collection=collection,
+            relationships=relationships, created_at=stamp, status="planned",
+            attachments=receipts,
         )
         _put_verified(child_slug, final_child, "status: planned")
+        child_finalized = True
         note = f"{len(receipts)} durable attachment(s)" if receipts else "queued; capture not started"
         row = (
             f"| {capture_id} | planned | {escape_cell(source_kind)} | {escape_cell(source)} | "
@@ -502,12 +737,14 @@ def queue_capture(
         verified_child = run_gbrain("get", child_slug)
         if any(receipt["reference"] not in verified_child for receipt in receipts):
             raise RuntimeError("Final child receipt readback failed")
-        if bundle:
-            shutil.rmtree(bundle)
+        _remove_recovery_bundle(manifest_path)
         return {
-            "ok": True, "capture_id": capture_id, "child_slug": child_slug,
-            "status": "planned", "attachments": receipts,
-            "durable_storage_verified": all(receipts) if receipts else True,
+            "ok": True,
+            "capture_id": capture_id,
+            "child_slug": child_slug,
+            "status": "planned",
+            "attachments": receipts,
+            "durable_storage_verified": True,
             "graph_verified": True,
         }
     except (AttachmentRequestError, RuntimeError, QueueFailure) as exc:
@@ -515,35 +752,55 @@ def queue_capture(
             evidence = evidence or exc.evidence
         else:
             evidence = {"owner": "gbrain", "error": str(exc)}
-        if parent_written:
+        if parent is not None and (parent_written or child_finalized):
             try:
                 _unlink_best_effort(PARENT_SLUG, child_slug, "has_capture_request")
                 _unlink_best_effort(child_slug, PARENT_SLUG, "capture_request_for")
-                run_gbrain("put", PARENT_SLUG, input_text=parent)
-                run_gbrain("put", child_slug, input_text=provisional)
+                if parent_written:
+                    run_gbrain("put", PARENT_SLUG, input_text=parent)
+                if provisional:
+                    run_gbrain("put", child_slug, input_text=provisional)
             except RuntimeError:
                 evidence["cleanup_error"] = "Could not restore the provisional transaction state."
-        if bundle is None:
-            raise QueueFailure(str(exc)) from exc
         evidence = sanitize_evidence(evidence)
         remind_after = pacific_iso(now + dt.timedelta(days=1))
-        manifest_data = {
-            "version": 1, "source": source, "source_kind": source_kind,
-            "instructions": instructions, "target": target, "collection": collection,
-            "relationships": relationships, "capture_id": capture_id, "child_slug": child_slug,
-            "attachments": [str(path) for path in spooled], "failure_evidence": evidence,
-            "remind_after": remind_after,
-        }
-        manifest_path = bundle / "recovery.json"
         blocker = _blocker(_failure_owner(evidence), evidence, manifest_path)
-        retry_command = f"python3 {Path(__file__).resolve()} --recovery-manifest {manifest_path} --json"
-        manifest_data.update(proposed_blocker=blocker, retry_command=retry_command)
+        retry_command = " ".join(
+            shlex.quote(value)
+            for value in (
+                "python3", str(Path(__file__).resolve()), "--recovery-manifest",
+                str(manifest_path), "--json",
+            )
+        )
+        manifest_data.update(
+            failure_evidence=evidence,
+            remind_after=remind_after,
+            proposed_blocker=blocker,
+            retry_command=retry_command,
+            receipts=list(receipts or manifest_data.get("receipts", [])),
+        )
+        if capture_id:
+            manifest_data["capture_id"] = capture_id
+        if child_slug:
+            manifest_data["child_slug"] = child_slug
         _write_manifest(bundle, manifest_data)
+        parent_unchanged = False
+        if parent is not None:
+            try:
+                parent_unchanged = run_gbrain("get", PARENT_SLUG) == parent
+            except RuntimeError:
+                parent_unchanged = False
         result = {
-            "ok": False, "error": str(exc), "capture_id": capture_id,
-            "child_slug": child_slug, "parent_unchanged": run_gbrain("get", PARENT_SLUG) == parent,
-            "recovery_manifest": str(manifest_path), "proposed_blocker": blocker,
-            "retry_command": retry_command, "reminder_required": True, "remind_after": remind_after,
+            "ok": False,
+            "error": str(exc),
+            "capture_id": capture_id or None,
+            "child_slug": child_slug or None,
+            "parent_unchanged": parent_unchanged,
+            "recovery_manifest": str(manifest_path),
+            "proposed_blocker": blocker,
+            "retry_command": retry_command,
+            "reminder_required": True,
+            "remind_after": remind_after,
         }
         raise QueueFailure(str(exc), result) from exc
 

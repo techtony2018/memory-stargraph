@@ -9,6 +9,8 @@ from pathlib import Path
 import stat
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -116,10 +118,11 @@ class AddCaptureLinkTests(unittest.TestCase):
                 "slug": slug,
                 "local_media": {
                     "durable_storage_verified": True,
+                    "served_available": True,
                     "size_bytes": len(data),
                     "sha256": digest,
                     "canonical_relative_path": f"{slug}/{path.name}",
-                    "served_url": reference,
+                    "served_url": f"/media/{slug}/{path.name}",
                 },
             }
 
@@ -127,6 +130,13 @@ class AddCaptureLinkTests(unittest.TestCase):
 
     def invoke(self, backend=None, *, attachments=None, fail_upload_number=None, **kwargs):
         backend = backend or self.backend
+
+        def fetch_spooled(_base_url, served_url):
+            filename = served_url.rsplit("/", 1)[-1]
+            return next(
+                path for path in (self.root / "codex" / "recovery" / "add-capture-link").glob(f"*/{filename}")
+            ).read_bytes()
+
         with (
             mock.patch.object(module, "run_gbrain", side_effect=backend),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
@@ -135,6 +145,7 @@ class AddCaptureLinkTests(unittest.TestCase):
                 "upload_attachment",
                 side_effect=self.upload_side_effect(backend, fail_upload_number),
             ),
+            mock.patch.object(module, "fetch_served_attachment", side_effect=fetch_spooled),
             mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
         ):
             return module.queue_capture(
@@ -199,6 +210,7 @@ class AddCaptureLinkTests(unittest.TestCase):
             mock.patch.object(module, "_spool", side_effect=tracked_spool),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
             mock.patch.object(module, "upload_attachment", side_effect=self.upload_side_effect(backend)),
+            mock.patch.object(module, "fetch_served_attachment", return_value=b"bytes"),
             mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
         ):
             module.queue_capture(
@@ -242,6 +254,7 @@ class AddCaptureLinkTests(unittest.TestCase):
             mock.patch.object(module, "run_gbrain", side_effect=flaky_backend),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
             mock.patch.object(module, "upload_attachment", side_effect=self.upload_side_effect(backend)),
+            mock.patch.object(module, "fetch_served_attachment", return_value=b"one"),
             mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
             self.assertRaises(module.QueueFailure) as caught,
         ):
@@ -374,13 +387,16 @@ class AddCaptureLinkTests(unittest.TestCase):
 
     def test_invalid_input_fails_before_gbrain_or_upload(self):
         with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
             mock.patch.object(module, "run_gbrain") as gbrain,
             mock.patch.object(module, "upload_attachment") as upload,
-            self.assertRaises(module.QueueFailure),
+            self.assertRaises(module.QueueFailure) as caught,
         ):
             module.queue_capture(source="x", source_kind="unsupported", instructions="", now=NOW)
         gbrain.assert_not_called()
         upload.assert_not_called()
+        self.assertTrue(Path(caught.exception.result["recovery_manifest"]).is_file())
+        self.assertTrue(caught.exception.result["reminder_required"])
 
     def test_recovery_manifest_retry_reuses_exact_spooled_bytes_and_original_fields(self):
         attachment = self.file("source.bin", b"\x00exact\xff")
@@ -393,11 +409,168 @@ class AddCaptureLinkTests(unittest.TestCase):
             mock.patch.object(module, "run_gbrain", side_effect=backend),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
             mock.patch.object(module, "upload_attachment", side_effect=self.upload_side_effect(backend)),
+            mock.patch.object(module, "fetch_served_attachment", return_value=b"\x00exact\xff"),
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
         ):
             result = module.queue_capture(recovery_manifest=manifest, now=NOW)
         self.assertEqual(result["attachments"][0]["sha256"], hashlib.sha256(b"\x00exact\xff").hexdigest())
         self.assertIn("Target: target/a", backend.nodes[result["child_slug"]])
         self.assertFalse(Path(manifest).parent.exists())
+
+    def test_recovery_manifest_must_be_canonical_direct_child_recovery_json(self):
+        recovery_root = self.root / "codex" / "recovery" / "add-capture-link"
+        outside = self.root / "outside"
+        outside.mkdir()
+        outside_manifest = outside / "recovery.json"
+        outside_manifest.write_text("{}")
+        bundle = recovery_root / "bundle"
+        bundle.mkdir(parents=True)
+        escaped = bundle / "recovery.json"
+        escaped.symlink_to(outside_manifest)
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            mock.patch.object(module, "run_gbrain") as gbrain,
+            self.assertRaises(module.QueueFailure),
+        ):
+            module.queue_capture(recovery_manifest=str(escaped), now=NOW)
+        gbrain.assert_not_called()
+        self.assertTrue(outside_manifest.is_file())
+
+    def test_text_only_parent_read_failure_preserves_exact_inputs_and_retry(self):
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex with spaces")}),
+            mock.patch.object(module, "run_gbrain", side_effect=RuntimeError("parent unavailable")),
+            self.assertRaises(module.QueueFailure) as caught,
+        ):
+            module.queue_capture(
+                source="literal source text",
+                source_kind="text",
+                instructions="Keep every word exactly",
+                target="target/a",
+                collection="collections/a",
+                relationships=["target/a|member_of|collections/a"],
+                now=NOW,
+            )
+        result = caught.exception.result
+        payload = json.loads(Path(result["recovery_manifest"]).read_text())
+        self.assertEqual(payload["source"], "literal source text")
+        self.assertEqual(payload["instructions"], "Keep every word exactly")
+        self.assertEqual(payload["target"], "target/a")
+        self.assertTrue(result["reminder_required"])
+        self.assertIn("'", result["retry_command"])
+        self.assertIn("--recovery-manifest", result["retry_command"])
+
+    def test_concurrent_enqueues_are_serialized_and_allocate_distinct_ids(self):
+        backend = FakeGBrain.empty_capture_root()
+        first_provisional = threading.Event()
+        release_first = threading.Event()
+        parent_reads = 0
+        guard = threading.Lock()
+
+        def blocking_backend(*args, input_text=None):
+            nonlocal parent_reads
+            if args[:2] == ("get", module.PARENT_SLUG):
+                with guard:
+                    parent_reads += 1
+            result = backend(*args, input_text=input_text)
+            if args[:2] == ("put", f"{module.PARENT_SLUG}/cap-0001-one"):
+                first_provisional.set()
+                release_first.wait(5)
+            return result
+
+        results, errors = [], []
+
+        def enqueue(source):
+            try:
+                results.append(module.queue_capture(
+                    source=source, source_kind="text", instructions="Capture", now=NOW,
+                ))
+            except Exception as exc:  # noqa: BLE001 - surfaced in the assertion
+                errors.append(exc)
+
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            mock.patch.object(module, "run_gbrain", side_effect=blocking_backend),
+        ):
+            first = threading.Thread(target=enqueue, args=("one",))
+            second = threading.Thread(target=enqueue, args=("two",))
+            first.start()
+            self.assertTrue(first_provisional.wait(2))
+            second.start()
+            time.sleep(0.15)
+            self.assertEqual(parent_reads, 1)
+            release_first.set()
+            first.join(5)
+            second.join(5)
+        self.assertFalse(errors)
+        self.assertEqual(sorted(item["capture_id"] for item in results), ["CAP-0001", "CAP-0002"])
+
+    def test_served_reference_must_be_available_same_origin_and_match_bytes(self):
+        attachment = self.file("served.bin", b"trusted bytes")
+        digest = hashlib.sha256(attachment.read_bytes()).hexdigest()
+        payload = {
+            "local_media": {
+                "durable_storage_verified": True,
+                "served_available": True,
+                "size_bytes": attachment.stat().st_size,
+                "sha256": digest,
+                "canonical_relative_path": "child/served.bin",
+                "served_url": "https://evil.example/media/child/served.bin",
+            }
+        }
+        with self.assertRaises(module.AttachmentRequestError):
+            module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
+        payload["local_media"]["served_url"] = "/media/child/served.bin"
+        payload["local_media"]["served_available"] = False
+        with self.assertRaises(module.AttachmentRequestError):
+            module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
+        payload["local_media"]["served_available"] = True
+        with mock.patch.object(module, "fetch_served_attachment", return_value=b"wrong"):
+            with self.assertRaises(module.AttachmentRequestError):
+                module._receipt(payload, "child", attachment, "http://127.0.0.1:8788")
+
+    def test_partial_multi_attachment_retry_uploads_each_attachment_once(self):
+        paths = [self.file("first.bin", b"first"), self.file("second.bin", b"second")]
+        backend = FakeGBrain.empty_capture_root()
+        upload_counts = {path.name: 0 for path in paths}
+        fail_second_once = True
+
+        def upload(base_url, slug, path, description):
+            nonlocal fail_second_once
+            upload_counts[path.name] += 1
+            if path.name == "second.bin" and fail_second_once:
+                fail_second_once = False
+                raise module.AttachmentRequestError("second failed", {"error": "second failed"})
+            return self.upload_side_effect(backend)(base_url, slug, path, description)
+
+        def fetch(_base_url, served_url):
+            return (b"first" if served_url.endswith("first.bin") else b"second")
+
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
+            mock.patch.object(module, "upload_attachment", side_effect=upload),
+            mock.patch.object(module, "fetch_served_attachment", side_effect=fetch),
+            self.assertRaises(module.QueueFailure) as caught,
+        ):
+            module.queue_capture(
+                source="files", source_kind="mixed", instructions="Capture",
+                attachments=[str(path) for path in paths], now=NOW,
+            )
+        manifest = caught.exception.result["recovery_manifest"]
+        progress = json.loads(Path(manifest).read_text())
+        self.assertEqual([item["filename"] for item in progress["receipts"]], ["first.bin"])
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
+            mock.patch.object(module, "upload_attachment", side_effect=upload),
+            mock.patch.object(module, "fetch_served_attachment", side_effect=fetch),
+        ):
+            result = module.queue_capture(recovery_manifest=manifest, now=NOW)
+        self.assertTrue(result["ok"])
+        self.assertEqual(upload_counts, {"first.bin": 1, "second.bin": 2})
 
     def test_cli_json_is_queue_only(self):
         completed = subprocess.run(
