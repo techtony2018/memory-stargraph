@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import threading
 from unittest import mock
 
 from server import (
@@ -983,7 +984,8 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("put", "people/tony-guan", input_text=mock.ANY),
                 mock.call("history", "people/tony-guan"),
                 mock.call("embed", "people/tony-guan"),
-            ]
+            ],
+            any_order=True,
         )
         self.assertEqual(invalidate.call_count, 6)
 
@@ -1040,27 +1042,81 @@ cover_image: companies/example-inc/logo.jpg
             ]
         )
 
-    def test_ask_yoda_reuses_bounded_context_and_reports_privacy_safe_subphases(self):
+    def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
+
+        def gbrain_result(*args, **kwargs):
+            del kwargs
+            if args[0] == "get":
+                return "# Tony\n\nEngineer"
+            if args[0] == "graph-query":
+                return "graph"
+            if args[0] == "backlinks":
+                return "backlinks"
+            if args[0] == "query":
+                return "search"
+            raise AssertionError(args)
+
         with (
-            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):
-            run.side_effect = ["# Tony\n\nEngineer", "graph", "backlinks", "search"]
             cold = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
-            warm = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
+            warm = store.ask_yoda("people/tony-guan", "What changed recently?", depth=4)
 
         self.assertFalse(cold["diagnostics"]["context_cache_hit"])
         self.assertTrue(warm["diagnostics"]["context_cache_hit"])
-        self.assertEqual(run.call_count, 4)
+        self.assertEqual(run.call_count, 5)
         self.assertIn("context_subphases_ms", cold["diagnostics"])
         self.assertEqual(
             set(cold["diagnostics"]["context_subphases_ms"]),
             {"selected_node", "graph", "backlinks", "search", "direct_reads", "assembly"},
         )
+        self.assertEqual(
+            set(cold["diagnostics"]["context_counts"]),
+            {"prompt_chars", "history_messages", "search_results", "direct_reads"},
+        )
         self.assertNotIn("prompt", cold["diagnostics"])
         store.invalidate()
-        self.assertEqual(store.yoda_prompt_cache, {})
+        self.assertEqual(store.yoda_context_cache, {})
+
+    def test_yoda_stable_context_fetches_independent_sources_concurrently(self):
+        store = GraphStore()
+        barrier = threading.Barrier(3, timeout=1)
+
+        def gbrain_result(*args, **kwargs):
+            del kwargs
+            barrier.wait()
+            return {
+                "get": "# Tony\n\nEngineer",
+                "graph-query": "graph",
+                "backlinks": "backlinks",
+            }[args[0]]
+
+        with mock.patch("server.run_gbrain", side_effect=gbrain_result):
+            context = store.build_yoda_stable_context("people/tony-guan", depth=4)
+
+        self.assertEqual(context["selected_node"], "# Tony\n\nEngineer")
+        self.assertEqual(context["graph"], "graph")
+        self.assertEqual(context["backlinks"], "backlinks")
+        self.assertEqual(
+            set(context["timings"]),
+            {"selected_node", "graph", "backlinks"},
+        )
+
+    def test_forced_graph_refresh_invalidates_stable_yoda_context(self):
+        store = GraphStore()
+        store.yoda_context_cache = {"stale": {"created_at": 1, "context": {}}}
+        refreshed = {"nodes": [], "edges": [], "source": {"mode": "test"}}
+
+        with (
+            mock.patch("server.collect_seed_graph", return_value=refreshed),
+            mock.patch("server.finalize_graph", side_effect=lambda payload: payload),
+            mock.patch("server.write_cache"),
+        ):
+            store.get_seed_graph(force=True)
+
+        self.assertEqual(store.yoda_context_cache, {})
 
     def test_extract_openclaw_answer_ignores_cli_warnings(self):
         output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'

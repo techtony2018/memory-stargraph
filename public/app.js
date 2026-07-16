@@ -3383,6 +3383,8 @@ async function loadPersistentYodaLogs(slug = "") {
 function formatYodaDiagnosticEntry(slug, log, index) {
   const diagnostics = log.diagnostics || {};
   const timings = diagnostics.timings || log.timings || {};
+  const contextPhases = diagnostics.context_subphases_ms || {};
+  const contextCounts = diagnostics.context_counts || {};
   const rows = [
     `Ask Yoda diagnostic log #${index + 1}`,
     `captured_at: ${log.captured_at || "unknown"}`,
@@ -3399,6 +3401,19 @@ function formatYodaDiagnosticEntry(slug, log, index) {
     `  prompt_ms: ${timings.prompt_ms ?? "unknown"}`,
     `  model_ms: ${timings.model_ms ?? "unknown"}`,
     `  total_ms: ${timings.total_ms ?? "unknown"}`,
+    `context_cache_hit: ${Boolean(diagnostics.context_cache_hit)}`,
+    "context phases:",
+    `  selected_node_ms: ${contextPhases.selected_node ?? "unknown"}`,
+    `  graph_ms: ${contextPhases.graph ?? "unknown"}`,
+    `  backlinks_ms: ${contextPhases.backlinks ?? "unknown"}`,
+    `  search_ms: ${contextPhases.search ?? "unknown"}`,
+    `  direct_reads_ms: ${contextPhases.direct_reads ?? "unknown"}`,
+    `  assembly_ms: ${contextPhases.assembly ?? "unknown"}`,
+    "context counts:",
+    `  prompt_chars: ${contextCounts.prompt_chars ?? "unknown"}`,
+    `  history_messages: ${contextCounts.history_messages ?? "unknown"}`,
+    `  search_results: ${contextCounts.search_results ?? "unknown"}`,
+    `  direct_reads: ${contextCounts.direct_reads ?? "unknown"}`,
   ];
   if (diagnostics.error_summary) rows.push(`error_summary: ${diagnostics.error_summary}`);
   if (diagnostics.stdout_preview) rows.push(`stdout_preview: ${diagnostics.stdout_preview}`);

@@ -559,6 +559,9 @@ def sanitize_diagnostics(diagnostics):
         "stdout_preview",
         "stderr_preview",
         "timings",
+        "context_cache_hit",
+        "context_subphases_ms",
+        "context_counts",
     }
     safe = {}
     for key, value in diagnostics.items():
@@ -3119,10 +3122,12 @@ class GraphStore:
         self.loaded_at = 0.0
         self.refreshing = False
         self.condition = threading.Condition()
-        self.yoda_prompt_cache = {}
+        self.yoda_context_cache = {}
 
     def get_graph(self, force=False):
         now = time.time()
+        if force:
+            self.yoda_context_cache = {}
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
         if not self.graph and not force:
@@ -3173,6 +3178,8 @@ class GraphStore:
 
     def get_seed_graph(self, force=False):
         now = time.time()
+        if force:
+            self.yoda_context_cache = {}
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
         if not self.graph and not force:
@@ -3247,7 +3254,7 @@ class GraphStore:
         with self.condition:
             self.graph = None
             self.loaded_at = 0.0
-            self.yoda_prompt_cache = {}
+            self.yoda_context_cache = {}
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
         slug = node.get("slug")
@@ -3480,12 +3487,73 @@ class GraphStore:
         sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
         return "\n\n".join(sections)
 
-    def build_yoda_prompt(self, slug, question, history=None, depth="4", trace=None):
+    def build_yoda_stable_context(self, slug, depth="4"):
+        yoda_depth = clamp_yoda_depth(depth)
+
+        def timed_selected_node():
+            started = time.perf_counter()
+            raw = self.get_entity_raw(slug) or ""
+            return raw, int((time.perf_counter() - started) * 1000)
+
+        def timed_graph():
+            started = time.perf_counter()
+            try:
+                output = run_gbrain(
+                    "graph-query",
+                    slug,
+                    "--direction",
+                    "both",
+                    "--depth",
+                    str(yoda_depth),
+                    timeout=yoda_runtime_config()["graph_query_timeout"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                output = f"Direct relationship context unavailable: {exc}"
+            return output, int((time.perf_counter() - started) * 1000)
+
+        def timed_backlinks():
+            started = time.perf_counter()
+            try:
+                output = run_gbrain("backlinks", slug)
+            except Exception as exc:  # noqa: BLE001
+                output = f"Backlink context unavailable: {exc}"
+            return output, int((time.perf_counter() - started) * 1000)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            selected_future = executor.submit(timed_selected_node)
+            graph_future = executor.submit(timed_graph)
+            backlinks_future = executor.submit(timed_backlinks)
+            selected_node, selected_ms = selected_future.result()
+            graph_output, graph_ms = graph_future.result()
+            backlink_output, backlinks_ms = backlinks_future.result()
+        return {
+            "selected_node": selected_node,
+            "graph": graph_output,
+            "backlinks": backlink_output,
+            "timings": {
+                "selected_node": selected_ms,
+                "graph": graph_ms,
+                "backlinks": backlinks_ms,
+            },
+        }
+
+    def build_yoda_prompt(
+        self,
+        slug,
+        question,
+        history=None,
+        depth="4",
+        trace=None,
+        counts=None,
+        stable_context=None,
+    ):
         history = history or []
         trace = trace if isinstance(trace, dict) else {}
-        phase_started = time.perf_counter()
+        counts = counts if isinstance(counts, dict) else {}
         yoda_depth = clamp_yoda_depth(depth)
         prompt_state = yoda_system_prompt_state()
+        stable_context = stable_context or self.build_yoda_stable_context(slug, yoda_depth)
+        trace.update(stable_context.get("timings") or {})
         lines = [
             prompt_state["prompt"],
             "",
@@ -3500,31 +3568,12 @@ class GraphStore:
                 content = str(item.get("content") or "").strip()
                 if content:
                     lines.append(f"- {role}: {content}")
-        raw = self.get_entity_raw(slug) or ""
-        trace["selected_node"] = int((time.perf_counter() - phase_started) * 1000)
+        raw = stable_context.get("selected_node") or ""
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
-        phase_started = time.perf_counter()
-        try:
-            graph_output = run_gbrain(
-                "graph-query",
-                slug,
-                "--direction",
-                "both",
-                "--depth",
-                str(yoda_depth),
-                timeout=yoda_runtime_config()["graph_query_timeout"],
-            )
-        except Exception as exc:  # noqa: BLE001
-            graph_output = f"Direct relationship context unavailable: {exc}"
-        trace["graph"] = int((time.perf_counter() - phase_started) * 1000)
+        graph_output = stable_context.get("graph") or ""
         lines.extend(["", "Direct relationship context:", str(graph_output or "")[:6000]])
-        phase_started = time.perf_counter()
-        try:
-            backlink_output = run_gbrain("backlinks", slug)
-        except Exception as exc:  # noqa: BLE001
-            backlink_output = f"Backlink context unavailable: {exc}"
-        trace["backlinks"] = int((time.perf_counter() - phase_started) * 1000)
+        backlink_output = stable_context.get("backlinks") or ""
         lines.extend(["", "Backlink context:", str(backlink_output or "")[:4000]])
         phase_started = time.perf_counter()
         try:
@@ -3546,6 +3595,8 @@ class GraphStore:
         if not search_slugs:
             search_slugs = parse_slugs(str(search_output or ""))
         likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
+        counts["search_results"] = len(search_slugs)
+        counts["direct_reads"] = len(likely_slugs)
         phase_started = time.perf_counter()
         if likely_slugs:
             lines.append("")
@@ -3567,17 +3618,31 @@ class GraphStore:
         started_at = time.perf_counter()
         prompt_started_at = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
-        cache_payload = json.dumps({"slug": slug, "question": question, "history": history or [], "depth": yoda_depth}, sort_keys=True, ensure_ascii=False)
+        cache_payload = json.dumps({"slug": slug, "depth": yoda_depth}, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
-        cache_entry = self.yoda_prompt_cache.get(cache_key) or {}
+        cache_entry = self.yoda_context_cache.get(cache_key) or {}
         context_cache_hit = bool(cache_entry and time.time() - float(cache_entry.get("created_at") or 0) <= 300)
+        context_subphases_ms = {}
         if context_cache_hit:
-            prompt = cache_entry["prompt"]
-            context_subphases_ms = {key: 0 for key in ("selected_node", "graph", "backlinks", "search", "direct_reads", "assembly")}
+            stable_context = dict(cache_entry["context"])
+            stable_context["timings"] = {
+                key: 0 for key in ("selected_node", "graph", "backlinks")
+            }
         else:
-            context_subphases_ms = {}
-            prompt = self.build_yoda_prompt(slug, question, history, yoda_depth, trace=context_subphases_ms)
-            self.yoda_prompt_cache = {cache_key: {"created_at": time.time(), "prompt": prompt}}
+            stable_context = self.build_yoda_stable_context(slug, yoda_depth)
+            self.yoda_context_cache = {
+                cache_key: {"created_at": time.time(), "context": stable_context}
+            }
+        context_counts = {}
+        prompt = self.build_yoda_prompt(
+            slug,
+            question,
+            history,
+            yoda_depth,
+            trace=context_subphases_ms,
+            counts=context_counts,
+            stable_context=stable_context,
+        )
         prompt_ms = int((time.perf_counter() - prompt_started_at) * 1000)
         model_started_at = time.perf_counter()
         agent_result = run_yoda_model(prompt, return_details=True)
@@ -3598,6 +3663,8 @@ class GraphStore:
             "context_counts": {
                 "prompt_chars": len(prompt),
                 "history_messages": len(history or []),
+                "search_results": context_counts.get("search_results", 0),
+                "direct_reads": context_counts.get("direct_reads", 0),
             },
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),

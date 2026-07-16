@@ -338,6 +338,35 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["diagnostics"]["selected_slug"], "people/tony-guan")
         self.assertEqual(data["diagnostics"]["model_status"], "unavailable")
 
+    def test_yoda_diagnostic_sanitizer_persists_only_privacy_safe_context_metrics(self):
+        safe = server.sanitize_diagnostics(
+            {
+                "context_cache_hit": True,
+                "context_subphases_ms": {
+                    "selected_node": 10,
+                    "graph": 20,
+                    "backlinks": 30,
+                    "search": 40,
+                    "direct_reads": 50,
+                    "assembly": 1,
+                },
+                "context_counts": {
+                    "prompt_chars": 1200,
+                    "history_messages": 2,
+                    "search_results": 5,
+                    "direct_reads": 3,
+                },
+                "prompt": "private prompt body",
+                "context_source_slugs": ["private/node"],
+            }
+        )
+
+        self.assertTrue(safe["context_cache_hit"])
+        self.assertEqual(safe["context_subphases_ms"]["graph"], 20)
+        self.assertEqual(safe["context_counts"]["prompt_chars"], 1200)
+        self.assertNotIn("prompt", safe)
+        self.assertNotIn("context_source_slugs", safe)
+
     def test_yoda_model_config_endpoint_reads_and_writes_local_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "local.json"

@@ -1055,6 +1055,11 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("model_status", script)
         self.assertIn("fallback_used", script)
         self.assertIn("timing phases", script)
+        self.assertIn("context_cache_hit", script)
+        self.assertIn("context_subphases_ms", script)
+        self.assertIn("context_counts", script)
+        self.assertIn("selected_node_ms", script)
+        self.assertIn("prompt_chars", script)
         self.assertNotIn("modalYodaLogButton.hidden =", script)
         self.assertIn(".yoda-log-window", styles)
 
