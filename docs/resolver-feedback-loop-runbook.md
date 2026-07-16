@@ -118,4 +118,39 @@ curl -sS http://127.0.0.1:8788/api/resolver/health
 
 A healthy loop has recent paired before/after events from both Codex and OpenClaw, a recent successful `resolver_learning` run with `auto_applied=0`, no stale accepted proposal awaiting an explicit decision, one active release at most, and `active` distribution rows whose checksums match that release.
 
-For browser, deployment, or test probes, send `environment`, `synthetic`, `test_run`, and a privacy-safe `pair_id`. Synthetic/test events remain listed for audit but are excluded from proposal learning. Health reports `production_events_24h` and `synthetic_test_events_24h` separately; legacy events without provenance remain production because existing evidence is never rewritten automatically.
+## Ask Yoda Verification Telemetry
+
+Every verification producer must be classified at the call site. Test and synthetic requests send `environment=test`, `synthetic=true`, `test_run=true`, and a stable `pair_id`. An intentional production-shaped control sends `environment=production`, `synthetic=false`, `test_run=false`, and its own stable `pair_id`. Genuine browser requests omit verification overrides and retain the server's production defaults.
+
+Producer inventory:
+
+- The real browser UI in `public/app.js` is the genuine-user path. It remains production by default.
+- The API unit-test harness in `tests/test_api_endpoints.py` injects deterministic test provenance into every Ask Yoda handler call and suppresses external resolver submission by default. Dedicated bridge tests opt into a mocked submission. This prevents a locally configured GBrain bridge from turning unit tests into live production events.
+- `tests/browser_smoke.mjs` and `scripts/automation/cdp_probe.mjs` inspect UI state but do not submit Ask Yoda. Browser/CDP checks may open the modal without sending. If an end-to-end browser request is required, its `fetch` payload must include all four test provenance fields.
+- `scripts/automation/benchmark_yoda_context.py` is a provider-down benchmark that calls `GraphStore.ask_yoda` directly and does not submit resolver events.
+- `scripts/automation/deploy_targets.sh` verifies health and assets and does not submit Ask Yoda.
+- Live API, smoke, provider-down, and post-deployment classification checks use `scripts/automation/probe_yoda_resolver_telemetry.py`.
+
+Run an auditable test request:
+
+```bash
+python3 scripts/automation/probe_yoda_resolver_telemetry.py \
+  --service-url http://127.0.0.1:8788 \
+  --mode test \
+  --pair-id sg-0128-<invocation>-test \
+  --question "SG-0128 synthetic resolver telemetry verification"
+```
+
+Run the requested production-default control explicitly:
+
+```bash
+python3 scripts/automation/probe_yoda_resolver_telemetry.py \
+  --service-url http://127.0.0.1:8788 \
+  --mode production \
+  --pair-id sg-0128-<invocation>-production-control \
+  --question "SG-0128 production classification control"
+```
+
+Do not use raw curl or an unclassified browser Send action for Ask Yoda verification. The maintained probe submits through the selected Stargraph runtime, reads the exact event back from authoritative GBrain by request id, parses object or stringified metadata, and fails unless the observed provenance matches the requested mode.
+
+Synthetic/test events remain listed for audit but are excluded from proposal learning. Health reports `production_events_24h` and `synthetic_test_events_24h` separately; legacy events without provenance remain production because existing evidence is never rewritten automatically. Before and after any learning verification, read the protected proposal records and confirm their status, timestamps, evidence counts, and validation payloads are unchanged. A resolver-learning dry run must report `auto_applied=0`.

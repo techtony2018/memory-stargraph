@@ -135,13 +135,19 @@ class SingleRowTakeStore(FakeStore):
 
 
 class ApiEndpointTests(unittest.TestCase):
-    def dispatch_post(self, path, payload=None):
+    def dispatch_post(self, path, payload=None, *, allow_resolver_submit=False):
         handler = object.__new__(MemoryStargraphHandler)
         handler.path = path
         captured = {}
+        request_payload = dict(payload or {})
+        if path.startswith("/api/entity-ask-yoda/"):
+            request_payload.setdefault("environment", "test")
+            request_payload.setdefault("synthetic", True)
+            request_payload.setdefault("test_run", True)
+            request_payload.setdefault("pair_id", f"unit:{self.__class__.__name__}.{self._testMethodName}")
 
         def read_json_body(self):
-            return payload or {}
+            return request_payload
 
         def end_json(self, response_payload, status=200):
             captured["status"] = int(status)
@@ -150,7 +156,11 @@ class ApiEndpointTests(unittest.TestCase):
 
         handler.read_json_body = types.MethodType(read_json_body, handler)
         handler.end_json = types.MethodType(end_json, handler)
-        MemoryStargraphHandler.do_POST(handler)
+        if path.startswith("/api/entity-ask-yoda/") and not allow_resolver_submit:
+            with mock.patch("server.resolver_submit_event", return_value={"event": {"event_id": "unit-suppressed"}}):
+                MemoryStargraphHandler.do_POST(handler)
+        else:
+            MemoryStargraphHandler.do_POST(handler)
         return captured["status"], captured["payload"]
 
     def dispatch_get(self, path):
@@ -166,6 +176,44 @@ class ApiEndpointTests(unittest.TestCase):
         handler.end_json = types.MethodType(end_json, handler)
         MemoryStargraphHandler.do_GET(handler)
         return captured["status"], captured["payload"]
+
+    def test_api_test_harness_marks_ask_yoda_requests_as_synthetic_tests(self):
+        fake_store = FakeStore()
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.gbrain_call_tool", return_value={"event": {"event_id": "test-event"}}) as fake_gbrain_call,
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "Harness provenance regression"},
+                allow_resolver_submit=True,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        submitted = fake_gbrain_call.call_args.args[1]
+        self.assertEqual(submitted["environment"], "test")
+        self.assertTrue(submitted["synthetic"])
+        self.assertTrue(submitted["test_run"])
+        self.assertEqual(
+            submitted["pair_id"],
+            "unit:ApiEndpointTests.test_api_test_harness_marks_ask_yoda_requests_as_synthetic_tests",
+        )
+
+    def test_api_test_harness_suppresses_live_resolver_submission_by_default(self):
+        fake_store = FakeStore()
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.gbrain_call_tool") as fake_gbrain_call,
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-ask-yoda/people%2Ftony-guan",
+                {"question": "No external unit-test side effect"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        fake_gbrain_call.assert_not_called()
 
     def test_all_node_operation_endpoints_are_routed(self):
         fake_store = FakeStore()
@@ -691,6 +739,7 @@ class ApiEndpointTests(unittest.TestCase):
                 status, data = self.dispatch_post(
                     "/api/entity-ask-yoda/people%2Ftony-guan",
                     {"question": "Which ACA7 writing matters?", "depth": 4, "environment": "test", "synthetic": True, "test_run": True, "pair_id": "api-probe-1"},
+                    allow_resolver_submit=True,
                 )
                 logs_status, logs = self.dispatch_get("/api/yoda-logs?slug=people%2Ftony-guan&limit=2")
 
@@ -738,6 +787,11 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["events"][0]["event_id"], "stargraph-1")
         self.assertEqual(fake_gbrain_call.call_args_list[0].args[0], "resolver_events_submit")
+        submitted = fake_gbrain_call.call_args_list[0].args[1]
+        self.assertEqual(submitted["environment"], "production")
+        self.assertFalse(submitted["synthetic"])
+        self.assertFalse(submitted["test_run"])
+        self.assertEqual(submitted["pair_id"], "")
         self.assertEqual(fake_gbrain_call.call_args_list[1].args[0], "resolver_events_list")
         self.assertEqual(fake_gbrain_call.call_args_list[1].args[1], {"limit": 2, "producer": "stargraph"})
 

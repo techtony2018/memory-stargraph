@@ -115,6 +115,21 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn('pacific_stamp=', script)
         self.assertNotIn("date -u", script)
 
+    def test_wish_runbook_requires_auditable_yoda_probe_provenance(self):
+        prompt = (ROOT / "automations" / "memory-stargraph-wish-to-reallity" / "prompt.md").read_text()
+        runbook = (ROOT / "docs" / "resolver-feedback-loop-runbook.md").read_text()
+        contract = prompt + "\n" + runbook
+
+        self.assertIn("probe_yoda_resolver_telemetry.py", contract)
+        self.assertIn("environment=test", contract)
+        self.assertIn("synthetic=true", contract)
+        self.assertIn("test_run=true", contract)
+        self.assertIn("stable `pair_id`", contract)
+        self.assertIn("API unit-test harness", runbook)
+        self.assertIn("Browser/CDP", runbook)
+        self.assertIn("provider-down benchmark", runbook)
+        self.assertIn("Do not use raw curl", runbook)
+
 
 if __name__ == "__main__":
     unittest.main()
