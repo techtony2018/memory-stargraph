@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -28,6 +31,31 @@ def tree_digest(root: Path) -> str:
 
 
 class CaptureSkillInstallTests(unittest.TestCase):
+    def test_cli_accepts_documented_json_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--repo-root",
+                    str(ROOT),
+                    "--codex-home",
+                    str(Path(td) / "codex"),
+                    "--openclaw-home",
+                    str(Path(td) / "openclaw"),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                json.loads(completed.stdout),
+                {"ok": True, "installed": ["add-capture-link", "get-capture-link"]},
+            )
+
     def test_installer_mirrors_repository_sources_byte_for_byte_and_idempotently(self):
         with tempfile.TemporaryDirectory() as td:
             codex_home = Path(td) / "codex"

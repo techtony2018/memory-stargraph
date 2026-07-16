@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
     parser.add_argument("--openclaw-home", type=Path, default=Path.home() / ".openclaw")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output (the default).")
     args = parser.parse_args()
     print(json.dumps(install(args.repo_root, args.codex_home, args.openclaw_home), sort_keys=True))
     return 0
