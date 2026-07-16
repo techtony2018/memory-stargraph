@@ -530,6 +530,67 @@ try {
   if (operationModal.documentTitle !== "Memory Stargraph" || !operationModal.title) {
     throw new Error(`Expected View to keep browser title as Memory Stargraph and update modal title: ${JSON.stringify(operationModal)}`);
   }
+  await page.evaluate(() => {
+    window.__slugCopyProbe = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          window.__slugCopyProbe.push(value);
+        },
+      },
+    });
+  });
+  const viewSlug = operationModal.slugLine.replace(/^slug:\s*/, "");
+  await page.dblclick("#modalMessage .modal-slug-inline");
+  await page.waitForFunction(() => document.querySelector("#modalMessage .modal-slug-inline")?.classList.contains("is-copy-confirmed"));
+  const viewCopy = await page.evaluate(() => ({
+    copied: window.__slugCopyProbe.at(-1),
+    status: document.querySelector("#slugCopyStatus")?.textContent,
+  }));
+  if (viewCopy.copied !== viewSlug || viewCopy.status !== `Copied slug: ${viewSlug}`) {
+    throw new Error(`Expected View slug double-click to copy the exact slug: ${JSON.stringify({ viewSlug, viewCopy })}`);
+  }
+  await page.click("#modalCloseButton");
+  const previewSlug = await page.textContent("#selectionSlugAlways");
+  await page.dblclick("#selectionSlugAlways");
+  await page.waitForFunction(() => document.querySelector("#selectionSlugAlways")?.classList.contains("is-copy-confirmed"));
+  const previewCopy = await page.evaluate(() => ({
+    copied: window.__slugCopyProbe.at(-1),
+    status: document.querySelector("#slugCopyStatus")?.textContent,
+  }));
+  if (previewCopy.copied !== previewSlug || previewCopy.status !== `Copied slug: ${previewSlug}`) {
+    throw new Error(`Expected preview slug double-click to copy the exact slug: ${JSON.stringify({ previewSlug, previewCopy })}`);
+  }
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error("permission denied");
+        },
+      },
+    });
+  });
+  await page.dblclick("#selectionSlugAlways");
+  await page.waitForFunction(() => document.querySelector("#selectionSlugAlways")?.classList.contains("is-copy-failed"));
+  const failedCopy = await page.evaluate(() => ({
+    copied: window.__slugCopyProbe.at(-1),
+    status: document.querySelector("#slugCopyStatus")?.textContent,
+  }));
+  if (failedCopy.copied !== previewSlug || failedCopy.status !== `Copy failed for slug: ${previewSlug}`) {
+    throw new Error(`Expected clipboard failure to stay truthful: ${JSON.stringify({ previewSlug, failedCopy })}`);
+  }
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          window.__slugCopyProbe.push(value);
+        },
+      },
+    });
+  });
   const markdownFormatting = await page.evaluate(() => {
     window.__MEMORY_STARGRAPH__.renderMarkdownView([
       "# Format Probe",

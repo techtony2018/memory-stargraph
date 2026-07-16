@@ -745,7 +745,7 @@ h2 {
   width: 34px;
   height: 33.333%;
   min-height: 168px;
-  z-index: 29;
+  z-index: 34;
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -754,15 +754,42 @@ h2 {
 .filter-sidebar-drawer::before {
   content: "";
   position: absolute;
-  right: 0;
-  top: 0;
-  width: 12px;
-  height: 100%;
-  border: 1px solid rgba(136, 246, 255, 0.3);
+  right: 2px;
+  top: 10%;
+  width: 14px;
+  height: 80%;
+  border: 1px solid rgba(136, 246, 255, 0.72);
   border-right: 0;
   border-radius: 8px 0 0 8px;
-  background: linear-gradient(180deg, rgba(136, 246, 255, 0.28), rgba(143, 124, 255, 0.18));
-  box-shadow: 0 0 22px rgba(34, 211, 238, 0.18);
+  background: linear-gradient(180deg, rgba(136, 246, 255, 0.42), rgba(143, 124, 255, 0.3));
+  box-shadow: 0 0 0 1px rgba(5, 8, 22, 0.72), 0 0 24px rgba(34, 211, 238, 0.42);
+  opacity: 0.9;
+  transition: width 0.16s ease, opacity 0.16s ease, box-shadow 0.16s ease;
+}
+
+.filter-sidebar-drawer::after {
+  content: "‹";
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  color: rgba(224, 251, 255, 0.94);
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.8);
+  transform: translateY(-50%);
+}
+
+.filter-sidebar-drawer:hover::before,
+.filter-sidebar-drawer:focus-visible::before {
+  width: 18px;
+  opacity: 1;
+  box-shadow: 0 0 0 1px rgba(5, 8, 22, 0.72), 0 0 30px rgba(34, 211, 238, 0.68);
+}
+
+.filter-sidebar-drawer:focus-visible {
+  outline: 2px solid rgba(136, 246, 255, 0.72);
+  outline-offset: -2px;
 }
 
 .filter-sidebar {
@@ -1129,6 +1156,38 @@ h2 {
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.copyable-slug {
+  position: relative;
+  cursor: copy;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.copyable-slug.is-copy-confirmed::after,
+.copyable-slug.is-copy-failed::after {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.copyable-slug.is-copy-confirmed::after {
+  content: "Copied";
+  color: #b8f7d4;
+  background: rgba(111, 232, 168, 0.14);
+}
+
+.copyable-slug.is-copy-failed::after {
+  content: "Copy failed";
+  color: #ffb5c0;
+  background: rgba(255, 154, 169, 0.14);
 }
 
 .ui-version {

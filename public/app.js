@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.144";
+const UI_VERSION = "V1.0.145";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -225,6 +225,7 @@ const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
 const busyIndicator = document.getElementById("busyIndicator");
 const busyIndicatorLabel = document.getElementById("busyIndicatorLabel");
+const slugCopyStatus = document.getElementById("slugCopyStatus");
 const resolverReviewModal = document.getElementById("resolverReviewModal");
 const resolverReviewCloseButton = document.getElementById("resolverReviewCloseButton");
 const resolverReviewMessage = document.getElementById("resolverReviewMessage");
@@ -2805,8 +2806,14 @@ function renderMarkdownView(markdown) {
 function renderViewModalMessage(slug) {
   modalMessage.textContent = "";
   const slugText = document.createElement("span");
-  slugText.className = "modal-slug-inline";
+  slugText.className = "modal-slug-inline copyable-slug has-tooltip";
   slugText.textContent = `slug: ${slug}`;
+  setHudTooltip(slugText, "Double-click to copy slug.");
+  slugText.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void copySlug(slug, slugText);
+  });
   modalMessage.appendChild(slugText);
   const editButton = document.createElement("button");
   editButton.type = "button";
@@ -5720,15 +5727,32 @@ async function openNodeModal(action, slug = state.focusSlug) {
   }
 }
 
-async function copySlug(slug = state.focusSlug) {
+let slugCopyFeedbackTimer = null;
+
+function setSlugCopyFeedback(target, stateClass, message) {
+  if (slugCopyStatus) slugCopyStatus.textContent = message;
+  if (!target) return;
+  target.classList.remove("is-copy-confirmed", "is-copy-failed");
+  target.classList.add(stateClass);
+  window.clearTimeout(slugCopyFeedbackTimer);
+  slugCopyFeedbackTimer = window.setTimeout(() => {
+    target.classList.remove("is-copy-confirmed", "is-copy-failed");
+  }, 1800);
+}
+
+async function copySlug(slug = state.focusSlug, statusTarget = null) {
   hideContextMenu();
-  if (!slug) return;
+  if (!slug) return false;
   try {
     await navigator.clipboard.writeText(slug);
     setHover(slug);
     hoverLabel.textContent = `Copied slug: ${slug}`;
+    setSlugCopyFeedback(statusTarget, "is-copy-confirmed", `Copied slug: ${slug}`);
+    return true;
   } catch {
-    hoverLabel.textContent = `Slug: ${slug}`;
+    hoverLabel.textContent = `Copy failed for slug: ${slug}`;
+    setSlugCopyFeedback(statusTarget, "is-copy-failed", `Copy failed for slug: ${slug}`);
+    return false;
   }
 }
 
@@ -6505,6 +6529,11 @@ function bindEvents() {
   });
   detailTitle?.addEventListener("dblclick", () => {
     if (state.focusSlug) void openNodeModal("view", state.focusSlug);
+  });
+  selectionSlugAlways?.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.focusSlug) void copySlug(state.focusSlug, selectionSlugAlways);
   });
   mapFilterToggleButton?.addEventListener("click", () => {
     state.mapFiltersVisible = !state.mapFiltersVisible;
