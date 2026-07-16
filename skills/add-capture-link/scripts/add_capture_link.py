@@ -891,12 +891,18 @@ def _queue_capture_locked(
                 "Capture queue finalize did not return the exact authoritative server receipts.", finalized,
                 may_have_persisted=True,
             )
+        projection_status = finalized.get("projection_status") or "planned"
+        if projection_status not in {"planned", "capturing", "completed", "failed"}:
+            raise AttachmentRequestError(
+                "Capture queue finalize returned an invalid projection state.", finalized,
+                may_have_persisted=True,
+            )
         _remove_recovery_bundle(manifest_path)
         return {
             "ok": True,
             "capture_id": capture_id,
             "child_slug": child_slug,
-            "status": "planned",
+            "status": projection_status,
             "attachments": receipts,
             "durable_storage_verified": True,
             "graph_verified": finalized.get("graph_verified") is True,

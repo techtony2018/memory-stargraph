@@ -221,3 +221,42 @@ git diff --check
 ### Concerns
 
 No blocking concerns. The production-safety tests use isolated fake GBrain/Stargraph boundaries and intentionally do not enqueue a real capture or upload user data. The authority contract applies to the queue skill and managed capture-backlog worker; unrelated deliberate GBrain CLI writes remain outside this scoped queue authority.
+
+## Worker-handoff and lease-shutdown closure
+
+- Finalized ledger entries now make both reserve and finalize retries projection-read-only. They validate the parent row, child frontmatter, ledger fingerprint marker, CAP id, child slug, and consistent status without saving either node or re-adding graph edges. The original `planned` projection returns idempotently; manager-driven `capturing`, `completed`, and `failed` projections remain byte-for-byte untouched and are reported as `projection_status`. The queue skill returns that current projection status instead of incorrectly claiming `planned`.
+- Projection retries fail closed when parent/child identity or status is missing, ambiguous, inconsistent, or tampered. Projection repair remains available only while ledger state is pre-finalized or `finalizing`, preserving interrupted-finalize durability without taking authority back from the worker after handoff.
+- Lease acquisition and renewal are now separate APIs: `POST /api/capture-queue/lease/acquire` rejects token/fence fields, while `POST /api/capture-queue/lease/renew` requires the exact active owner, opaque token, and fence. Missing, expired, or mismatched renewals fail rather than creating a lease.
+- Manager renewal now uses the renew endpoint. Shutdown sets the stop event, waits without a truncated join for the bounded renewal request/thread to finish, and only then releases. A delayed-renewal regression holds renewal beyond the prior one-second join window and proves release occurs afterward.
+- Lease HTTP calls retain a short 15-second timeout, while fenced GBrain mutations explicitly retain the existing 180-second timeout.
+
+### Red/green evidence
+
+The handoff regressions first failed because finalized reserve rewrote an advanced child back to `planned`, finalized finalize rejected advanced parent states, and tampered child identity was silently overwritten. Lease regressions first failed because acquire also renewed, no renew-only function existed, renewal still used `/acquire`, shutdown could stop waiting before a delayed request finished, and fenced mutation calls had no long timeout. Each regression was observed failing before the focused implementation and then passed.
+
+### Fresh verification evidence
+
+```text
+python3 -W error::ResourceWarning -m unittest tests.test_api_endpoints
+# Ran 52 tests in 4.481s — OK
+
+python3 -W error::ResourceWarning -m unittest discover -s skills/add-capture-link/tests
+# Ran 26 tests in 0.316s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_capture_backlog tests.test_backlog_compaction
+# Ran 35 tests in 1.277s — OK
+
+python3 -W error::ResourceWarning -m unittest tests.test_todo_backlog_compaction
+# Ran 5 tests in 0.046s — OK
+
+python3 -m py_compile server.py scripts/automation/manage_capture_backlog.py skills/add-capture-link/scripts/add_capture_link.py skills/add-capture-link/tests/test_add_capture_link.py tests/test_api_endpoints.py tests/test_capture_backlog.py
+# exit 0
+
+python3 /Users/tony/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/add-capture-link
+# Skill is valid!
+
+git diff --check
+# exit 0
+```
+
+Total fresh automated tests: 118. No blocking concerns. The concurrency, authority, lease, mutation-timeout, and worker-handoff boundaries are covered with isolated deterministic fakes; no live capture item or user attachment was created.

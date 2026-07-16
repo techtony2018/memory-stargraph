@@ -167,7 +167,8 @@ class CaptureBacklogTests(unittest.TestCase):
         self.lease_patch.stop()
         calls = []
 
-        def post(path, payload):
+        def post(path, payload, timeout=None):
+            del timeout
             calls.append((path, dict(payload)))
             if path.endswith("/acquire"):
                 return {"ok": True, "owner": payload["owner"], "token": "lease-token", "fence": 1}
@@ -195,6 +196,8 @@ class CaptureBacklogTests(unittest.TestCase):
             calls.append((path, dict(payload)))
             if path.endswith("/acquire"):
                 return {"ok": True, "owner": payload["owner"], "token": token, "fence": 7, "expires_at_epoch": time.time() + 1}
+            if path.endswith("/renew"):
+                return {"ok": True, "owner": payload["owner"], "token": token, "fence": 7, "expires_at_epoch": time.time() + 1}
             return {"ok": True, "released": True}
 
         try:
@@ -205,7 +208,7 @@ class CaptureBacklogTests(unittest.TestCase):
             ):
                 with capture.queue_authority_lease("long-operation"):
                     time.sleep(0.04)
-            renewals = [payload for path, payload in calls if path.endswith("/acquire") and payload.get("token")]
+            renewals = [payload for path, payload in calls if path.endswith("/renew")]
             self.assertTrue(renewals)
             self.assertTrue(all(item["token"] == token and item["fence"] == 7 for item in renewals))
         finally:
@@ -218,7 +221,7 @@ class CaptureBacklogTests(unittest.TestCase):
         def post(path, payload):
             if path.endswith("/release"):
                 return {"ok": True, "released": False}
-            if payload.get("token"):
+            if path.endswith("/renew"):
                 acquired.set()
                 raise RuntimeError("lease lost")
             return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 2, "expires_at_epoch": time.time() + 1}
@@ -235,12 +238,64 @@ class CaptureBacklogTests(unittest.TestCase):
         finally:
             self.lease_patch.start()
 
+    def test_shutdown_waits_for_delayed_renewal_before_releasing(self):
+        self.lease_patch.stop()
+        renewal_started = threading.Event()
+        allow_renewal_to_finish = threading.Event()
+        calls = []
+
+        def post(path, payload):
+            calls.append(path)
+            if path.endswith("/acquire"):
+                return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 3, "expires_at_epoch": time.time() + 1}
+            if path.endswith("/renew"):
+                renewal_started.set()
+                self.assertTrue(allow_renewal_to_finish.wait(3))
+                calls.append("renew-finished")
+                return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 3, "expires_at_epoch": time.time() + 1}
+            return {"ok": True, "released": True}
+
+        def finish_renewal():
+            self.assertTrue(renewal_started.wait(1))
+            time.sleep(1.1)
+            allow_renewal_to_finish.set()
+
+        helper = threading.Thread(target=finish_renewal)
+        helper.start()
+        try:
+            with (
+                mock.patch.object(capture, "_queue_authority_post", side_effect=post),
+                mock.patch.object(capture, "LEASE_RENEW_INTERVAL_SECONDS", 0.01),
+            ):
+                with capture.queue_authority_lease("delayed-renewal"):
+                    self.assertTrue(renewal_started.wait(1))
+            helper.join(1)
+            self.assertLess(calls.index("renew-finished"), calls.index("/api/capture-queue/lease/release"))
+        finally:
+            self.lease_patch.start()
+
+    def test_fenced_mutations_keep_long_timeout_separate_from_short_lease_timeout(self):
+        self.mutation_patch.stop()
+        context = {
+            "owner": "worker", "token": "token", "fence": 4, "renewal_error": [],
+        }
+        token = capture._LEASE_CONTEXT.set(context)
+        try:
+            with mock.patch.object(capture, "_queue_authority_post", return_value={"ok": True}) as post:
+                capture._queue_authority_mutate({"operation": "unlink", "source": capture.ROOT_SLUG, "target": "child", "relation": "contains_capture_request"})
+            self.assertEqual(post.call_args.kwargs["timeout"], 180)
+            self.assertLess(capture.LEASE_HTTP_TIMEOUT_SECONDS, capture.FENCED_MUTATION_HTTP_TIMEOUT_SECONDS)
+        finally:
+            capture._LEASE_CONTEXT.reset(token)
+            self.mutation_patch.start()
+
     def test_all_gbrain_mutations_are_routed_through_fenced_authority(self):
         self.lease_patch.stop()
         self.mutation_patch.stop()
         calls = []
 
-        def post(path, payload):
+        def post(path, payload, timeout=None):
+            del timeout
             calls.append((path, dict(payload)))
             if path.endswith("/acquire"):
                 return {"ok": True, "owner": payload["owner"], "token": "token", "fence": 11, "expires_at_epoch": time.time() + 300}

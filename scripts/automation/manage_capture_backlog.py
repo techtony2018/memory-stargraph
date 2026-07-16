@@ -41,6 +41,8 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 DEFAULT_STARGRAPH_URL = "http://127.0.0.1:8788"
 LEASE_TTL_SECONDS = 300
 LEASE_RENEW_INTERVAL_SECONDS = 90.0
+LEASE_HTTP_TIMEOUT_SECONDS = 15
+FENCED_MUTATION_HTTP_TIMEOUT_SECONDS = 180
 _LEASE_CONTEXT = contextvars.ContextVar("capture_queue_lease", default=None)
 CAPTURE_SPEC = BacklogSpec(
     root_slug=ROOT_SLUG,
@@ -59,12 +61,16 @@ def pacific_iso(now: dt.datetime | None = None) -> str:
     return value.astimezone(PACIFIC).replace(microsecond=0).isoformat()
 
 
-def _queue_authority_post(path: str, payload: dict[str, object]) -> dict[str, object]:
+def _queue_authority_post(
+    path: str,
+    payload: dict[str, object],
+    timeout: int | float = LEASE_HTTP_TIMEOUT_SECONDS,
+) -> dict[str, object]:
     base = os.environ.get("MEMORY_STARGRAPH_URL", DEFAULT_STARGRAPH_URL).rstrip("/")
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(base + path, data=body, method="POST", headers={"Content-Type": "application/json"})
     try:
-        with request.urlopen(req, timeout=15) as response:
+        with request.urlopen(req, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -103,7 +109,7 @@ def queue_authority_lease(operation: str):
         while not stop_renewal.wait(LEASE_RENEW_INTERVAL_SECONDS):
             try:
                 renewed = _queue_authority_post(
-                    "/api/capture-queue/lease/acquire",
+                    "/api/capture-queue/lease/renew",
                     {
                         "owner": owner,
                         "token": lease["token"],
@@ -138,15 +144,21 @@ def queue_authority_lease(operation: str):
     finally:
         _LEASE_CONTEXT.reset(context_token)
         stop_renewal.set()
-        renewal_thread.join(timeout=max(1.0, min(5.0, LEASE_RENEW_INTERVAL_SECONDS + 1.0)))
+        renewal_thread.join()
+        renewal_failure = renewal_error[0] if body_error is None and renewal_error else None
+        release_failure = None
         try:
             _queue_authority_post(
                 "/api/capture-queue/lease/release",
                 {"owner": owner, "token": lease["token"], "fence": lease["fence"]},
             )
-        except Exception:
-            if body_error is None:
-                raise
+        except Exception as exc:  # lease expiry/loss is reported after the renewal thread is stopped
+            release_failure = exc
+        if body_error is None:
+            if renewal_failure is not None:
+                raise RuntimeError(f"capture queue lease was lost during {operation}: {renewal_failure}")
+            if release_failure is not None:
+                raise release_failure
 
 
 def _uses_queue_authority(operation: str):
@@ -367,6 +379,7 @@ def _queue_authority_mutate(payload: dict[str, object]) -> dict[str, object]:
     result = _queue_authority_post(
         "/api/capture-queue/lease/mutate",
         {**payload, "owner": lease["owner"], "token": lease["token"], "fence": lease["fence"]},
+        timeout=FENCED_MUTATION_HTTP_TIMEOUT_SECONDS,
     )
     if lease["renewal_error"]:
         raise RuntimeError(f"capture queue lease was lost during mutation: {lease['renewal_error'][0]}")

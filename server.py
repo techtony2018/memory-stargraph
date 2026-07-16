@@ -204,6 +204,7 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "capture-queue-finalize", "method": "POST", "endpoint": "/api/capture-queue/finalize", "mutates_gbrain": True},
     {"action": "capture-queue-attachment-verify", "method": "POST", "endpoint": "/api/capture-queue/attachment/verify", "mutates_gbrain": False},
     {"action": "capture-queue-lease-acquire", "method": "POST", "endpoint": "/api/capture-queue/lease/acquire", "mutates_gbrain": False},
+    {"action": "capture-queue-lease-renew", "method": "POST", "endpoint": "/api/capture-queue/lease/renew", "mutates_gbrain": False},
     {"action": "capture-queue-lease-release", "method": "POST", "endpoint": "/api/capture-queue/lease/release", "mutates_gbrain": False},
     {"action": "capture-queue-lease-mutate", "method": "POST", "endpoint": "/api/capture-queue/lease/mutate", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
@@ -709,21 +710,12 @@ def acquire_capture_queue_lease(payload):
         raise ValueError("ttl_seconds must be an integer") from exc
     if ttl < 1 or ttl > CAPTURE_QUEUE_LEASE_MAX_SECONDS:
         raise ValueError(f"ttl_seconds must be 1-{CAPTURE_QUEUE_LEASE_MAX_SECONDS}")
-    requested_token = str(payload.get("token") or "")
-    requested_fence = payload.get("fence")
+    if "token" in payload or "fence" in payload:
+        raise ValueError("lease acquire must not include token or fence; use lease renew")
     with _capture_queue_lock():
         ledger = _capture_queue_load_ledger()
         active = _capture_queue_active_lease(ledger)
         if active:
-            if (
-                active.get("owner") == owner
-                and requested_token
-                and requested_fence == active.get("fence")
-                and secrets.compare_digest(str(active.get("token")), requested_token)
-            ):
-                active["expires_at_epoch"] = time.time() + ttl
-                _capture_queue_save_ledger(ledger)
-                return {"ok": True, **active}
             raise RuntimeError(f"capture queue is leased by {active.get('owner') or 'external actor'}")
         fence = max(1, int(ledger.get("next_fence") or 1))
         ledger["next_fence"] = fence + 1
@@ -731,6 +723,36 @@ def acquire_capture_queue_lease(payload):
         ledger["lease"] = lease
         _capture_queue_save_ledger(ledger)
         return {"ok": True, **lease}
+
+
+def renew_capture_queue_lease(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    owner = str(payload.get("owner") or "").strip()
+    token = str(payload.get("token") or "")
+    fence = payload.get("fence")
+    if not owner or not token or not isinstance(fence, int):
+        raise ValueError("lease renew requires owner, token, and fence")
+    try:
+        ttl = int(payload.get("ttl_seconds") or 60)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ttl_seconds must be an integer") from exc
+    if ttl < 1 or ttl > CAPTURE_QUEUE_LEASE_MAX_SECONDS:
+        raise ValueError(f"ttl_seconds must be 1-{CAPTURE_QUEUE_LEASE_MAX_SECONDS}")
+    with _capture_queue_lock():
+        ledger = _capture_queue_load_ledger()
+        active = _capture_queue_active_lease(ledger)
+        if not active:
+            raise RuntimeError("capture queue lease was lost or expired; renew cannot acquire")
+        if (
+            active.get("owner") != owner
+            or active.get("fence") != fence
+            or not secrets.compare_digest(str(active.get("token")), token)
+        ):
+            raise RuntimeError("capture queue lease renewal identity mismatch")
+        active["expires_at_epoch"] = time.time() + ttl
+        _capture_queue_save_ledger(ledger)
+        return {"ok": True, **active}
 
 
 def release_capture_queue_lease(payload):
@@ -940,7 +962,7 @@ def record_capture_queue_attachment_upload(payload, file_path, description=""):
         return _capture_queue_record_receipt(ledger, reservation, expected, evidence)
 
 
-def _capture_queue_result(reservation):
+def _capture_queue_result(reservation, projection_status=None):
     state = reservation["state"]
     records = reservation.get("attachment_receipts", {})
     order = reservation.get("attachment_receipt_order", list(records) if isinstance(records, dict) else [])
@@ -949,7 +971,7 @@ def _capture_queue_result(reservation):
         for token in order
         if isinstance(records, dict) and token in records
     ]
-    return {
+    result = {
         "ok": True,
         "capture_id": reservation["capture_id"],
         "child_slug": reservation["child_slug"],
@@ -960,6 +982,54 @@ def _capture_queue_result(reservation):
         "graph_verified": bool(reservation.get("graph_verified")) and state == "finalized",
         "attachments": attachments,
     }
+    if projection_status is not None:
+        result["projection_status"] = projection_status
+    return result
+
+
+def _capture_queue_finalized_projection_status(reservation):
+    child_slug = reservation["child_slug"]
+    parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
+    if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
+        raise RuntimeError("finalized capture queue parent projection is unavailable or malformed")
+    rows = _capture_queue_rows(parent)
+    matching = [row for row in rows if row["id"] == reservation["capture_id"] or row["node"].strip("[]") == child_slug]
+    if len(matching) != 1:
+        raise RuntimeError("finalized capture queue projection identity is missing or ambiguous")
+    row = matching[0]
+    expected_identity = {
+        "id": reservation["capture_id"],
+        "source_kind": _capture_queue_escape(reservation["source_kind"]),
+        "source": _capture_queue_escape(reservation["source"]),
+        "target": _capture_queue_escape(reservation["target"]),
+        "node": f"[[{child_slug}]]",
+    }
+    if any(row.get(field) != value for field, value in expected_identity.items()):
+        raise RuntimeError("finalized capture queue parent projection identity mismatch")
+    status = row.get("status")
+    if status not in {"planned", "capturing", "completed", "failed"}:
+        raise RuntimeError("finalized capture queue projection status is invalid")
+    child = STORE.get_entity_raw(child_slug)
+    if not isinstance(child, str):
+        raise RuntimeError("finalized capture queue child projection identity is missing")
+    frontmatter_end = child.find("\n---", 4) if child.startswith("---\n") else -1
+    frontmatter = child[4:frontmatter_end] if frontmatter_end >= 0 else ""
+    child_capture = re.search(r"(?m)^capture_id:\s*([^\s#]+)\s*$", frontmatter)
+    child_status = re.search(r"(?m)^status:\s*([^\s#]+)\s*$", frontmatter)
+    child_parent = re.search(r"(?m)^parent:\s*([^\s#]+)\s*$", frontmatter)
+    marker = re.search(r"capture-queue-projection-fingerprint:\s*([0-9a-f]{64})", child)
+    if (
+        not child_capture or child_capture.group(1) != reservation["capture_id"]
+        or not child_status or child_status.group(1) != status
+        or not child_parent or child_parent.group(1) != CAPTURE_QUEUE_PARENT_SLUG
+        or not marker or marker.group(1) != reservation["request_fingerprint"]
+    ):
+        raise RuntimeError("finalized capture queue child projection identity or status mismatch")
+    if status == "planned":
+        expected_child = _capture_queue_render_child(reservation, "planned", reservation.get("receipts", []))
+        if child != expected_child:
+            raise RuntimeError("finalized planned child projection identity mismatch")
+    return status
 
 
 def reserve_capture_request(payload, now=None):
@@ -975,6 +1045,8 @@ def reserve_capture_request(payload, now=None):
                 raise ValueError("idempotency key is already bound to a different metadata fingerprint")
             if recorded.get("child_slug") != child_slug:
                 raise RuntimeError("capture queue reservation ledger child is invalid")
+            if recorded.get("state") == "finalized":
+                return _capture_queue_result(recorded, _capture_queue_finalized_projection_status(recorded))
             existing = STORE.get_entity_raw(child_slug)
             projected_status = "planned" if recorded["state"] == "finalized" else "capture-recovery"
             expected = _capture_queue_render_child(recorded, projected_status, recorded.get("receipts", []))
@@ -1044,6 +1116,8 @@ def finalize_capture_request(payload, now=None, stop_after_child_for_test=False)
             reservation["receipt_tokens"] = receipt_tokens
             reservation["graph_verified"] = False
             _capture_queue_save_ledger(ledger)
+        if reservation["state"] == "finalized":
+            return _capture_queue_result(reservation, _capture_queue_finalized_projection_status(reservation))
         final_child = _capture_queue_render_child(reservation, "planned", attachments)
         parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
         if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
@@ -1103,7 +1177,7 @@ def finalize_capture_request(payload, now=None, stop_after_child_for_test=False)
         reservation["state"] = "finalized"
         reservation["graph_verified"] = True
         _capture_queue_save_ledger(ledger)
-        return _capture_queue_result(reservation)
+        return _capture_queue_result(reservation, "planned")
 
 
 SECRET_RE = re.compile(r"(?i)(\bsk-[a-z0-9_-]+|token[=:]\s*\S+|api[_-]?key[=:]\s*\S+|password[=:]\s*\S+)")
@@ -4821,9 +4895,13 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path in {"/api/capture-queue/lease/acquire", "/api/capture-queue/lease/release"}:
+        if parsed.path in {"/api/capture-queue/lease/acquire", "/api/capture-queue/lease/renew", "/api/capture-queue/lease/release"}:
             try:
-                operation = acquire_capture_queue_lease if parsed.path.endswith("/acquire") else release_capture_queue_lease
+                operation = {
+                    "/api/capture-queue/lease/acquire": acquire_capture_queue_lease,
+                    "/api/capture-queue/lease/renew": renew_capture_queue_lease,
+                    "/api/capture-queue/lease/release": release_capture_queue_lease,
+                }[parsed.path]
                 return self.end_json(operation(self.read_json_body()))
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)

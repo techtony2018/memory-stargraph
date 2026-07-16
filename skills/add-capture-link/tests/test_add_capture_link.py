@@ -171,6 +171,19 @@ class AddCaptureLinkTests(unittest.TestCase):
         path.write_bytes(data)
         return path
 
+    def test_retry_reports_worker_advanced_projection_status(self):
+        original = self.fake_queue_authority
+
+        def advanced(base_url, action, payload):
+            result = original(base_url, action, payload)
+            if action == "finalize":
+                result["projection_status"] = "completed"
+            return result
+
+        with mock.patch.object(module, "queue_authority_request", side_effect=advanced):
+            result = self.invoke()
+        self.assertEqual(result["status"], "completed")
+
     def upload_side_effect(self, backend, fail_upload_number=None):
         count = 0
 

@@ -11,6 +11,7 @@ from unittest import mock
 
 import server
 from server import MemoryStargraphHandler
+from scripts.automation import manage_capture_backlog as capture_backlog
 
 
 TEST_GRAPH = {
@@ -268,6 +269,77 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         self.assertEqual(finalized["child_slug"], first["child_slug"])
         self.assertEqual(finalized["status"], "finalized")
 
+    def test_finalized_retries_preserve_worker_advanced_projections_without_writes(self):
+        for target in ("capturing", "completed", "failed"):
+            with self.subTest(target=target):
+                payload = dict(self.payload, idempotency_key=f"codex-host_a.request_{target}")
+                reserved = self.reserve(payload)
+                self.finalize(key=payload["idempotency_key"])
+                child_slug = reserved["child_slug"]
+                parent = self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG]
+                child = self.store.nodes[child_slug]
+                parent = capture_backlog.transition(
+                    parent, reserved["capture_id"], "planned", "capturing",
+                    "2026-07-15T09:32:00-07:00", "worker claimed",
+                )
+                child = capture_backlog.update_child_status(
+                    child, "planned", "capturing", "2026-07-15T09:32:00-07:00", "worker claimed",
+                )
+                if target != "capturing":
+                    parent = capture_backlog.transition(
+                        parent, reserved["capture_id"], "capturing", target,
+                        "2026-07-15T09:33:00-07:00", f"worker {target}",
+                    )
+                    child = capture_backlog.update_child_status(
+                        child, "capturing", target, "2026-07-15T09:33:00-07:00", f"worker {target}",
+                    )
+                self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG] = parent
+                self.store.nodes[child_slug] = child
+                before_nodes = dict(self.store.nodes)
+                before_edges = set(self.store.edges)
+                with (
+                    mock.patch.object(self.store, "save_entity_raw", wraps=self.store.save_entity_raw) as save,
+                    mock.patch.object(self.store, "add_relationship", wraps=self.store.add_relationship) as link,
+                ):
+                    reserve_retry = self.reserve(payload)
+                    finalize_retry = self.finalize(key=payload["idempotency_key"])
+                self.assertEqual(reserve_retry["projection_status"], target)
+                self.assertEqual(finalize_retry["projection_status"], target)
+                self.assertEqual(self.store.nodes, before_nodes)
+                self.assertEqual(self.store.edges, before_edges)
+                save.assert_not_called()
+                link.assert_not_called()
+
+    def test_finalized_retries_leave_original_planned_projection_untouched(self):
+        self.reserve()
+        self.finalize()
+        before_nodes = dict(self.store.nodes)
+        before_edges = set(self.store.edges)
+        with (
+            mock.patch.object(self.store, "save_entity_raw", wraps=self.store.save_entity_raw) as save,
+            mock.patch.object(self.store, "add_relationship", wraps=self.store.add_relationship) as link,
+        ):
+            reserve_retry = self.reserve()
+            finalize_retry = self.finalize()
+        self.assertEqual(reserve_retry["projection_status"], "planned")
+        self.assertEqual(finalize_retry["projection_status"], "planned")
+        self.assertEqual(self.store.nodes, before_nodes)
+        self.assertEqual(self.store.edges, before_edges)
+        save.assert_not_called()
+        link.assert_not_called()
+
+    def test_finalized_retries_fail_closed_on_inconsistent_projection_identity(self):
+        reserved = self.reserve()
+        self.finalize()
+        child_slug = reserved["child_slug"]
+        self.store.nodes[child_slug] = self.store.nodes[child_slug].replace(
+            f"capture_id: {reserved['capture_id']}", "capture_id: CAP-9999", 1
+        )
+        with self.assertRaisesRegex(RuntimeError, "identity"):
+            self.reserve()
+        with self.assertRaisesRegex(RuntimeError, "identity"):
+            self.finalize()
+
     def test_finalize_reconciles_finalizing_child_missing_parent_projection(self):
         reservation = self.reserve()
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
@@ -430,7 +502,7 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
     def test_lease_renewal_preserves_owner_token_and_fence(self):
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", side_effect=[100, 100, 101, 101]):
             first = server.acquire_capture_queue_lease({"owner": "worker", "ttl_seconds": 10})
-            renewed = server.acquire_capture_queue_lease({
+            renewed = server.renew_capture_queue_lease({
                 "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 10,
             })
         self.assertEqual((renewed["owner"], renewed["token"], renewed["fence"]), (first["owner"], first["token"], first["fence"]))
@@ -440,12 +512,45 @@ class CaptureQueueAuthorityTests(unittest.TestCase):
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=100):
             first = server.acquire_capture_queue_lease({"owner": "worker", "ttl_seconds": 3})
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=102):
-            server.acquire_capture_queue_lease({
+            server.renew_capture_queue_lease({
                 "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 3,
             })
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=104):
             with self.assertRaisesRegex(RuntimeError, "leased by worker"):
                 server.acquire_capture_queue_lease({"owner": "competitor", "ttl_seconds": 3})
+
+    def test_lease_acquire_and_renew_are_distinct_and_renew_never_creates(self):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=100):
+            first = server.acquire_capture_queue_lease({"owner": "worker", "ttl_seconds": 1})
+            with self.assertRaisesRegex(ValueError, "acquire.*token|token.*acquire"):
+                server.acquire_capture_queue_lease({
+                    "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 1,
+                })
+            with self.assertRaisesRegex(RuntimeError, "mismatch|lost"):
+                server.renew_capture_queue_lease({
+                    "owner": "worker", "token": "wrong", "fence": first["fence"], "ttl_seconds": 1,
+                })
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.time.time", return_value=102):
+            with self.assertRaisesRegex(RuntimeError, "expired|lost"):
+                server.renew_capture_queue_lease({
+                    "owner": "worker", "token": first["token"], "fence": first["fence"], "ttl_seconds": 1,
+                })
+            ledger = server._capture_queue_load_ledger()
+        self.assertIsNone(ledger["lease"])
+
+    def test_lease_renew_http_route_is_explicit(self):
+        status, acquired = self.dispatch(
+            "/api/capture-queue/lease/acquire", {"owner": "worker", "ttl_seconds": 10}
+        )
+        self.assertEqual(status, 200)
+        status, renewed = self.dispatch("/api/capture-queue/lease/renew", {
+            "owner": "worker", "token": acquired["token"], "fence": acquired["fence"], "ttl_seconds": 10,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (renewed["owner"], renewed["token"], renewed["fence"]),
+            (acquired["owner"], acquired["token"], acquired["fence"]),
+        )
 
     def test_lost_owner_and_old_fence_cannot_mutate(self):
         with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store), mock.patch("server.time.time", return_value=100):
