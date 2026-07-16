@@ -5,8 +5,8 @@
 Keep the Memory Stargraph Knowledge Curator productive when
 [notes/memory-starmap-capture-list](http://127.0.0.1:8788/?slug=notes%2Fmemory-starmap-capture-list)
 has no planned requests. Instead of ending with a no-op, each empty-queue
-invocation enriches up to two existing person entities using reliable public
-evidence.
+invocation enriches up to two existing entities using reliable public
+evidence, prioritizing people before other entity types.
 
 This is a development workflow capability, not an end-user product feature.
 
@@ -18,12 +18,12 @@ semantics, and capture responsibilities remain unchanged.
 
 The new fallback runs only when the invocation's first authoritative capture
 snapshot contains zero planned items. A non-empty frozen snapshot always takes
-priority and is drained normally; person enrichment does not run afterward.
+priority and is drained normally; entity enrichment does not run afterward.
 
 ## Selection Contract
 
-For an empty snapshot, select up to two existing nodes whose effective type is
-`person`.
+For an empty snapshot, fill a maximum of two enrichment slots. Select eligible
+nodes whose effective type is `person` first.
 
 Rank candidates deterministically by enrichment need:
 
@@ -46,11 +46,28 @@ Skip:
   access controls, or privacy boundaries.
 
 Continue through the ranked candidates until two people have been attempted or
-the eligible candidate set is exhausted.
+the eligible person set is exhausted.
+
+If fewer than two eligible people are available, fill the remaining slots from
+other public entity types in this order:
+
+1. organizations or companies;
+2. teams or projects;
+3. products or technologies;
+4. other public entities with a clear evidence-backed enrichment opportunity.
+
+Apply the same enrichment-need ranking, 30-day cooldown, active-Run exclusion,
+privacy boundary, evidence threshold, and slug tie-breaker to these secondary
+candidates. The total cap remains two attempted entities per invocation,
+regardless of type.
+
+If no eligible candidates exist, record `no_eligible_candidates` in the
+Goal-linked Run and finish successfully. Never force speculative or low-value
+changes merely to fill the two slots.
 
 ## Enrichment Contract
 
-For each selected person:
+For each selected entity:
 
 1. read the current node, direct relationships, backlinks, files, and source
    provenance before changing anything;
@@ -76,7 +93,7 @@ capture privacy-sensitive data, or make broad schema changes.
 
 ## Results And Failure Handling
 
-Each selected person reaches one invocation result:
+Each attempted entity reaches one invocation result:
 
 - `enriched`: at least one material evidence-backed improvement passed all
   verification;
@@ -84,9 +101,12 @@ Each selected person reaches one invocation result:
   improvement was available;
 - `failed`: a real attempt failed, with the exact source, operation, evidence,
   retry path, and any human authority required.
+If no entity is attempted, the invocation records `no_eligible_candidates`
+because no responsible candidate existed after applying the people-first and
+secondary-entity selection rules.
 
 An `already_sufficient` result is not a failure and should update the
-last-reviewed timestamp so the person is not selected repeatedly.
+last-reviewed timestamp so the entity is not selected repeatedly.
 
 The worker does not create capture backlog requests for this fallback.
 Individual enrichment failures do not automatically create product TODOs.
@@ -100,7 +120,7 @@ The invocation's Goal-linked Run records:
 
 - the empty authoritative snapshot;
 - candidate-ranking inputs and excluded candidates;
-- the two selected person slugs, or why fewer were eligible;
+- the selected entity slugs and types, or why fewer than two were eligible;
 - sources and skills used;
 - browser surface and tab-reuse evidence;
 - before/after material changes;
@@ -119,10 +139,15 @@ http://127.0.0.1:8788/?slug=<URL-encoded-slug>
 Automation contract tests verify that:
 
 - enrichment runs only for an empty first authoritative snapshot;
-- the cap is exactly two attempted people;
+- the cap is two attempted entities, with fewer allowed only when the eligible
+  candidate set is exhausted;
 - selection is deterministic and prioritizes least-enriched people;
+- secondary candidates fill unused slots in the order organizations/companies,
+  teams/projects, products/technologies, then other public entities;
 - recently enriched, private, conflicting, and unreliable-source candidates
   are skipped;
+- an empty eligible set records `no_eligible_candidates` and succeeds without
+  speculative changes;
 - capture backlog work always takes priority;
 - public evidence, browser-tab reuse, provenance, duplicate prevention, human
   control, and verification requirements remain explicit;
@@ -133,7 +158,7 @@ Automation contract tests verify that:
 
 - a separate person-enrichment worker or schedule;
 - synthetic capture backlog items;
-- enriching more than two people per empty invocation;
+- enriching more than two entities per empty invocation;
 - automatic resolver approval;
 - speculative relationship creation;
 - private-source research without explicit authority;
