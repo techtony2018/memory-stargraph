@@ -1,0 +1,7 @@
+interface:
+  display_name: "Add Capture Link"
+  short_description: "Queue source material for later capture"
+  default_prompt: "Use $add-capture-link to queue this source for the Memory Stargraph worker without capturing it now, passing attached file paths literally."
+
+policy:
+  allow_implicit_invocation: true
