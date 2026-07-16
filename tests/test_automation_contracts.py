@@ -108,6 +108,13 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("push `main` to origin", prompt)
         self.assertIn("`main` merge/push result", prompt)
 
+    def test_retrospective_uses_timezone_aware_pacific_timestamp(self):
+        script = (ROOT / "scripts" / "automation" / "retrospect.sh").read_text()
+
+        self.assertIn('ZoneInfo("America/Los_Angeles")', script)
+        self.assertIn('pacific_stamp=', script)
+        self.assertNotIn("date -u", script)
+
 
 if __name__ == "__main__":
     unittest.main()

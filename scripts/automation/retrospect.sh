@@ -6,6 +6,14 @@ elapsed_seconds="${2:?usage: retrospect.sh automation-id elapsed-seconds summary
 summary_file="${3:?usage: retrospect.sh automation-id elapsed-seconds summary-file}"
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 memory_file="$codex_home/automations/$automation_id/memory.md"
+pacific_stamp="$(
+  python3 - <<'PY'
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+print(datetime.now(ZoneInfo("America/Los_Angeles")).replace(microsecond=0).isoformat())
+PY
+)"
 
 if [[ "$elapsed_seconds" -lt 300 ]]; then
   echo "retrospective skipped: elapsed ${elapsed_seconds}s is under 300s"
@@ -18,7 +26,7 @@ if [[ ! -f "$memory_file" ]]; then
 fi
 
 {
-  printf '\n## Retrospective %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '\n## Retrospective %s\n\n' "$pacific_stamp"
   printf -- '- Elapsed: %ss\n' "$elapsed_seconds"
   printf -- '- Source: %s\n\n' "$summary_file"
   cat "$summary_file"
