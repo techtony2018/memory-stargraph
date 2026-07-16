@@ -128,6 +128,43 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("gb-capture-linkedin", prompt)
         self.assertIn("must not upload or copy the bytes again", prompt)
 
+    def test_capture_worker_enriches_two_entities_only_when_snapshot_is_empty(self):
+        directory = ROOT / "automations/memory-stargraph-capture-link-drain"
+        prompt = (directory / "prompt.md").read_text()
+        heartbeat = (directory / "heartbeat-prompt.md").read_text()
+        bootstrap = (directory / "thread-bootstrap.md").read_text()
+        readme = (ROOT / "automations/README.md").read_text()
+        contract = "\n".join((prompt, heartbeat, bootstrap, readme))
+
+        required = (
+            "zero planned items",
+            "do not run entity enrichment",
+            "maximum of two enrichment slots",
+            "effective type is `person` first",
+            "organizations or companies",
+            "teams or projects",
+            "products or technologies",
+            "other public entities",
+            "previous 30 days",
+            "no_eligible_candidates",
+            "agent-reach",
+            "already_sufficient",
+            "must not create capture backlog requests",
+            "do not automatically create product TODOs",
+            "Memory Stargraph Quality & Learning Analyst",
+        )
+        for phrase in required:
+            self.assertIn(phrase, contract)
+
+        self.assertIn(
+            "A non-empty first authoritative snapshot always takes priority",
+            prompt,
+        )
+        self.assertIn(
+            "The total cap remains two attempted entities per invocation",
+            prompt,
+        )
+
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()
         self.assertIn("context.pages()", probe)
