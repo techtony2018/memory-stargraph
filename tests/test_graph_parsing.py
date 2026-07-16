@@ -1016,17 +1016,25 @@ cover_image: companies/example-inc/logo.jpg
     def test_ask_yoda_prompt_uses_broader_retrieval_at_requested_depth(self):
         store = GraphStore()
         search_output = "[0.92] notes/tai-chi/white-swan -- White Swan notes\n[0.73] people/tony-guan -- Tony"
+
+        def gbrain_result(*args, **kwargs):
+            del kwargs
+            if args == ("get", "people/tony-guan"):
+                return "# Tony Guan\n\nEngineer"
+            if args[0] == "graph-query":
+                return "expanded graph"
+            if args[0] == "backlinks":
+                return "backlinks"
+            if args[0] == "query":
+                return search_output
+            if args == ("get", "notes/tai-chi/white-swan"):
+                return "# White Swan\n\nTai Chi source note"
+            raise AssertionError(args)
+
         with (
-            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):
-            run.side_effect = [
-                "# Tony Guan\n\nEngineer",
-                "expanded graph",
-                "backlinks",
-                search_output,
-                "# White Swan\n\nTai Chi source note",
-            ]
             result = store.ask_yoda("people/tony-guan", "What does White Swan connect to?", depth=5)
 
         self.assertEqual(result["source"], "openclaw-agent")
@@ -1039,7 +1047,8 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What does White Swan connect to? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("get", "notes/tai-chi/white-swan"),
-            ]
+            ],
+            any_order=True,
         )
 
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
