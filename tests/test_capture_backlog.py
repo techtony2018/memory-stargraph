@@ -1,5 +1,6 @@
 import datetime as dt
 from pathlib import Path
+import json
 import subprocess
 import sys
 import unittest
@@ -90,6 +91,17 @@ class FakeGBrain:
         if command == "put":
             self.nodes[args[1]] = input_text or ""
             return subprocess.CompletedProcess(args, 0, "ok", "")
+        if command == "graph":
+            source = args[1]
+            relation = args[args.index("--link-type") + 1]
+            direction = args[args.index("--direction") + 1]
+            edges = [
+                {"from_slug": edge_source, "to_slug": edge_target, "link_type": edge_relation}
+                for edge_source, edge_target, edge_relation in sorted(self.links)
+                if edge_relation == relation
+                and ((direction == "out" and edge_source == source) or (direction == "in" and edge_target == source))
+            ]
+            return subprocess.CompletedProcess(args, 0, json.dumps(edges), "")
         if command in {"link", "unlink"}:
             relation = args[args.index("--link-type") + 1]
             edge = (args[1], args[2], relation)
@@ -267,6 +279,128 @@ class CaptureBacklogTests(unittest.TestCase):
             backend.links,
         )
 
+    def test_transition_retry_repairs_partial_parent_child_mirror_and_link_writes(self):
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+        scenarios = []
+
+        child_only = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        child_only.nodes[child_slug] = capture.update_child_status(
+            child_only.nodes[child_slug],
+            "capturing",
+            "failed",
+            "2026-07-15T05:00:00-07:00",
+            "source login required",
+        )
+        scenarios.append(child_only)
+
+        parent_only = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        parent_only.nodes[capture.ROOT_SLUG] = capture.transition(
+            parent_only.nodes[capture.ROOT_SLUG],
+            "CAP-0001",
+            "capturing",
+            "failed",
+            "2026-07-15T05:00:00-07:00",
+            "source login required",
+        )
+        scenarios.append(parent_only)
+
+        states_only = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        states_only.nodes[capture.ROOT_SLUG] = capture.transition(
+            states_only.nodes[capture.ROOT_SLUG],
+            "CAP-0001",
+            "capturing",
+            "failed",
+            "2026-07-15T05:00:00-07:00",
+            "source login required",
+        )
+        states_only.nodes[child_slug] = capture.update_child_status(
+            states_only.nodes[child_slug],
+            "capturing",
+            "failed",
+            "2026-07-15T05:00:00-07:00",
+            "source login required",
+        )
+        states_only.nodes[capture.FAILED_COLLECTION_SLUG] = capture.build_failed_collection([], NOW)
+        scenarios.append(states_only)
+
+        for backend in scenarios:
+            with self.subTest(calls=len(backend.calls)):
+                with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+                    capture.apply_transition(
+                        "CAP-0001", "capturing", "failed", "source login required", NOW
+                    )
+                parent = capture.parse_capture_rows(backend.nodes[capture.ROOT_SLUG])
+                failed = capture.parse_capture_rows(backend.nodes[capture.FAILED_COLLECTION_SLUG])
+                self.assertEqual(parent[0]["status"], "failed")
+                self.assertEqual(capture.child_status(backend.nodes[child_slug]), "failed")
+                self.assertEqual([row["id"] for row in failed], ["CAP-0001"])
+                self.assertIn(
+                    (capture.FAILED_COLLECTION_SLUG, child_slug, "has_failed_capture"),
+                    backend.links,
+                )
+                self.assertIn(
+                    (child_slug, capture.FAILED_COLLECTION_SLUG, "failed_capture_for"),
+                    backend.links,
+                )
+
+    def test_transition_retry_uses_metadata_from_already_written_parent(self):
+        backend = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+        original_stamp = "2026-07-15T05:00:00-07:00"
+        backend.nodes[capture.ROOT_SLUG] = capture.transition(
+            backend.nodes[capture.ROOT_SLUG],
+            "CAP-0001",
+            "capturing",
+            "failed",
+            original_stamp,
+            "original attempt",
+        )
+
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            capture.apply_transition(
+                "CAP-0001",
+                "capturing",
+                "failed",
+                "retry must not replace metadata",
+                NOW + dt.timedelta(hours=2),
+            )
+
+        child = backend.nodes[child_slug]
+        self.assertIn(f"updated_at: '{original_stamp}'", child)
+        self.assertIn(f"- {original_stamp}: capturing -> failed; original attempt", child)
+        self.assertNotIn("retry must not replace metadata", child)
+
+    def test_transition_inserts_attempt_inside_attempt_history_section_once(self):
+        markdown = child_markdown("CAP-0001", "capturing") + "\n## Evidence\n\nKeep me last.\n"
+        updated = capture.update_child_status(
+            markdown,
+            "capturing",
+            "failed",
+            "2026-07-15T05:00:00-07:00",
+            "login required",
+        )
+
+        self.assertLess(updated.index("capturing -> failed"), updated.index("## Evidence"))
+        self.assertTrue(updated.rstrip().endswith("Keep me last."))
+
+    def test_all_operations_reject_unknown_stored_status(self):
+        backend = FakeGBrain.with_one_request("CAP-0001", "planned")
+        backend.nodes[capture.ROOT_SLUG] = backend.nodes[capture.ROOT_SLUG].replace(
+            "| CAP-0001 | planned |", "| CAP-0001 | implementing |"
+        )
+
+        operations = [
+            lambda: capture.list_backlog(),
+            lambda: capture.create_snapshot(NOW),
+            lambda: capture.apply_transition("CAP-0001", "planned", "capturing", "run", NOW),
+            lambda: capture.apply_compaction(NOW),
+        ]
+        for operation in operations:
+            with self.subTest(operation=operation):
+                with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+                    with self.assertRaisesRegex(ValueError, "unsupported stored status implementing"):
+                        operation()
+
     def test_compaction_is_idempotent_at_fifty_completed_rows(self):
         backend = FakeGBrain.with_completed_requests(50)
         with mock.patch.object(capture, "run_gbrain", side_effect=backend):
@@ -300,6 +434,139 @@ class CaptureBacklogTests(unittest.TestCase):
                 capture.apply_compaction(NOW)
 
         self.assertEqual(backend.nodes[archive_slug], "immutable existing archive")
+
+    def test_compaction_resumes_matching_unindexed_immutable_archive(self):
+        backend = FakeGBrain.with_completed_requests(50)
+        archive_slug = f"{capture.ARCHIVE_PREFIX}0001"
+        rows = capture.parse_capture_rows(backend.nodes[capture.ROOT_SLUG])
+        backend.nodes[archive_slug] = capture.build_archive(archive_slug, 1, rows, NOW)
+
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            result = capture.apply_compaction(NOW + dt.timedelta(hours=1))
+
+        self.assertEqual(result["resumed_archives"], [archive_slug])
+        self.assertEqual(capture.parse_archive_index(backend.nodes[capture.ROOT_SLUG])[0]["slug"], archive_slug)
+        self.assertIn((capture.ROOT_SLUG, archive_slug, "has_completed_archive"), backend.links)
+        self.assertIn((archive_slug, capture.ROOT_SLUG, "completed_archive_for"), backend.links)
+        self.assertIn(
+            (archive_slug, f"{capture.ROOT_SLUG}/cap-0001", "contains_capture_request"),
+            backend.links,
+        )
+
+    def test_exact_readback_rejects_wrong_parent_row_despite_matching_marker_text(self):
+        class CorruptingBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                result = super().__call__(args, input_text, timeout)
+                if args[:2] == ["put", capture.ROOT_SLUG]:
+                    self.nodes[capture.ROOT_SLUG] += "\n<!-- | CAP-0001 | failed | -->\n"
+                    self.nodes[capture.ROOT_SLUG] = self.nodes[capture.ROOT_SLUG].replace(
+                        "| CAP-0001 | failed |", "| CAP-0001 | capturing |", 1
+                    )
+                return result
+
+        source = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        backend = CorruptingBackend(source.nodes)
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "parent row readback mismatch"):
+                capture.apply_transition("CAP-0001", "capturing", "failed", "login", NOW)
+
+    def test_exact_readback_uses_child_frontmatter_not_body_marker(self):
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+
+        class CorruptingBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                result = super().__call__(args, input_text, timeout)
+                if args[:2] == ["put", child_slug]:
+                    self.nodes[child_slug] = self.nodes[child_slug].replace(
+                        "status: failed", "status: capturing", 1
+                    ) + "\nstatus: failed\n"
+                return result
+
+        source = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        backend = CorruptingBackend(source.nodes)
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "child status readback mismatch"):
+                capture.apply_transition("CAP-0001", "capturing", "failed", "login", NOW)
+
+    def test_exact_readback_rejects_corrupted_child_transition_metadata(self):
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+
+        class CorruptingBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                result = super().__call__(args, input_text, timeout)
+                if args[:2] == ["put", child_slug]:
+                    self.nodes[child_slug] = self.nodes[child_slug].replace(
+                        "updated_at: '2026-07-15T05:00:00-07:00'",
+                        "updated_at: '1999-01-01T00:00:00-08:00'",
+                    ).replace(
+                        "- 2026-07-15T05:00:00-07:00: capturing -> failed; login\n",
+                        "",
+                    )
+                return result
+
+        source = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        backend = CorruptingBackend(source.nodes)
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "child transition readback mismatch"):
+                capture.apply_transition("CAP-0001", "capturing", "failed", "login", NOW)
+
+    def test_exact_readback_rejects_corruption_of_other_parent_rows(self):
+        rows = [make_row("CAP-0001", "capturing"), make_row("CAP-0002", "planned")]
+        root = capture.replace_capture_table(capture.build_root(NOW), rows)
+        child_slug = f"{capture.ROOT_SLUG}/cap-0001"
+
+        class CorruptingBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                result = super().__call__(args, input_text, timeout)
+                if args[:2] == ["put", capture.ROOT_SLUG]:
+                    kept = [
+                        row
+                        for row in capture.parse_capture_rows(self.nodes[capture.ROOT_SLUG])
+                        if row["id"] == "CAP-0001"
+                    ]
+                    self.nodes[capture.ROOT_SLUG] = capture.replace_capture_table(
+                        self.nodes[capture.ROOT_SLUG], kept
+                    )
+                return result
+
+        backend = CorruptingBackend(
+            {
+                capture.ROOT_SLUG: root,
+                child_slug: child_markdown("CAP-0001", "capturing"),
+                capture.FAILED_COLLECTION_SLUG: capture.build_failed_collection([], NOW),
+            }
+        )
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "parent row readback mismatch"):
+                capture.apply_transition("CAP-0001", "capturing", "failed", "login", NOW)
+
+    def test_exact_readback_rejects_failed_mirror_row_when_absence_expected(self):
+        class CorruptingBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                result = super().__call__(args, input_text, timeout)
+                if args[:2] == ["put", capture.FAILED_COLLECTION_SLUG]:
+                    rows = [make_row("CAP-0001", "failed")]
+                    self.nodes[capture.FAILED_COLLECTION_SLUG] = capture.build_failed_collection(rows, NOW)
+                return result
+
+        source = FakeGBrain.with_one_request("CAP-0001", "failed")
+        backend = CorruptingBackend(source.nodes)
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "failed mirror readback mismatch"):
+                capture.apply_transition("CAP-0001", "failed", "planned", "requeued", NOW)
+
+    def test_link_write_is_verified_by_exact_graph_readback(self):
+        class DroppingLinkBackend(FakeGBrain):
+            def __call__(self, args, input_text=None, timeout=180):
+                if args[0] == "link":
+                    return subprocess.CompletedProcess(args, 0, "ok", "")
+                return super().__call__(args, input_text, timeout)
+
+        source = FakeGBrain.with_one_request("CAP-0001", "capturing")
+        backend = DroppingLinkBackend(source.nodes)
+        with mock.patch.object(capture, "run_gbrain", side_effect=backend):
+            with self.assertRaisesRegex(RuntimeError, "link readback mismatch"):
+                capture.apply_transition("CAP-0001", "capturing", "failed", "login", NOW)
 
     def test_manager_remains_directly_invocable(self):
         root = Path(__file__).resolve().parents[1]

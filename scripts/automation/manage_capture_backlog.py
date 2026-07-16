@@ -125,7 +125,18 @@ Root backlog: [[{ROOT_SLUG}]]
 
 
 def parse_capture_rows(markdown: str) -> list[dict[str, str]]:
-    return parse_rows(markdown, CAPTURE_SPEC)
+    rows = parse_rows(markdown, CAPTURE_SPEC)
+    validate_capture_rows(rows)
+    return rows
+
+
+def validate_capture_rows(rows: list[dict[str, str]]) -> None:
+    for row in rows:
+        status = row.get("status", "")
+        if status not in ALLOWED_STATUSES:
+            raise ValueError(
+                f"unsupported stored status {status or 'missing'} for {row.get('id') or 'unknown capture'}"
+            )
 
 
 def parse_archive_index(markdown: str) -> list[dict[str, object]]:
@@ -155,6 +166,7 @@ def replace_capture_table(
 
 
 def freeze_snapshot(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    validate_capture_rows(rows)
     return sorted((dict(row) for row in rows if row.get("status") == "planned"), key=item_number)
 
 
@@ -230,12 +242,41 @@ def get_optional(slug: str) -> str | None:
     raise RuntimeError(error)
 
 
-def put_verified(slug: str, markdown: str, expected_marker: str) -> None:
+def put_readback(slug: str, markdown: str) -> str:
     result = run_gbrain(["put", slug], input_text=markdown)
     if result.returncode:
         raise RuntimeError(result_error(result))
-    if expected_marker not in get_required(slug):
-        raise RuntimeError(f"readback marker missing for {slug}: {expected_marker}")
+    return get_required(slug)
+
+
+def graph_edges(source: str, relation: str) -> list[dict[str, object]]:
+    result = run_gbrain(
+        ["graph", source, "--depth", "1", "--link-type", relation, "--direction", "out"]
+    )
+    if result.returncode:
+        raise RuntimeError(result_error(result))
+    try:
+        edges = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid graph readback for {source}: {exc}") from exc
+    if not isinstance(edges, list):
+        raise RuntimeError(f"invalid graph readback for {source}: expected a list")
+    return [edge for edge in edges if isinstance(edge, dict)]
+
+
+def verify_link(source: str, target: str, relation: str, present: bool) -> None:
+    matches = [
+        edge
+        for edge in graph_edges(source, relation)
+        if edge.get("from_slug") == source
+        and edge.get("to_slug") == target
+        and edge.get("link_type") == relation
+    ]
+    if bool(matches) != present:
+        expectation = "present" if present else "absent"
+        raise RuntimeError(
+            f"link readback mismatch: expected {source} -[{relation}]-> {target} to be {expectation}"
+        )
 
 
 def link(source: str, target: str, relation: str) -> None:
@@ -252,6 +293,7 @@ def link(source: str, target: str, relation: str) -> None:
     )
     if result.returncode and "already" not in result_error(result).lower():
         raise RuntimeError(result_error(result))
+    verify_link(source, target, relation, True)
 
 
 def unlink(source: str, target: str, relation: str) -> None:
@@ -268,23 +310,29 @@ def unlink(source: str, target: str, relation: str) -> None:
     )
     if result.returncode and "not found" not in result_error(result).lower():
         raise RuntimeError(result_error(result))
+    verify_link(source, target, relation, False)
 
 
 def apply_init(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_optional(ROOT_SLUG)
     failed = get_optional(FAILED_COLLECTION_SLUG)
     if root is None:
-        put_verified(ROOT_SLUG, build_root(now), "# Memory Starmap Capture List")
+        expected_root = build_root(now)
+        readback = put_readback(ROOT_SLUG, expected_root)
+        if parse_capture_rows(readback) != [] or "# Memory Starmap Capture List" not in readback:
+            raise RuntimeError(f"root readback mismatch: {ROOT_SLUG}")
     elif "# Memory Starmap Capture List" not in root:
         raise RuntimeError(f"existing node has unexpected content: {ROOT_SLUG}")
+    else:
+        parse_capture_rows(root)
     if failed is None:
-        put_verified(
-            FAILED_COLLECTION_SLUG,
-            build_failed_collection([], now),
-            "# Memory Starmap Failed Capture Items",
-        )
+        readback = put_readback(FAILED_COLLECTION_SLUG, build_failed_collection([], now))
+        if parse_capture_rows(readback) != [] or "# Memory Starmap Failed Capture Items" not in readback:
+            raise RuntimeError(f"failed mirror readback mismatch: {FAILED_COLLECTION_SLUG}")
     elif "# Memory Starmap Failed Capture Items" not in failed:
         raise RuntimeError(f"existing node has unexpected content: {FAILED_COLLECTION_SLUG}")
+    else:
+        parse_capture_rows(failed)
     link(ROOT_SLUG, FAILED_COLLECTION_SLUG, "has_failed_collection")
     link(FAILED_COLLECTION_SLUG, ROOT_SLUG, "failed_collection_for")
     return {
@@ -313,15 +361,103 @@ def update_child_status(
     updated: str,
     notes: str,
 ) -> str:
-    status_match = re.search(r"(?m)^status:\s*(\S+)\s*$", markdown)
-    found = status_match.group(1) if status_match else None
+    found = child_status(markdown)
     if found != expected:
         raise ValueError(f"expected child {expected}, found {found or 'missing'}")
-    result = re.sub(r"(?m)^status:\s*\S+\s*$", f"status: {target}", markdown, count=1)
-    if re.search(r"(?m)^updated_at:", result):
-        result = re.sub(r"(?m)^updated_at:.*$", f"updated_at: '{updated}'", result, count=1)
+    frontmatter_end = markdown.find("\n---", 4)
+    if frontmatter_end < 0:
+        raise ValueError("child frontmatter is missing a closing delimiter")
+    frontmatter = markdown[:frontmatter_end]
+    result = (
+        re.sub(r"(?m)^status:\s*\S+\s*$", f"status: {target}", frontmatter, count=1)
+        + markdown[frontmatter_end:]
+    )
+    frontmatter_end = result.find("\n---", 4)
+    frontmatter = result[:frontmatter_end]
+    if re.search(r"(?m)^updated_at:", frontmatter):
+        frontmatter = re.sub(r"(?m)^updated_at:.*$", f"updated_at: '{updated}'", frontmatter, count=1)
+        result = frontmatter + result[frontmatter_end:]
     history = f"- {updated}: {expected} -> {target}; {notes}"
-    return result.rstrip() + "\n\n" + history + "\n"
+    section = re.search(r"(?m)^## Attempt History\s*$", result)
+    if not section:
+        raise ValueError("child is missing ## Attempt History")
+    next_section = re.search(r"(?m)^## ", result[section.end() :])
+    end = section.end() + next_section.start() if next_section else len(result)
+    before = result[:end].rstrip()
+    after = result[end:].lstrip("\n")
+    combined = before + "\n\n" + history + "\n"
+    if after:
+        combined += "\n" + after
+    return combined
+
+
+def child_status(markdown: str) -> str:
+    if not markdown.startswith("---\n"):
+        raise ValueError("child frontmatter is missing")
+    end = markdown.find("\n---", 4)
+    if end < 0:
+        raise ValueError("child frontmatter is missing a closing delimiter")
+    match = re.search(r"(?m)^status:\s*([^\s#]+)\s*$", markdown[4:end])
+    if not match:
+        raise ValueError("child frontmatter status is missing")
+    status = match.group(1)
+    if status not in ALLOWED_STATUSES:
+        raise ValueError(f"unsupported stored status {status} for child")
+    return status
+
+
+def child_transition_metadata(markdown: str, expected: str, target: str) -> tuple[str, str]:
+    fields = frontmatter_fields(markdown)
+    updated = fields.get("updated_at", "")
+    if not updated:
+        raise RuntimeError("child transition updated_at is missing")
+    section = re.search(r"(?m)^## Attempt History\s*$", markdown)
+    if not section:
+        raise RuntimeError("child transition history is missing")
+    next_section = re.search(r"(?m)^## ", markdown[section.end() :])
+    end = section.end() + next_section.start() if next_section else len(markdown)
+    prefix = f"- {updated}: {expected} -> {target}; "
+    matching = [
+        line[len(prefix) :]
+        for line in markdown[section.end() : end].splitlines()
+        if line.startswith(prefix)
+    ]
+    if len(matching) != 1:
+        raise RuntimeError("child transition history entry mismatch")
+    return updated, matching[0]
+
+
+def verify_parent_root(markdown: str, expected_markdown: str) -> None:
+    if (
+        parse_capture_rows(markdown) != parse_capture_rows(expected_markdown)
+        or parse_archive_index(markdown) != parse_archive_index(expected_markdown)
+    ):
+        raise RuntimeError("parent row readback mismatch (full root/index)")
+
+
+def verify_child_transition(
+    markdown: str,
+    expected: str,
+    target: str,
+    updated: str,
+    notes: str,
+    exact_markdown: str | None = None,
+) -> None:
+    if child_status(markdown) != target:
+        raise RuntimeError(f"child status readback mismatch for {target}")
+    try:
+        metadata = child_transition_metadata(markdown, expected, target)
+    except RuntimeError as exc:
+        raise RuntimeError("child transition readback mismatch") from exc
+    if metadata != (updated, notes):
+        raise RuntimeError("child transition readback mismatch")
+    if exact_markdown is not None and markdown != exact_markdown:
+        raise RuntimeError("child transition readback mismatch")
+
+
+def verify_failed_mirror(markdown: str, expected_rows: list[dict[str, str]]) -> None:
+    if parse_capture_rows(markdown) != expected_rows:
+        raise RuntimeError("failed mirror readback mismatch")
 
 
 def apply_transition(
@@ -331,6 +467,8 @@ def apply_transition(
     notes: str,
     now: dt.datetime | None = None,
 ) -> dict[str, object]:
+    if expected not in ALLOWED_STATUSES or target not in ALLOWED_STATUSES:
+        raise ValueError("unsupported status")
     stamp = pacific_iso(now)
     root = get_required(ROOT_SLUG)
     rows = parse_capture_rows(root)
@@ -340,28 +478,86 @@ def apply_transition(
     child_slug = node_slug(matches[0])
     if not child_slug:
         raise ValueError(f"missing child node for {capture_id}")
-    updated_root = transition(root, capture_id, expected, target, stamp, notes)
-    updated_child = update_child_status(get_required(child_slug), expected, target, stamp, notes)
+    parent_row = matches[0]
+    if parent_row["status"] not in {expected, target}:
+        raise ValueError(
+            f"expected parent {expected} or reconciled {target}, found {parent_row['status']}"
+        )
 
-    put_verified(child_slug, updated_child, f"status: {target}")
-    put_verified(ROOT_SLUG, updated_root, f"| {capture_id} | {target} |")
+    child = get_required(child_slug)
+    found_child_status = child_status(child)
+    if found_child_status not in {expected, target}:
+        raise ValueError(
+            f"expected child {expected} or reconciled {target}, found {found_child_status}"
+        )
 
-    updated_rows = parse_capture_rows(get_required(ROOT_SLUG))
+    parent_at_target = parent_row["status"] == target
+    child_at_target = found_child_status == target
+    normalized_notes = " ".join(notes.splitlines()).strip()
+    if parent_at_target:
+        canonical_stamp = parent_row["updated"]
+        canonical_notes = parent_row["notes"]
+        if child_at_target and child_transition_metadata(child, expected, target) != (
+            canonical_stamp,
+            canonical_notes,
+        ):
+            raise RuntimeError(f"inconsistent reconciled transition metadata for {capture_id}")
+    elif child_at_target:
+        canonical_stamp, canonical_notes = child_transition_metadata(child, expected, target)
+    else:
+        canonical_stamp, canonical_notes = stamp, normalized_notes
+
+    if parent_at_target:
+        updated_root = root
+    else:
+        updated_root = transition(
+            root, capture_id, expected, target, canonical_stamp, canonical_notes
+        )
+    if child_at_target:
+        updated_child = child
+    else:
+        updated_child = update_child_status(
+            child, expected, target, canonical_stamp, canonical_notes
+        )
+
+    # Validate the existing mirror before mutating it, even though it will be rebuilt from the root.
+    parse_capture_rows(get_required(FAILED_COLLECTION_SLUG))
+
+    if updated_child != child:
+        child_readback = put_readback(child_slug, updated_child)
+    else:
+        child_readback = child
+    verify_child_transition(
+        child_readback,
+        expected,
+        target,
+        canonical_stamp,
+        canonical_notes,
+        updated_child if updated_child != child else None,
+    )
+
+    if updated_root != root:
+        root_readback = put_readback(ROOT_SLUG, updated_root)
+    else:
+        root_readback = root
+    verify_parent_root(root_readback, updated_root)
+
+    updated_rows = parse_capture_rows(root_readback)
     failed_rows = [row for row in updated_rows if row.get("status") == "failed"]
     failed_markdown = build_failed_collection(failed_rows, now)
-    failed_marker = f"| {capture_id} | failed |" if target == "failed" else "# Memory Starmap Failed Capture Items"
-    put_verified(FAILED_COLLECTION_SLUG, failed_markdown, failed_marker)
+    failed_readback = put_readback(FAILED_COLLECTION_SLUG, failed_markdown)
+    verify_failed_mirror(failed_readback, failed_rows)
     if target == "failed":
         link(FAILED_COLLECTION_SLUG, child_slug, "has_failed_capture")
         link(child_slug, FAILED_COLLECTION_SLUG, "failed_capture_for")
-    if expected == "failed" and target != "failed":
+    else:
         unlink(FAILED_COLLECTION_SLUG, child_slug, "has_failed_capture")
         unlink(child_slug, FAILED_COLLECTION_SLUG, "failed_capture_for")
     return {
         "capture_id": capture_id,
         "status": target,
         "child_slug": child_slug,
-        "updated_at": stamp,
+        "updated_at": canonical_stamp,
     }
 
 
@@ -369,8 +565,60 @@ def existing_archives(root_markdown: str) -> dict[str, list[dict[str, str]]]:
     archives: dict[str, list[dict[str, str]]] = {}
     for entry in parse_archive_index(root_markdown):
         slug = str(entry["slug"])
-        archives[slug] = parse_capture_rows(get_required(slug))
+        markdown = get_required(slug)
+        rows = parse_capture_rows(markdown)
+        validate_archive(markdown, slug, int(entry["sequence"]), rows)
+        expected_index = {
+            "slug": slug,
+            "sequence": int(entry["sequence"]),
+            "first_id": rows[0]["id"] if rows else "",
+            "last_id": rows[-1]["id"] if rows else "",
+            "count": len(rows),
+        }
+        if entry != expected_index:
+            raise RuntimeError(f"archive index readback mismatch for {slug}")
+        archives[slug] = rows
     return archives
+
+
+def frontmatter_fields(markdown: str) -> dict[str, str]:
+    if not markdown.startswith("---\n"):
+        raise ValueError("frontmatter is missing")
+    end = markdown.find("\n---", 4)
+    if end < 0:
+        raise ValueError("frontmatter is missing a closing delimiter")
+    fields: dict[str, str] = {}
+    for line in markdown[4:end].splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            fields[key.strip()] = value.strip().strip("'\"")
+    return fields
+
+
+def validate_archive(
+    markdown: str,
+    slug: str,
+    sequence: int,
+    expected_rows: list[dict[str, str]],
+) -> None:
+    fields = frontmatter_fields(markdown)
+    exact_fields = {
+        "type": "collection",
+        "title": f"Memory Starmap Completed Capture Archive {sequence:04d}",
+        "status": "immutable",
+        "timezone": "America/Los_Angeles",
+    }
+    if any(fields.get(key) != value for key, value in exact_fields.items()) or not fields.get("captured_at"):
+        raise RuntimeError(f"immutable archive metadata mismatch for {slug}")
+    try:
+        captured_at = dt.datetime.fromisoformat(fields["captured_at"])
+    except ValueError as exc:
+        raise RuntimeError(f"immutable archive timestamp mismatch for {slug}") from exc
+    if captured_at.tzinfo is None:
+        raise RuntimeError(f"immutable archive timestamp mismatch for {slug}")
+    expected_markdown = build_archive(slug, sequence, expected_rows, captured_at)
+    if markdown != expected_markdown or parse_capture_rows(markdown) != expected_rows:
+        raise RuntimeError(f"immutable archive content mismatch for {slug}")
 
 
 def compaction_preview(
@@ -382,18 +630,33 @@ def compaction_preview(
 
 def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
     root = get_required(ROOT_SLUG)
-    plan, _ = compaction_preview(root)
+    plan, indexed_archives = compaction_preview(root)
+    parse_capture_rows(get_required(FAILED_COLLECTION_SLUG))
     created: list[str] = []
+    resumed: list[str] = []
+    reconciled_archives = dict(indexed_archives)
     for archive in plan.archives_to_create:
         slug = str(archive["slug"])
         sequence = int(archive["sequence"])
         rows = archive["rows"]
         assert isinstance(rows, list)
-        if get_optional(slug) is not None:
-            raise RuntimeError(f"archive already exists but is missing from the root index: {slug}")
         markdown = build_archive(slug, sequence, rows, now)
-        put_verified(slug, markdown, f"Archive slug: `{slug}`")
-        created.append(slug)
+        existing = get_optional(slug)
+        if existing is None:
+            readback = put_readback(slug, markdown)
+            validate_archive(readback, slug, sequence, rows)
+            created.append(slug)
+        else:
+            try:
+                validate_archive(existing, slug, sequence, rows)
+            except (RuntimeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"archive already exists but is missing from the root index and content mismatches: {slug}"
+                ) from exc
+            resumed.append(slug)
+        reconciled_archives[slug] = rows
+
+    for slug, rows in reconciled_archives.items():
         link(ROOT_SLUG, slug, "has_completed_archive")
         link(slug, ROOT_SLUG, "completed_archive_for")
         for row in rows:
@@ -402,17 +665,18 @@ def apply_compaction(now: dt.datetime | None = None) -> dict[str, object]:
                 link(slug, child_slug, "contains_capture_request")
 
     failed_markdown = build_failed_collection(plan.failed_rows, now)
-    put_verified(FAILED_COLLECTION_SLUG, failed_markdown, "# Memory Starmap Failed Capture Items")
+    failed_readback = put_readback(FAILED_COLLECTION_SLUG, failed_markdown)
+    verify_failed_mirror(failed_readback, plan.failed_rows)
     updated_root = replace_capture_table(root, plan.active_rows, plan.archive_index)
-    put_verified(ROOT_SLUG, updated_root, "# Memory Starmap Capture List")
-    readback_count = len(parse_capture_rows(get_required(ROOT_SLUG)))
-    if readback_count != len(plan.active_rows):
-        raise RuntimeError(
-            f"root readback row count mismatch: expected {len(plan.active_rows)}, got {readback_count}"
-        )
+    root_readback = put_readback(ROOT_SLUG, updated_root)
+    readback_rows = parse_capture_rows(root_readback)
+    readback_index = parse_archive_index(root_readback)
+    if readback_rows != plan.active_rows or readback_index != plan.archive_index:
+        raise RuntimeError("root compaction readback mismatch")
     return {
         "created_archives": created,
-        "active_rows": readback_count,
+        "resumed_archives": resumed,
+        "active_rows": len(readback_rows),
         "failed_rows": len(plan.failed_rows),
     }
 
