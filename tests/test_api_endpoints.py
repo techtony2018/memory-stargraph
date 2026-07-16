@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -132,6 +133,163 @@ class SingleRowTakeStore(FakeStore):
             "holder": "people/tony-guan",
             "takes": [],
         }
+
+
+class FakeCaptureQueueStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.nodes = {server.CAPTURE_QUEUE_PARENT_SLUG: server.capture_queue_empty_parent("2026-07-15T09:30:00-07:00")}
+        self.edges = set()
+        self.guard = threading.Lock()
+
+    def get_entity_raw(self, slug):
+        with self.guard:
+            return self.nodes.get(slug)
+
+    def save_entity_raw(self, slug, content):
+        with self.guard:
+            self.nodes[slug] = content
+
+    def add_relationship(self, source_slug, target_slug, link_type, context=""):
+        with self.guard:
+            self.edges.add((source_slug, target_slug, link_type))
+
+    def remove_relationship(self, source_slug, target_slug, link_type=""):
+        with self.guard:
+            self.edges.discard((source_slug, target_slug, link_type))
+
+
+class CaptureQueueAuthorityTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmp.name)
+        self.store = FakeCaptureQueueStore()
+        self.payload = {
+            "idempotency_key": "codex-host_a.request_001",
+            "source": "https://example.com/a",
+            "source_kind": "url",
+            "instructions": "Capture this page",
+            "target": "",
+            "collection": "",
+            "relationships": [],
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def reserve(self, payload=None):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            return server.reserve_capture_request(dict(self.payload if payload is None else payload), now="2026-07-15T09:30:00-07:00")
+
+    def finalize(self, key=None, attachments=None):
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            return server.finalize_capture_request({
+                "idempotency_key": key or self.payload["idempotency_key"],
+                "attachments": list(attachments or []),
+            }, now="2026-07-15T09:31:00-07:00")
+
+    def dispatch(self, path, payload):
+        handler = object.__new__(MemoryStargraphHandler)
+        handler.path = path
+        captured = {}
+        handler.read_json_body = types.MethodType(lambda _self: payload, handler)
+
+        def end_json(_self, response_payload, status=200):
+            captured["status"] = int(status)
+            captured["payload"] = json.loads(json.dumps(response_payload))
+            return captured["payload"]
+
+        handler.end_json = types.MethodType(end_json, handler)
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            MemoryStargraphHandler.do_POST(handler)
+        return captured["status"], captured["payload"]
+
+    def test_reserve_and_finalize_http_routes_use_the_server_authority(self):
+        status, reserved = self.dispatch("/api/capture-queue/reserve", self.payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(reserved["status"], "capture-recovery")
+        status, finalized = self.dispatch("/api/capture-queue/finalize", {
+            "idempotency_key": self.payload["idempotency_key"],
+            "attachments": [],
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(finalized["status"], "planned")
+        status, rejected = self.dispatch("/api/capture-queue/reserve", dict(self.payload, capture_id="CAP-9999"))
+        self.assertEqual(status, 400)
+        self.assertIn("forbidden", rejected["error"])
+
+    def test_concurrent_reservations_allocate_distinct_capture_ids_under_server_lock(self):
+        payloads = [dict(self.payload, idempotency_key=f"host.request_{index}") for index in range(12)]
+        barrier = threading.Barrier(len(payloads))
+        results, errors = [], []
+
+        def reserve(payload):
+            try:
+                barrier.wait()
+                results.append(server.reserve_capture_request(payload, now="2026-07-15T09:30:00-07:00"))
+            except Exception as exc:
+                errors.append(exc)
+
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            threads = [threading.Thread(target=reserve, args=(payload,)) for payload in payloads]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(5)
+        self.assertFalse(errors)
+        self.assertEqual(len(results), 12)
+        self.assertEqual(len({item["capture_id"] for item in results}), 12)
+        self.assertEqual(len({item["child_slug"] for item in results}), 12)
+
+    def test_reserve_and_finalize_retries_return_same_authoritative_result(self):
+        first = self.reserve()
+        second = self.reserve()
+        self.assertEqual(first, second)
+        finalized = self.finalize()
+        retried = self.finalize()
+        self.assertEqual(finalized, retried)
+        self.assertEqual(finalized["capture_id"], first["capture_id"])
+        self.assertEqual(finalized["child_slug"], first["child_slug"])
+        self.assertEqual(finalized["status"], "planned")
+
+    def test_finalize_reconciles_planned_child_missing_parent_and_reverse_links(self):
+        reservation = self.reserve()
+        with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+            server.finalize_capture_request(
+                {"idempotency_key": self.payload["idempotency_key"], "attachments": []},
+                now="2026-07-15T09:31:00-07:00",
+                stop_after_child_for_test=True,
+            )
+        result = self.finalize()
+        parent = self.store.nodes[server.CAPTURE_QUEUE_PARENT_SLUG]
+        self.assertEqual(parent.count(f"| {reservation['capture_id']} | planned |"), 1)
+        self.assertIn((server.CAPTURE_QUEUE_PARENT_SLUG, reservation["child_slug"], "has_capture_request"), self.store.edges)
+        self.assertIn((reservation["child_slug"], server.CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"), self.store.edges)
+        self.assertTrue(result["graph_verified"])
+
+    def test_reserve_and_finalize_reject_invalid_bodies_and_client_authority_fields(self):
+        invalid = [
+            {},
+            dict(self.payload, idempotency_key="spaces are forbidden"),
+            dict(self.payload, idempotency_key="../escape"),
+            dict(self.payload, source_kind="bogus"),
+            dict(self.payload, child_slug="client/chosen"),
+            dict(self.payload, capture_id="CAP-9999"),
+            dict(self.payload, status="planned"),
+        ]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.reserve(payload)
+        self.reserve()
+        for payload in (
+            {},
+            {"idempotency_key": self.payload["idempotency_key"], "child_slug": "client/chosen"},
+            {"idempotency_key": self.payload["idempotency_key"], "capture_id": "CAP-9999"},
+            {"idempotency_key": self.payload["idempotency_key"], "status": "planned"},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                with mock.patch("server.DATA_DIR", self.data_dir), mock.patch("server.STORE", self.store):
+                    server.finalize_capture_request(payload, now="2026-07-15T09:31:00-07:00")
 
 
 class ApiEndpointTests(unittest.TestCase):

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+from contextlib import contextmanager
+import datetime as dt
 import email
 import email.policy
+import fcntl
 import hashlib
 import json
 import math
@@ -23,6 +27,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 from urllib.parse import parse_qs
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 
 APP_NAME = "Memory Stargraph"
@@ -109,6 +114,13 @@ YODA_SETTINGS_PATH = DATA_DIR / "yoda_settings.json"
 RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
 RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
 RESOLVER_DREAM_LOG_PATH = DATA_DIR / "resolver_dream_runs.json"
+CAPTURE_QUEUE_PARENT_SLUG = "notes/memory-starmap-capture-list"
+CAPTURE_QUEUE_TABLE_HEADER = "| id | status | source kind | source | target | node | updated | notes |"
+CAPTURE_QUEUE_TABLE_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- |"
+CAPTURE_QUEUE_SOURCE_KINDS = {"url", "file", "pdf", "text", "slug", "linkedin", "wechat", "x", "profile", "mixed"}
+CAPTURE_QUEUE_KEY_RE = re.compile(r"[A-Za-z0-9._~-]{8,200}")
+CAPTURE_QUEUE_RESERVATION_RE = re.compile(r"<!-- capture-queue-reservation: ([A-Za-z0-9_-]+) -->")
+CAPTURE_QUEUE_THREAD_LOCK = threading.Lock()
 GBRAIN = Path(str(CONFIG["gbrain_path"])).expanduser()
 MAX_LIST_PAGES = int(CONFIG["max_list_pages"])
 GRAPH_DEPTH = int(CONFIG["graph_depth"])
@@ -185,6 +197,8 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "timeline-view", "method": "GET", "endpoint": "/api/entity-timeline-view/<slug>", "mutates_gbrain": False},
     {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
+    {"action": "capture-queue-reserve", "method": "POST", "endpoint": "/api/capture-queue/reserve", "mutates_gbrain": True},
+    {"action": "capture-queue-finalize", "method": "POST", "endpoint": "/api/capture-queue/finalize", "mutates_gbrain": True},
     {"action": "embed", "method": "POST", "endpoint": "/api/entity-embed/<slug>", "mutates_gbrain": True},
     {"action": "take-review", "method": "GET", "endpoint": "/api/take-proposals", "mutates_gbrain": False},
     {"action": "take-review-accept", "method": "POST", "endpoint": "/api/take-proposals/<id>/accept", "mutates_gbrain": True},
@@ -386,6 +400,340 @@ def write_json_file(path, data):
         json.dump(data, handle, indent=2, sort_keys=True)
         handle.write("\n")
     temp_path.replace(path)
+
+
+def capture_queue_timestamp(now=None):
+    if isinstance(now, str):
+        value = dt.datetime.fromisoformat(now)
+    else:
+        value = now or dt.datetime.now(dt.timezone.utc)
+    if value.tzinfo is None:
+        raise ValueError("capture queue timestamp must be timezone-aware")
+    return value.astimezone(ZoneInfo("America/Los_Angeles")).replace(microsecond=0).isoformat()
+
+
+def capture_queue_empty_parent(now=None):
+    stamp = capture_queue_timestamp(now)
+    return f"""---
+type: collection
+title: Memory Starmap Capture List
+status: active
+timezone: America/Los_Angeles
+updated_at: '{stamp}'
+---
+
+# Memory Starmap Capture List
+
+Queue-only capture backlog. The persistent Capture Link worker owns capture execution.
+
+## Capture Items
+
+{CAPTURE_QUEUE_TABLE_HEADER}
+{CAPTURE_QUEUE_TABLE_SEPARATOR}
+"""
+
+
+def _capture_queue_rows(markdown):
+    rows = []
+    for line in str(markdown or "").splitlines():
+        match = re.match(
+            r"^\|\s*(CAP-\d+)\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*((?:\\\||[^|])*)\|\s*((?:\\\||[^|])*)\|\s*([^|]+)\|\s*([^|]+)\|\s*((?:\\\||[^|])*)\|$",
+            line,
+        )
+        if match:
+            values = [value.strip().replace("\\|", "|") for value in match.groups()]
+            rows.append(dict(zip(("id", "status", "source_kind", "source", "target", "node", "updated", "notes"), values)))
+    return rows
+
+
+def _capture_queue_escape(value):
+    return " ".join(str(value or "").replace("|", "\\|").split())
+
+
+def _capture_queue_validate_key(value):
+    key = str(value or "")
+    if not CAPTURE_QUEUE_KEY_RE.fullmatch(key):
+        raise ValueError("idempotency_key must be 8-200 URL-safe characters")
+    return key
+
+
+def _capture_queue_validate_metadata(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    forbidden = {"capture_id", "child_slug", "slug", "status"} & set(payload)
+    if forbidden:
+        raise ValueError(f"client authority fields are forbidden: {', '.join(sorted(forbidden))}")
+    key = _capture_queue_validate_key(payload.get("idempotency_key"))
+    source = str(payload.get("source") or "").strip()
+    source_kind = str(payload.get("source_kind") or "").strip()
+    instructions = str(payload.get("instructions") or "").strip()
+    target = str(payload.get("target") or "").strip()
+    collection = str(payload.get("collection") or "").strip()
+    relationships = payload.get("relationships", [])
+    if not source or not instructions:
+        raise ValueError("source and instructions are required")
+    if source_kind not in CAPTURE_QUEUE_SOURCE_KINDS:
+        raise ValueError("unsupported source_kind")
+    if not isinstance(relationships, list) or any(not isinstance(item, str) for item in relationships):
+        raise ValueError("relationships must be an array of strings")
+    values = [source, target, collection, *relationships]
+    if any("\n" in value or "\r" in value for value in values):
+        raise ValueError("capture queue metadata must use single-line values")
+    return {
+        "idempotency_key": key,
+        "source": source,
+        "source_kind": source_kind,
+        "instructions": instructions,
+        "target": target,
+        "collection": collection,
+        "relationships": relationships,
+    }
+
+
+def _capture_queue_child_slug(key):
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return f"{CAPTURE_QUEUE_PARENT_SLUG}/reservation-{digest}"
+
+
+def _capture_queue_encode_reservation(data):
+    raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _capture_queue_decode_reservation(markdown):
+    match = CAPTURE_QUEUE_RESERVATION_RE.search(str(markdown or ""))
+    if not match:
+        raise ValueError("capture reservation metadata is missing")
+    token = match.group(1)
+    try:
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        data = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("capture reservation metadata is invalid") from exc
+    if not isinstance(data, dict):
+        raise ValueError("capture reservation metadata is invalid")
+    return data
+
+
+def _capture_queue_render_child(reservation, status, attachments):
+    relations = [f"- `{value}`" for value in reservation["relationships"]] or ["- None"]
+    attachment_lines = [
+        f"- `{item['reference']}` | bytes={item['size_bytes']} | sha256={item['sha256']}"
+        for item in attachments
+    ] or ["- None"]
+    stamp = reservation["created_at"]
+    marker = _capture_queue_encode_reservation(reservation)
+    return f"""---
+type: capture-request
+title: Capture request {reservation['capture_id']}
+status: {status}
+capture_id: {reservation['capture_id']}
+source_kind: {reservation['source_kind']}
+parent: {CAPTURE_QUEUE_PARENT_SLUG}
+created_at: '{stamp}'
+updated_at: '{stamp}'
+timezone: America/Los_Angeles
+---
+
+<!-- capture-queue-reservation: {marker} -->
+
+# Capture request {reservation['capture_id']}
+
+Status: {status}
+Parent: [[{CAPTURE_QUEUE_PARENT_SLUG}]]
+Source: {reservation['source']}
+Target: {reservation['target'] or 'worker-selected'}
+Collection: {reservation['collection'] or 'worker-selected'}
+
+## Capture Instructions
+
+{reservation['instructions']}
+
+## Requested Relationships
+
+{chr(10).join(relations)}
+
+## Durable Attachments
+
+{chr(10).join(attachment_lines)}
+
+## Attempt History
+
+- {stamp}: queued by `/add-capture-link`; capture execution has not started.
+"""
+
+
+@contextmanager
+def _capture_queue_lock():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = DATA_DIR / "capture-queue-authority.lock"
+    with CAPTURE_QUEUE_THREAD_LOCK, lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _capture_queue_result(reservation, status):
+    return {
+        "ok": True,
+        "capture_id": reservation["capture_id"],
+        "child_slug": reservation["child_slug"],
+        "status": status,
+        "idempotency_key": reservation["idempotency_key"],
+        "reserved": True,
+        "finalized": status == "planned",
+        "graph_verified": status == "planned",
+    }
+
+
+def reserve_capture_request(payload, now=None):
+    metadata = _capture_queue_validate_metadata(payload)
+    child_slug = _capture_queue_child_slug(metadata["idempotency_key"])
+    with _capture_queue_lock():
+        ledger_path = DATA_DIR / "capture-queue-reservations.json"
+        ledger = read_json_file(ledger_path, {})
+        if not isinstance(ledger, dict):
+            raise RuntimeError("capture queue reservation ledger is malformed")
+        ledger_key = hashlib.sha256(metadata["idempotency_key"].encode("utf-8")).hexdigest()
+        recorded = ledger.get(ledger_key)
+        if isinstance(recorded, dict) and recorded.get("idempotency_key") == metadata["idempotency_key"]:
+            if recorded.get("child_slug") != child_slug:
+                raise RuntimeError("capture queue reservation ledger child is invalid")
+            existing = STORE.get_entity_raw(child_slug)
+            if existing is None:
+                STORE.save_entity_raw(child_slug, _capture_queue_render_child(recorded, "capture-recovery", []))
+                existing = STORE.get_entity_raw(child_slug)
+            status = "planned" if re.search(r"(?m)^status:\s*planned\s*$", str(existing or "")) else "capture-recovery"
+            return _capture_queue_result(recorded, status)
+        existing = STORE.get_entity_raw(child_slug)
+        if existing is not None:
+            reservation = _capture_queue_decode_reservation(existing)
+            if reservation.get("idempotency_key") != metadata["idempotency_key"]:
+                raise ValueError("capture reservation key collision")
+            ledger[ledger_key] = reservation
+            write_json_file(ledger_path, ledger)
+            status = "planned" if re.search(r"(?m)^status:\s*planned\s*$", existing) else "capture-recovery"
+            return _capture_queue_result(reservation, status)
+        parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
+        if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
+            raise RuntimeError("authoritative capture queue parent is unavailable or malformed")
+        allocated = [int(row["id"].split("-", 1)[1]) for row in _capture_queue_rows(parent)]
+        allocated.extend(
+            int(match.group(1))
+            for item in ledger.values()
+            if isinstance(item, dict) and (match := re.fullmatch(r"CAP-(\d+)", str(item.get("capture_id") or "")))
+        )
+        highest = max(allocated, default=0)
+        reservation = {
+            **metadata,
+            "capture_id": f"CAP-{highest + 1:04d}",
+            "child_slug": child_slug,
+            "created_at": capture_queue_timestamp(now),
+        }
+        ledger[ledger_key] = reservation
+        write_json_file(ledger_path, ledger)
+        STORE.save_entity_raw(child_slug, _capture_queue_render_child(reservation, "capture-recovery", []))
+        return _capture_queue_result(reservation, "capture-recovery")
+
+
+def _capture_queue_validate_attachments(payload, child_slug):
+    attachments = payload.get("attachments", [])
+    if not isinstance(attachments, list):
+        raise ValueError("attachments must be an array")
+    validated = []
+    filenames = set()
+    for item in attachments:
+        if not isinstance(item, dict):
+            raise ValueError("each attachment must be an object")
+        required = {"filename", "reference", "served_url", "canonical_relative_path", "size_bytes", "sha256"}
+        if not required.issubset(item):
+            raise ValueError("attachment receipt is incomplete")
+        relative = str(item["canonical_relative_path"]).strip("/")
+        if not relative.startswith(f"{child_slug}/") or ".." in Path(relative).parts:
+            raise ValueError("attachment canonical path is outside the reserved child")
+        filename = str(item["filename"])
+        if not filename or Path(filename).name != filename or filename in filenames or "\n" in filename or "\r" in filename:
+            raise ValueError("attachment filename is invalid or duplicated")
+        filenames.add(filename)
+        if Path(relative).name != filename:
+            raise ValueError("attachment filename does not match canonical path")
+        if not isinstance(item["size_bytes"], int) or item["size_bytes"] < 0:
+            raise ValueError("attachment size_bytes is invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"])):
+            raise ValueError("attachment sha256 is invalid")
+        if str(item["reference"]) != str(item["served_url"]):
+            raise ValueError("attachment reference must equal served_url")
+        served = urlparse(str(item["served_url"]))
+        if served.scheme or served.netloc or served.query or served.fragment or unquote(served.path) != f"/media/{relative}":
+            raise ValueError("attachment served_url must be the canonical local media path")
+        validated.append({key: item[key] for key in required})
+    return validated
+
+
+def finalize_capture_request(payload, now=None, stop_after_child_for_test=False):
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    forbidden = {"capture_id", "child_slug", "slug", "status"} & set(payload)
+    if forbidden:
+        raise ValueError(f"client authority fields are forbidden: {', '.join(sorted(forbidden))}")
+    key = _capture_queue_validate_key(payload.get("idempotency_key"))
+    child_slug = _capture_queue_child_slug(key)
+    with _capture_queue_lock():
+        child = STORE.get_entity_raw(child_slug)
+        if child is None:
+            raise ValueError("capture reservation does not exist")
+        reservation = _capture_queue_decode_reservation(child)
+        if reservation.get("idempotency_key") != key or reservation.get("child_slug") != child_slug:
+            raise ValueError("capture reservation does not match the idempotency key")
+        attachments = _capture_queue_validate_attachments(payload, child_slug)
+        finalized_attachments = reservation.get("finalized_attachments")
+        if finalized_attachments is not None:
+            if attachments != finalized_attachments:
+                raise ValueError("finalize retry attachments do not match the authoritative finalized result")
+            attachments = finalized_attachments
+        else:
+            reservation = dict(reservation)
+            reservation["finalized_attachments"] = attachments
+        final_child = _capture_queue_render_child(reservation, "planned", attachments)
+        if child != final_child:
+            STORE.save_entity_raw(child_slug, final_child)
+        if stop_after_child_for_test:
+            return _capture_queue_result(reservation, "planned")
+        parent = STORE.get_entity_raw(CAPTURE_QUEUE_PARENT_SLUG)
+        if parent is None or CAPTURE_QUEUE_TABLE_HEADER not in parent or CAPTURE_QUEUE_TABLE_SEPARATOR not in parent:
+            raise RuntimeError("authoritative capture queue parent is unavailable or malformed")
+        rows = _capture_queue_rows(parent)
+        matching = [row for row in rows if row["id"] == reservation["capture_id"] or row["node"].strip("[]") == child_slug]
+        if matching and not all(row["id"] == reservation["capture_id"] and row["node"].strip("[]") == child_slug for row in matching):
+            raise RuntimeError("capture queue parent conflicts with the reservation")
+        if not matching:
+            stamp = capture_queue_timestamp(now)
+            note = f"{len(attachments)} durable attachment(s)" if attachments else "queued; capture not started"
+            row = (
+                f"| {reservation['capture_id']} | planned | {_capture_queue_escape(reservation['source_kind'])} | "
+                f"{_capture_queue_escape(reservation['source'])} | {_capture_queue_escape(reservation['target'])} | "
+                f"[[{child_slug}]] | {stamp} | {_capture_queue_escape(note)} |"
+            )
+            lines = parent.splitlines()
+            index = lines.index(CAPTURE_QUEUE_TABLE_SEPARATOR) + 1
+            while index < len(lines) and lines[index].startswith("| CAP-"):
+                index += 1
+            lines.insert(index, row)
+            updated = "\n".join(lines).rstrip() + "\n"
+            updated = re.sub(r"(?m)^updated_at: '.*'$", f"updated_at: '{stamp}'", updated, count=1)
+            STORE.save_entity_raw(CAPTURE_QUEUE_PARENT_SLUG, updated)
+        for source, target, relation in (
+            (CAPTURE_QUEUE_PARENT_SLUG, child_slug, "has_capture_request"),
+            (child_slug, CAPTURE_QUEUE_PARENT_SLUG, "capture_request_for"),
+        ):
+            try:
+                STORE.add_relationship(source, target, relation, "add-capture-link")
+            except RuntimeError as exc:
+                if "already" not in str(exc).lower():
+                    raise
+        return _capture_queue_result(reservation, "planned")
 
 
 SECRET_RE = re.compile(r"(?i)(\bsk-[a-z0-9_-]+|token[=:]\s*\S+|api[_-]?key[=:]\s*\S+|password[=:]\s*\S+)")
@@ -4103,6 +4451,20 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/capture-queue/reserve":
+            try:
+                return self.end_json(reserve_capture_request(self.read_json_body()))
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/capture-queue/finalize":
+            try:
+                return self.end_json(finalize_capture_request(self.read_json_body()))
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)

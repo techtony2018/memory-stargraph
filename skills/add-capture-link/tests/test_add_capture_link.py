@@ -92,6 +92,62 @@ class AddCaptureLinkTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.backend = FakeGBrain.empty_capture_root()
+        self.reservations = {}
+        authority = mock.patch.object(module, "queue_authority_request", side_effect=self.fake_queue_authority)
+        health = mock.patch.object(module, "check_stargraph_health", return_value={"ok": True})
+        authority.start()
+        health.start()
+        self.addCleanup(authority.stop)
+        self.addCleanup(health.stop)
+
+    def fake_queue_authority(self, _base_url, action, payload):
+        key = payload["idempotency_key"]
+        if action == "reserve":
+            if key not in self.reservations:
+                parent = module.run_gbrain("get", module.PARENT_SLUG)
+                capture_id = module.next_capture_id(module.parse_capture_rows(parent))
+                child_slug = f"{module.PARENT_SLUG}/{capture_id.lower()}-{module.slugify(payload['source'])}"
+                reservation = {**payload, "capture_id": capture_id, "child_slug": child_slug, "created_at": module.pacific_iso(NOW)}
+                self.reservations[key] = reservation
+                provisional = module.build_child(
+                    capture_id=capture_id, child_slug=child_slug, source=payload["source"],
+                    source_kind=payload["source_kind"], instructions=payload["instructions"],
+                    target=payload["target"], collection=payload["collection"],
+                    relationships=payload["relationships"], created_at=module.pacific_iso(NOW),
+                    status="capture-recovery", attachments=[],
+                )
+                module._put_verified(child_slug, provisional, "status: capture-recovery")
+            reservation = self.reservations[key]
+            return {"ok": True, **reservation, "status": "capture-recovery", "graph_verified": False}
+        reservation = self.reservations[key]
+        attachments = payload["attachments"]
+        original_child = module.run_gbrain("get", reservation["child_slug"])
+        original_parent = module.run_gbrain("get", module.PARENT_SLUG)
+        final_child = module.build_child(
+            capture_id=reservation["capture_id"], child_slug=reservation["child_slug"],
+            source=reservation["source"], source_kind=reservation["source_kind"],
+            instructions=reservation["instructions"], target=reservation["target"],
+            collection=reservation["collection"], relationships=reservation["relationships"],
+            created_at=reservation["created_at"], status="planned", attachments=attachments,
+        )
+        try:
+            module._put_verified(reservation["child_slug"], final_child, "status: planned")
+            marker = f"| {reservation['capture_id']} | planned |"
+            if marker not in original_parent:
+                row = (
+                    f"| {reservation['capture_id']} | planned | {reservation['source_kind']} | {reservation['source']} | "
+                    f"{reservation['target']} | [[{reservation['child_slug']}]] | {module.pacific_iso(NOW)} | queued |"
+                )
+                module._put_verified(module.PARENT_SLUG, module._append_planned_row(original_parent, row, module.pacific_iso(NOW)), marker)
+            module._link_verified(module.PARENT_SLUG, reservation["child_slug"], "has_capture_request")
+            module._link_verified(reservation["child_slug"], module.PARENT_SLUG, "capture_request_for")
+        except RuntimeError:
+            module._unlink_best_effort(module.PARENT_SLUG, reservation["child_slug"], "has_capture_request")
+            module._unlink_best_effort(reservation["child_slug"], module.PARENT_SLUG, "capture_request_for")
+            module.run_gbrain("put", module.PARENT_SLUG, input_text=original_parent)
+            module.run_gbrain("put", reservation["child_slug"], input_text=original_child)
+            raise
+        return {"ok": True, **reservation, "status": "planned", "graph_verified": True}
 
     def file(self, name: str, data: bytes = b"content") -> Path:
         path = self.root / name
@@ -404,7 +460,7 @@ class AddCaptureLinkTests(unittest.TestCase):
             self.invoke(self.backend, attachments=[attachment], fail_upload_number=1, target="target/a")
         manifest = caught.exception.result["recovery_manifest"]
         attachment.unlink()
-        backend = FakeGBrain.empty_capture_root()
+        backend = self.backend
         with (
             mock.patch.object(module, "run_gbrain", side_effect=backend),
             mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
@@ -570,7 +626,111 @@ class AddCaptureLinkTests(unittest.TestCase):
         ):
             result = module.queue_capture(recovery_manifest=manifest, now=NOW)
         self.assertTrue(result["ok"])
-        self.assertEqual(upload_counts, {"first.bin": 1, "second.bin": 2})
+        self.assertEqual(upload_counts, {"first.bin": 1, "second.bin": 1})
+
+    def test_retry_fails_closed_when_any_manifest_attachment_input_has_no_spooled_file(self):
+        attachment = self.file("only.bin", b"only")
+        with self.assertRaises(module.QueueFailure) as caught:
+            self.invoke(self.backend, attachments=[attachment], fail_upload_number=1)
+        manifest = Path(caught.exception.result["recovery_manifest"])
+        payload = json.loads(manifest.read_text())
+        payload["attachment_inputs"].append("/chat-host/missing-second.bin")
+        manifest.write_text(json.dumps(payload))
+        with (
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            mock.patch.object(module, "run_gbrain") as gbrain,
+            self.assertRaises(module.QueueFailure),
+        ):
+            module.queue_capture(recovery_manifest=str(manifest), now=NOW)
+        gbrain.assert_not_called()
+
+    def test_recovery_resolves_codex_home_and_rejects_symlinked_root_bundle_manifest_and_lock(self):
+        real_home = self.root / "real-codex"
+        real_home.mkdir()
+        symlink_home = self.root / "codex-link"
+        symlink_home.symlink_to(real_home, target_is_directory=True)
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(symlink_home)}):
+            resolved_root = module._ensure_recovery_root()
+        self.assertTrue(resolved_root.is_relative_to(real_home.resolve()))
+
+        codex_home = self.root / "codex"
+        recovery_parent = codex_home / "recovery"
+        recovery_parent.mkdir(parents=True)
+        real_root = self.root / "outside-root"
+        real_root.mkdir()
+        (recovery_parent / "add-capture-link").symlink_to(real_root, target_is_directory=True)
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
+            module._ensure_recovery_root()
+
+        recovery_parent.joinpath("add-capture-link").unlink()
+        root = recovery_parent / "add-capture-link"
+        root.mkdir()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (root / "bundle").symlink_to(outside, target_is_directory=True)
+        (outside / "recovery.json").write_text("{}")
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
+            module._validated_recovery_manifest(root / "bundle" / "recovery.json")
+
+        (root / ".queue.lock").symlink_to(self.root / "outside-lock")
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), self.assertRaises(module.QueueFailure):
+            with module._queue_lock():
+                pass
+
+    def test_served_byte_fetch_rejects_cross_origin_redirect(self):
+        class RedirectedResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def geturl(self):
+                return "https://evil.example/stolen.bin"
+            def read(self):
+                return b"trusted"
+
+        opener = mock.Mock()
+        opener.open.return_value = RedirectedResponse()
+        with mock.patch.object(module.request, "build_opener", return_value=opener):
+            with self.assertRaises(module.AttachmentRequestError):
+                module.fetch_served_attachment("http://127.0.0.1:8788", "/media/child/file.bin")
+
+    def test_ambiguous_upload_retry_probes_expected_canonical_path_before_reupload(self):
+        attachment = self.file("ambiguous.bin", b"exact")
+        backend = FakeGBrain.empty_capture_root()
+        calls = 0
+
+        def ambiguous_upload(*_args):
+            nonlocal calls
+            calls += 1
+            raise module.AttachmentRequestError("connection lost", {"error": "timeout"}, may_have_persisted=True)
+
+        with (
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
+            mock.patch.object(module, "upload_attachment", side_effect=ambiguous_upload),
+            mock.patch.object(module, "fetch_served_attachment", side_effect=module.AttachmentRequestError("not found")),
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+            self.assertRaises(module.QueueFailure) as caught,
+        ):
+            module.queue_capture(
+                source="file", source_kind="file", instructions="Capture",
+                attachments=[str(attachment)], now=NOW,
+            )
+        manifest = Path(caught.exception.result["recovery_manifest"])
+        progress = json.loads(manifest.read_text())
+        expected = progress["attachment_progress"][0]["expected_canonical_relative_path"]
+        self.assertEqual(expected, f"{progress['child_slug']}/ambiguous.bin")
+
+        with (
+            mock.patch.object(module, "run_gbrain", side_effect=backend),
+            mock.patch.object(module, "check_stargraph_health", return_value={"ok": True}),
+            mock.patch.object(module, "upload_attachment", side_effect=ambiguous_upload),
+            mock.patch.object(module, "fetch_served_attachment", return_value=b"exact"),
+            mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex")}),
+        ):
+            result = module.queue_capture(recovery_manifest=str(manifest), now=NOW)
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls, 1)
 
     def test_cli_json_is_queue_only(self):
         completed = subprocess.run(
