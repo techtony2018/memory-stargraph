@@ -19,26 +19,31 @@ semantics, and capture responsibilities remain unchanged.
 The new fallback runs only when the invocation's first authoritative capture
 snapshot contains zero planned items. A non-empty frozen snapshot always takes
 priority and is drained normally; entity enrichment does not run afterward.
+On entering the empty-queue branch, the worker immediately creates an active
+Goal-linked Run before it lists, selects, reserves, or mutates any entity. The
+Run holds the invocation id, start time, mode, and empty-snapshot evidence so a
+crash cannot disappear as an unrecorded no-op.
 
 ## Selection Contract
 
 For an empty snapshot, fill a maximum of two enrichment slots. Select eligible
 nodes whose effective type is `person` first.
 
-Rank candidates deterministically by enrichment need:
+Within every category, rank candidates deterministically by enrichment need:
 
 1. missing or weak biography;
 2. missing durable profile image;
 3. missing authoritative public source links;
 4. missing current or historically important roles;
 5. sparse meaningful typed relationships or backlinks;
-6. oldest successful enrichment timestamp, with never-enriched nodes first;
-7. slug as the final stable tie-breaker.
+6. never-reviewed nodes first;
+7. oldest successful enrichment or review timestamp;
+8. lexical slug as the final stable tie-breaker.
 
 Skip:
 
-- a person successfully enriched within the previous 30 days;
-- a person already selected by another active enrichment Run;
+- an entity successfully enriched or reviewed within the previous 30 days;
+- an entity reserved by another active enrichment Run;
 - private or sensitive people for whom public enrichment would exceed existing
   authority;
 - candidates for whom reliable public evidence cannot be found;
@@ -56,14 +61,38 @@ other public entity types in this order:
 3. products or technologies;
 4. other public entities with a clear evidence-backed enrichment opportunity.
 
-Apply the same enrichment-need ranking, 30-day cooldown, active-Run exclusion,
-privacy boundary, evidence threshold, and slug tie-breaker to these secondary
-candidates. The total cap remains two attempted entities per invocation,
-regardless of type.
+Apply the exact same ordering to people, organizations or companies, teams or
+projects, products or technologies, and other public entities: deficiency
+first, never-reviewed first, oldest enrichment or review timestamp, then
+lexical slug. Apply the same 30-day cooldown, active-Run exclusion, privacy
+boundary, and evidence threshold to every category. The total cap remains two
+attempted entities per invocation, regardless of type.
 
 If no eligible candidates exist, record `no_eligible_candidates` in the
 Goal-linked Run and finish successfully. Never force speculative or low-value
 changes merely to fill the two slots.
+
+## Active Run And Reservation Contract
+
+Select and reserve entities one at a time in deterministic ranked order. Before
+any entity mutation, persist and read back its exact slug, effective type,
+reservation timestamp, and invocation id in the active Goal-linked Run. Then
+re-read other active enrichment Runs.
+
+If two invocations reserve the same entity, the earlier reservation timestamp
+wins. If timestamps are equal, the lexical invocation id is the stable
+tie-breaker. The losing invocation records the collision, removes its
+reservation, and selects the next eligible entity. No invocation may mutate an
+entity until its reservation is persisted, read back, and confirmed as the
+winner. This makes overlap deterministic even when two workers began from the
+same candidate snapshot.
+
+The active Run is finalized on success, failure, or caught interruption. Its
+terminal evidence records each selected entity, verified reservation, attempted
+operations, result, verification, and any reservation released without an
+attempt. An unexpected hard crash leaves the Run active with its reservations,
+last completed step, and start evidence; the Product Owner can therefore see
+and explicitly resolve the stale Run instead of accepting false success.
 
 ## Enrichment Contract
 
@@ -120,12 +149,13 @@ The invocation's Goal-linked Run records:
 
 - the empty authoritative snapshot;
 - candidate-ranking inputs and excluded candidates;
+- reservation timestamps, collision decisions, and readback evidence;
 - the selected entity slugs and types, or why fewer than two were eligible;
 - sources and skills used;
 - browser surface and tab-reuse evidence;
 - before/after material changes;
 - readback, search, relationship, backlink, provenance, and media verification;
-- per-person result;
+- per-entity result;
 - systemic issues requiring Learning, TODO consideration, or human action.
 
 All user-facing GBrain slugs are exact-label links to:
@@ -139,9 +169,13 @@ http://127.0.0.1:8788/?slug=<URL-encoded-slug>
 Automation contract tests verify that:
 
 - enrichment runs only for an empty first authoritative snapshot;
+- the active Goal-linked Run exists before selection or mutation;
+- selected slugs are reserved and read back before mutation, with deterministic
+  collision resolution;
 - the cap is two attempted entities, with fewer allowed only when the eligible
   candidate set is exhausted;
-- selection is deterministic and prioritizes least-enriched people;
+- selection is deterministic in every category by deficiency, never-reviewed,
+  oldest review, then lexical slug;
 - secondary candidates fill unused slots in the order organizations/companies,
   teams/projects, products/technologies, then other public entities;
 - recently enriched, private, conflicting, and unreliable-source candidates
@@ -153,6 +187,8 @@ Automation contract tests verify that:
   control, and verification requirements remain explicit;
 - failures are reported to the Quality & Learning Analyst rather than silently
   converted into TODOs.
+- success, failure, and interruption terminalize the Run, while a hard crash
+  remains visible as a stale active Run.
 
 ## Out Of Scope
 

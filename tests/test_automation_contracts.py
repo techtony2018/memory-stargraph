@@ -232,6 +232,54 @@ class AutomationContractTests(unittest.TestCase):
             prompt,
         )
 
+    def test_capture_worker_reserves_entities_before_enrichment_and_terminalizes_run(self):
+        prompt = (
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
+        ).read_text()
+
+        branch = prompt.index("set invocation mode to `empty_queue_enrichment`")
+        active_run = prompt.index("create an active Goal-linked Run", branch)
+        selection = prompt.index("Select and reserve", active_run)
+        mutation = prompt.index("Before changing a selected entity", selection)
+        self.assertLess(active_run, selection)
+        self.assertLess(selection, mutation)
+
+        required = (
+            "persist and read back the selected entity slugs",
+            "reservation collision",
+            "earlier reservation timestamp",
+            "invocation id as the stable tie-breaker",
+            "must not mutate an entity until its reservation is verified",
+            "success, failure, or interruption",
+            "unexpected crash leaves the active Run",
+            "truthful per-entity evidence",
+        )
+        for phrase in required:
+            self.assertIn(phrase, prompt)
+
+    def test_capture_worker_ranks_every_fallback_category_deterministically(self):
+        prompt = (
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md"
+        ).read_text()
+
+        categories = (
+            "people",
+            "organizations or companies",
+            "teams or projects",
+            "products or technologies",
+            "other public entities",
+        )
+        for category in categories:
+            self.assertIn(
+                f"For {category}, rank eligible candidates by: deficiency first; "
+                "never-reviewed first; oldest enrichment or review timestamp; "
+                "then lexical slug",
+                prompt,
+            )
+
+        self.assertIn("previous 30 days", prompt)
+        self.assertIn("reserved by another active enrichment Run", prompt)
+
     def test_cdp_probe_reuses_matching_tab_and_only_closes_created_tab(self):
         probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()
         self.assertIn("context.pages()", probe)

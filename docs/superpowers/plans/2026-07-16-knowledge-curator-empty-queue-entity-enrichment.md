@@ -4,7 +4,7 @@
 
 **Goal:** Make the existing Memory Stargraph Knowledge Curator enrich up to two evidence-backed entities when its first authoritative capture snapshot is empty, prioritizing people and then bounded secondary entity types.
 
-**Architecture:** Keep the existing capture worker, schedule, persistent task, and queue-drain path unchanged. Add one explicit branch immediately after the frozen snapshot: non-empty snapshots follow the existing drain contract exclusively; empty snapshots use a deterministic two-slot enrichment contract and record results in the same Goal-linked Run.
+**Architecture:** Keep the existing capture worker, schedule, persistent task, and queue-drain path unchanged. Add one explicit branch immediately after the frozen snapshot: non-empty snapshots follow the existing drain contract exclusively; empty snapshots immediately create an active Goal-linked Run, deterministically reserve up to two entities before mutation, and finalize that Run with truthful results.
 
 **Tech Stack:** Markdown automation prompts, TOML heartbeat definitions, Python `unittest`, GBrain CLI, Agent Reach, in-app browser, Chrome CDP.
 
@@ -16,7 +16,10 @@
 - A non-empty first authoritative snapshot always takes priority; enrichment must not run before or after draining it.
 - The total empty-queue enrichment cap is two attempted entities, with fewer allowed only when the eligible candidate set is exhausted.
 - Candidate priority is people, organizations/companies, teams/projects, products/technologies, then other public entities.
+- Every category uses the same deterministic ordering: deficiency first, never-reviewed first, oldest enrichment or review timestamp, then lexical slug.
 - Skip entities enriched or reviewed successfully within the previous 30 days.
+- Create the active empty-queue Run before candidate selection, persist and read back reservations before mutation, and resolve reservation collisions by timestamp then invocation id.
+- Finalize the active Run on success, failure, or caught interruption; leave unexpected crashes visible as stale active Runs.
 - Use public evidence, preserve user-confirmed facts, reuse browser tabs, prevent duplicate media and graph writes, and preserve human control.
 - Do not create synthetic capture requests or automatically create product TODOs from individual enrichment failures.
 - All user-facing GBrain slugs must be exact-label links to `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`.
@@ -34,7 +37,7 @@
 
 **Interfaces:**
 - Consumes: the JSON result from `python3 scripts/automation/manage_capture_backlog.py snapshot --json`, existing GBrain pages and Goal-linked Runs, installed capture skills, Agent Reach, and the existing browser-reuse contract.
-- Produces: one mutually exclusive `capture_drain` or `empty_queue_enrichment` invocation mode; up to two per-entity results with values `enriched`, `already_sufficient`, or `failed`; or invocation result `no_eligible_candidates`.
+- Produces: one mutually exclusive `capture_drain` or `empty_queue_enrichment` invocation mode; an early active Run and verified reservations for enrichment mode; up to two per-entity results with values `enriched`, `already_sufficient`, or `failed`; or invocation result `no_eligible_candidates`.
 
 - [ ] **Step 1: Write the failing automation contract test**
 
@@ -100,14 +103,14 @@ current numbered steps 4 through 10 with this exact block:
 ```markdown
 4. Branch on the first authoritative snapshot:
    - If it contains one or more planned requests, set invocation mode to `capture_drain`, follow steps 5 through 11, and do not run entity enrichment before or after the drain. A non-empty first authoritative snapshot always takes priority.
-   - If it contains zero planned items, set invocation mode to `empty_queue_enrichment`, skip capture-request transitions, execute the empty-queue enrichment contract below, and then continue to step 11.
+   - If it contains zero planned items, set invocation mode to `empty_queue_enrichment`, immediately create an active Goal-linked Run before candidate listing, selection, reservation, or enrichment, skip capture-request transitions, execute the empty-queue enrichment contract below, and then continue to step 11.
 5. For `capture_drain`, group frozen requests into the smallest safe coherent batches by source type, login/session, selected skill, target collection, verification path, and rollback boundary.
 6. Before capture, move each selected request from `planned` to `capturing` in both parent and child with `manage_capture_backlog.py transition`; verify both readbacks.
 7. Drain every frozen item. For each source, read the most specific installed skill completely, preferring `~/.codex/skills/<skill>/SKILL.md`, then `~/.openclaw/skills/<skill>/SKILL.md`, then repository/bundled fallback.
 8. Route general sources to `gbrain-capture-link`, PDFs to `gbrain-pdf-capture`, LinkedIn to `gb-capture-linkedin`, and WeChat/X/profile sources to the most specific installed enhanced skill.
 9. Reuse request attachments by durable reference and verified SHA-256. The final node must not upload or copy the bytes again. Link request to final with `captured_as` and final to request with `captured_from`.
 10. Mark each frozen request `completed` only after source-specific readback, title, search, provenance, memberships, typed relationships, and attachment reuse verification. Otherwise mark it `failed` with exact attempt, evidence, preserved inputs, retry action, and human authority needed.
-11. Run compaction again. Create one Goal-linked Run with invocation mode, batch grouping or enrichment selection, every terminal item or entity result, failures, post-snapshot ids, timestamps, and durable Learnings.
+11. Run compaction again. For `capture_drain`, create one terminal Goal-linked Run. For `empty_queue_enrichment`, finalize the active Goal-linked Run. Record invocation mode, selection and reservation evidence, every terminal item or entity result, failures, timestamps, and durable Learnings.
 ```
 
 - [ ] **Step 4: Add the complete empty-queue enrichment contract**
@@ -118,21 +121,23 @@ Insert this section immediately after the numbered steps in
 ```markdown
 Empty-queue enrichment contract:
 
-1. This contract runs only when the first authoritative snapshot contains zero planned items. Fill a maximum of two enrichment slots; fewer are allowed only when the eligible candidate set is exhausted. The total cap remains two attempted entities per invocation.
+1. This contract runs only when the first authoritative snapshot contains zero planned items. Its active Goal-linked Run must already contain invocation, mode, start-time, and empty-snapshot evidence. Fill a maximum of two enrichment slots; fewer are allowed only when the eligible candidate set is exhausted. The total cap remains two attempted entities per invocation.
 2. Build the people-first candidate set with `gbrain list --type person --limit 5000 --sort slug`. Read each candidate page, direct graph, backlinks, files, provenance, and recent Goal-linked enrichment Runs before ranking it.
-3. Rank eligible people deterministically by: missing or weak biography; missing durable profile image; missing authoritative public sources; missing current or historically important roles; sparse meaningful typed relationships or backlinks; oldest successful enrichment or review evidence with never-reviewed first; then slug.
-4. Skip an entity that was successfully enriched or reviewed within the previous 30 days, is already selected by another active enrichment Run, is private or sensitive beyond current authority, lacks reliable public evidence, or would require bypassing authentication or access controls.
-5. Select nodes whose effective type is `person` first. If fewer than two eligible people exist, fill remaining slots by listing and ranking these types in order: organizations or companies; teams or projects; products or technologies; then other public entities with a clear evidence-backed enrichment opportunity.
-6. Continue through the ranked candidates until two entities have been attempted or the eligible candidate set is exhausted. If none are eligible, record `no_eligible_candidates` in the Goal-linked Run and finish successfully without speculative changes.
-7. For public-source discovery, read and use the installed `agent-reach` skill. Prefer the most specific installed local GBrain or capture skill for each source.
-8. Before changing a selected entity, preserve its current page, relationships, backlinks, files, and provenance as before-state evidence. Add only evidence-backed biography, durable profile media, authoritative sources, roles, or meaningful typed relationships.
-9. Preserve user-confirmed facts and never replace them with weaker inferred web evidence. Prevent duplicate pages, links, relationships, files, and repeated media storage.
-10. Inspect existing browser tabs first and reuse a suitable same-origin or same-source tab. Use authenticated Chrome CDP only when the source requires the user's existing session. Never close a reused user tab.
-11. Verify page readback, searchability, direct relationships, backlinks, provenance, and media references. Record one result per attempted entity:
+3. Exclude candidates reviewed within the previous 30 days, reserved by another active enrichment Run, outside current privacy authority, without reliable public evidence, or requiring bypass of authentication or access controls.
+4. In every category, order eligible candidates by deficiency first, never-reviewed first, oldest enrichment or review timestamp, then lexical slug. Apply this independently to people; organizations or companies; teams or projects; products or technologies; and other public entities.
+5. Select nodes whose effective type is `person` first. If fewer than two eligible people exist, fill remaining slots from the secondary categories in the stated order.
+6. Select and reserve one candidate at a time. Persist and read back slug, effective type, reservation timestamp, and invocation id in the active Run before mutation, then re-read other active enrichment Runs. Resolve a collision by earlier reservation timestamp, then invocation id; the losing invocation records and removes its reservation and selects the next candidate.
+7. Continue until two entities have verified winning reservations or the eligible set is exhausted. If none are eligible, record `no_eligible_candidates` and finish successfully without speculative changes.
+8. For public-source discovery, read and use the installed `agent-reach` skill. Prefer the most specific installed local GBrain or capture skill for each source.
+9. Before changing a selected entity, preserve its current page, relationships, backlinks, files, and provenance as before-state evidence. Add only evidence-backed biography, durable profile media, authoritative sources, roles, or meaningful typed relationships.
+10. Preserve user-confirmed facts and never replace them with weaker inferred web evidence. Prevent duplicate pages, links, relationships, files, and repeated media storage.
+11. Inspect existing browser tabs first and reuse a suitable same-origin or same-source tab. Use authenticated Chrome CDP only when the source requires the user's existing session. Never close a reused user tab.
+12. Verify page readback, searchability, direct relationships, backlinks, provenance, and media references. Record truthful evidence and one result per attempted entity:
     - `enriched`: at least one material evidence-backed improvement passed verification;
     - `already_sufficient`: the review found no responsible material improvement; record this Run's review timestamp so later selection can enforce the 30-day cooldown;
     - `failed`: record exact sources, operations, evidence, retry action, and human authority required.
-12. This fallback must not create capture backlog requests. Individual failures do not automatically create product TODOs. Report systemic capture-skill, Stargraph, GBrain, authentication, verification, or media defects in the Goal-linked Run for the Memory Stargraph Quality & Learning Analyst to judge.
+13. Terminalize the active Run on success, failure, or caught interruption and release unattempted reservations. Leave an unexpected hard crash visible as a stale active Run with its reservations and last completed step.
+14. This fallback must not create capture backlog requests. Individual failures do not automatically create product TODOs. Report systemic capture-skill, Stargraph, GBrain, authentication, verification, or media defects in the Goal-linked Run for the Memory Stargraph Quality & Learning Analyst to judge.
 ```
 
 - [ ] **Step 5: Update heartbeat, bootstrap, and pipeline documentation**
@@ -188,6 +193,56 @@ git add \
   automations/README.md \
   tests/test_automation_contracts.py
 git commit -m "feat: enrich entities when Curator queue is empty"
+```
+
+---
+
+### Task 1A: Add Active-Run Reservations And Uniform Ranking
+
+**Files:**
+- Modify: `tests/test_automation_contracts.py`
+- Modify: `automations/memory-stargraph-capture-link-drain/prompt.md`
+- Modify: `docs/superpowers/specs/2026-07-16-knowledge-curator-empty-queue-person-enrichment-design.md`
+- Modify: `docs/superpowers/plans/2026-07-16-knowledge-curator-empty-queue-entity-enrichment.md`
+
+- [ ] **Step 1: Add failing regression tests**
+
+Assert that the active Goal-linked Run is created before selection, every
+selected slug is persisted and read back before mutation, reservation
+collisions have a deterministic winner, and every fallback category uses the
+same deficiency / never-reviewed / oldest-review / lexical-slug ordering.
+
+- [ ] **Step 2: Verify RED**
+
+```bash
+python3 -m unittest \
+  tests.test_automation_contracts.AutomationContractTests.test_capture_worker_reserves_entities_before_enrichment_and_terminalizes_run \
+  tests.test_automation_contracts.AutomationContractTests.test_capture_worker_ranks_every_fallback_category_deterministically
+```
+
+Expected: failure because the original prompt creates its Run after enrichment
+and does not spell out the ordering for secondary categories.
+
+- [ ] **Step 3: Implement the minimum contract correction**
+
+Create the active Run on entry to `empty_queue_enrichment`. Reserve candidates
+one at a time, persist and read back each reservation before mutation, resolve
+collisions by timestamp then invocation id, and terminalize the Run on success,
+failure, or caught interruption. Leave a hard crash visible as a stale active
+Run. Apply the identical deterministic ordering to all five category groups.
+
+- [ ] **Step 4: Verify GREEN and the full contract suite**
+
+```bash
+python3 -m unittest \
+  tests.test_automation_contracts.AutomationContractTests.test_capture_worker_reserves_entities_before_enrichment_and_terminalizes_run \
+  tests.test_automation_contracts.AutomationContractTests.test_capture_worker_ranks_every_fallback_category_deterministically
+python3 -m unittest tests.test_automation_contracts
+git diff --check -- \
+  automations/memory-stargraph-capture-link-drain/prompt.md \
+  docs/superpowers/specs/2026-07-16-knowledge-curator-empty-queue-person-enrichment-design.md \
+  docs/superpowers/plans/2026-07-16-knowledge-curator-empty-queue-entity-enrichment.md \
+  tests/test_automation_contracts.py
 ```
 
 ---
