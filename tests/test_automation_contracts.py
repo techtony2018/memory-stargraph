@@ -248,7 +248,7 @@ class AutomationContractTests(unittest.TestCase):
             "persist and read back the selected entity slugs",
             "reservation collision",
             "earlier reservation timestamp",
-            "invocation id as the stable tie-breaker",
+            "when timestamps are equal, the lexically lowest invocation id wins",
             "must not mutate an entity until its reservation is verified",
             "success, failure, or interruption",
             "unexpected crash leaves the active Run",

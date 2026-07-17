@@ -80,8 +80,8 @@ reservation timestamp, and invocation id in the active Goal-linked Run. Then
 re-read other active enrichment Runs.
 
 If two invocations reserve the same entity, the earlier reservation timestamp
-wins. If timestamps are equal, the lexical invocation id is the stable
-tie-breaker. The losing invocation records the collision, removes its
+wins. If timestamps are equal, the lexically lowest invocation id wins. The
+losing invocation records the collision, removes its
 reservation, and selects the next eligible entity. No invocation may mutate an
 entity until its reservation is persisted, read back, and confirmed as the
 winner. This makes overlap deterministic even when two workers began from the

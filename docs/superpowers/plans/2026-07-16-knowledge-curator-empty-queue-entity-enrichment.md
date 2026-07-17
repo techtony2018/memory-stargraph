@@ -18,7 +18,7 @@
 - Candidate priority is people, organizations/companies, teams/projects, products/technologies, then other public entities.
 - Every category uses the same deterministic ordering: deficiency first, never-reviewed first, oldest enrichment or review timestamp, then lexical slug.
 - Skip entities enriched or reviewed successfully within the previous 30 days.
-- Create the active empty-queue Run before candidate selection, persist and read back reservations before mutation, and resolve reservation collisions by timestamp then invocation id.
+- Create the active empty-queue Run before candidate selection, persist and read back reservations before mutation, and resolve reservation collisions by earliest timestamp, then lexically lowest invocation id.
 - Finalize the active Run on success, failure, or caught interruption; leave unexpected crashes visible as stale active Runs.
 - Use public evidence, preserve user-confirmed facts, reuse browser tabs, prevent duplicate media and graph writes, and preserve human control.
 - Do not create synthetic capture requests or automatically create product TODOs from individual enrichment failures.
@@ -126,7 +126,7 @@ Empty-queue enrichment contract:
 3. Exclude candidates reviewed within the previous 30 days, reserved by another active enrichment Run, outside current privacy authority, without reliable public evidence, or requiring bypass of authentication or access controls.
 4. In every category, order eligible candidates by deficiency first, never-reviewed first, oldest enrichment or review timestamp, then lexical slug. Apply this independently to people; organizations or companies; teams or projects; products or technologies; and other public entities.
 5. Select nodes whose effective type is `person` first. If fewer than two eligible people exist, fill remaining slots from the secondary categories in the stated order.
-6. Select and reserve one candidate at a time. Persist and read back slug, effective type, reservation timestamp, and invocation id in the active Run before mutation, then re-read other active enrichment Runs. Resolve a collision by earlier reservation timestamp, then invocation id; the losing invocation records and removes its reservation and selects the next candidate.
+6. Select and reserve one candidate at a time. Persist and read back slug, effective type, reservation timestamp, and invocation id in the active Run before mutation, then re-read other active enrichment Runs. Resolve a collision by earlier reservation timestamp; when timestamps are equal, the lexically lowest invocation id wins. The losing invocation records and removes its reservation and selects the next candidate.
 7. Continue until two entities have verified winning reservations or the eligible set is exhausted. If none are eligible, record `no_eligible_candidates` and finish successfully without speculative changes.
 8. For public-source discovery, read and use the installed `agent-reach` skill. Prefer the most specific installed local GBrain or capture skill for each source.
 9. Before changing a selected entity, preserve its current page, relationships, backlinks, files, and provenance as before-state evidence. Add only evidence-backed biography, durable profile media, authoritative sources, roles, or meaningful typed relationships.
@@ -227,7 +227,7 @@ and does not spell out the ordering for secondary categories.
 
 Create the active Run on entry to `empty_queue_enrichment`. Reserve candidates
 one at a time, persist and read back each reservation before mutation, resolve
-collisions by timestamp then invocation id, and terminalize the Run on success,
+collisions by earliest timestamp then lexically lowest invocation id, and terminalize the Run on success,
 failure, or caught interruption. Leave a hard crash visible as a stale active
 Run. Apply the identical deterministic ordering to all five category groups.
 
