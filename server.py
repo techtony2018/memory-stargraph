@@ -106,6 +106,7 @@ DELETED_PATH = DATA_DIR / "deleted_entities.json"
 HIDDEN_PATH = DATA_DIR / "hidden_entities.json"
 YODA_LOG_PATH = DATA_DIR / "yoda_logs.json"
 YODA_CHAT_PATH = DATA_DIR / "yoda_chats.json"
+YODA_FEEDBACK_PATH = DATA_DIR / "yoda_feedback.json"
 YODA_SETTINGS_PATH = DATA_DIR / "yoda_settings.json"
 RESOLVER_EVENTS_PATH = DATA_DIR / "resolver_dispatch_events.json"
 RESOLVER_PROPOSALS_PATH = DATA_DIR / "resolver_proposals.json"
@@ -155,7 +156,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.149"
+UI_VERSION = "V1.0.150"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -220,6 +221,8 @@ MAX_YODA_LOGS = 200
 MAX_YODA_LOGS_PER_SLUG = 20
 MAX_YODA_CHAT_MESSAGES = 80
 MAX_YODA_CHAT_SLUGS = 80
+MAX_YODA_FEEDBACK_COMMENT = 2000
+MAX_YODA_FEEDBACK_RESULTS = 500
 MAX_RESOLVER_EVENTS = 500
 MAX_RESOLVER_PROPOSALS = 200
 
@@ -484,7 +487,22 @@ def append_yoda_log(slug, entry):
     return safe_entry
 
 
-def sanitize_chat_message(message):
+def stable_yoda_answer_id(slug, message):
+    request_id = sanitize_text_summary(message.get("request_id"), 200)
+    answer_id = sanitize_text_summary(message.get("answer_id"), 200)
+    if answer_id or request_id:
+        return answer_id or request_id
+    identity = "\n".join(
+        (
+            str(slug or ""),
+            str(message.get("timestamp") or ""),
+            sanitize_chat_content(message.get("content"), 5000),
+        )
+    )
+    return f"legacy-yoda-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
+
+
+def sanitize_chat_message(message, slug=""):
     if not isinstance(message, dict):
         return None
     if message.get("pending"):
@@ -500,6 +518,11 @@ def sanitize_chat_message(message):
         "content": content,
         "timestamp": sanitize_text_summary(message.get("timestamp") or iso_now(), 80),
     }
+    if role == "assistant":
+        safe["answer_id"] = stable_yoda_answer_id(slug, message)
+        request_id = sanitize_text_summary(message.get("request_id"), 200)
+        if request_id:
+            safe["request_id"] = request_id
     fallback_output = str(message.get("fallbackOutput") or message.get("fallback_output") or "").strip()
     if fallback_output:
         safe["fallbackOutput"] = SECRET_RE.sub("[redacted]", fallback_output)[:12000]
@@ -516,7 +539,7 @@ def yoda_chat_history(slug):
     history = rows.get(str(slug), [])
     if not isinstance(history, list):
         history = []
-    return [item for item in (sanitize_chat_message(message) for message in history) if item]
+    return [item for item in (sanitize_chat_message(message, slug) for message in history) if item]
 
 
 def save_yoda_chat_history(slug, messages):
@@ -526,7 +549,7 @@ def save_yoda_chat_history(slug, messages):
     if not isinstance(messages, list):
         raise ValueError("messages must be a list")
     rows = yoda_chat_rows()
-    sanitized = [item for item in (sanitize_chat_message(message) for message in messages) if item]
+    sanitized = [item for item in (sanitize_chat_message(message, clean_slug) for message in messages) if item]
     rows[clean_slug] = sanitized[-MAX_YODA_CHAT_MESSAGES:]
     if len(rows) > MAX_YODA_CHAT_SLUGS:
         ordered = sorted(
@@ -543,6 +566,142 @@ def clear_yoda_chat_history(slug):
     rows = yoda_chat_rows()
     rows.pop(str(slug or "").strip(), None)
     write_json_file(YODA_CHAT_PATH, rows)
+
+
+def yoda_feedback_rows():
+    rows = read_json_file(YODA_FEEDBACK_PATH, {})
+    return rows if isinstance(rows, dict) else {}
+
+
+def yoda_feedback_is_test(row):
+    return str(row.get("environment") or "production") != "production" or row.get("synthetic") is True or row.get("test_run") is True
+
+
+def sanitize_yoda_feedback_comment(value):
+    raw = str(value or "")
+    if len(raw) > MAX_YODA_FEEDBACK_COMMENT:
+        raise ValueError(f"comment must be {MAX_YODA_FEEDBACK_COMMENT} characters or less")
+    text = "".join(character for character in raw if character in "\n\t" or ord(character) >= 32)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return SECRET_RE.sub("[redacted]", text)
+
+
+def upsert_yoda_feedback(answer_id, payload):
+    clean_answer_id = sanitize_text_summary(answer_id, 200)
+    if not clean_answer_id:
+        raise ValueError("answer_id is required")
+    rating = str(payload.get("rating") or "").strip().lower()
+    if rating not in {"", "up", "down"}:
+        raise ValueError("rating must be up, down, or empty")
+    slug = str(payload.get("slug") or "").strip()
+    if not slug:
+        raise ValueError("slug is required")
+    rows = yoda_feedback_rows()
+    existing = rows.get(clean_answer_id) if isinstance(rows.get(clean_answer_id), dict) else {}
+    now = iso_now()
+    environment = sanitize_text_summary(payload.get("environment") or existing.get("environment") or "production", 40).lower() or "production"
+    record = {
+        "answer_id": clean_answer_id,
+        "request_id": sanitize_text_summary(payload.get("request_id") or existing.get("request_id"), 200),
+        "slug": slug,
+        "rating": rating,
+        "comment": sanitize_yoda_feedback_comment(payload.get("comment")),
+        "environment": environment,
+        "synthetic": payload.get("synthetic") is True,
+        "test_run": payload.get("test_run") is True,
+        "pair_id": sanitize_text_summary(payload.get("pair_id") or existing.get("pair_id"), 200),
+        "created_at": existing.get("created_at") or now,
+        "updated_at": now,
+        "review_status": existing.get("review_status") or "unreviewed",
+        "reviewed_at": existing.get("reviewed_at") or "",
+        "review_run_slug": existing.get("review_run_slug") or "",
+        "decision": existing.get("decision") or "",
+        "related_todo_ids": existing.get("related_todo_ids") if isinstance(existing.get("related_todo_ids"), list) else [],
+        "related_learning_slugs": existing.get("related_learning_slugs") if isinstance(existing.get("related_learning_slugs"), list) else [],
+    }
+    rows[clean_answer_id] = record
+    write_json_file(YODA_FEEDBACK_PATH, rows)
+    return record
+
+
+def list_yoda_feedback(filters):
+    rows = list(yoda_feedback_rows().values())
+    rows = [row for row in rows if isinstance(row, dict)]
+    counts = {
+        "production": sum(1 for row in rows if not yoda_feedback_is_test(row)),
+        "test": sum(1 for row in rows if yoda_feedback_is_test(row)),
+    }
+    include_test = str(filters.get("include_test") or "").lower() in {"1", "true", "yes"}
+    if not include_test:
+        rows = [row for row in rows if not yoda_feedback_is_test(row)]
+    for field in ("slug", "rating", "review_status"):
+        expected = str(filters.get(field) or "").strip()
+        if expected:
+            rows = [row for row in rows if str(row.get(field) or "") == expected]
+    since = str(filters.get("since") or "").strip()
+    until = str(filters.get("until") or "").strip()
+    if since:
+        rows = [row for row in rows if str(row.get("updated_at") or "") >= since]
+    if until:
+        rows = [row for row in rows if str(row.get("updated_at") or "") <= until]
+    try:
+        limit = max(1, min(MAX_YODA_FEEDBACK_RESULTS, int(filters.get("limit") or 100)))
+    except (TypeError, ValueError):
+        limit = 100
+    rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+    return rows[:limit], counts
+
+
+YODA_FEEDBACK_DECISIONS = {
+    "no_action",
+    "product_todo_created",
+    "product_todo_updated",
+    "data_quality_recommendation",
+    "capture_guidance",
+    "learning_only",
+}
+
+
+def review_yoda_feedback(payload):
+    answer_ids = [sanitize_text_summary(value, 200) for value in payload.get("answer_ids", []) if sanitize_text_summary(value, 200)]
+    if not answer_ids:
+        raise ValueError("answer_ids are required")
+    review_run_slug = str(payload.get("review_run_slug") or "").strip()
+    if not review_run_slug:
+        raise ValueError("review_run_slug is required")
+    decision = str(payload.get("decision") or "").strip()
+    if decision not in YODA_FEEDBACK_DECISIONS:
+        raise ValueError("decision is invalid")
+    reviewed_at = sanitize_text_summary(payload.get("reviewed_at") or iso_now(), 80)
+    todo_ids = [sanitize_text_summary(value, 80) for value in payload.get("related_todo_ids", []) if sanitize_text_summary(value, 80)]
+    learning_slugs = [sanitize_text_summary(value, 220) for value in payload.get("related_learning_slugs", []) if sanitize_text_summary(value, 220)]
+    rows = yoda_feedback_rows()
+    updated = 0
+    for answer_id in answer_ids:
+        record = rows.get(answer_id)
+        if not isinstance(record, dict):
+            continue
+        desired = ("reviewed", reviewed_at, review_run_slug, decision, todo_ids, learning_slugs)
+        current = (
+            record.get("review_status"), record.get("reviewed_at"), record.get("review_run_slug"), record.get("decision"),
+            record.get("related_todo_ids"), record.get("related_learning_slugs"),
+        )
+        if current == desired:
+            continue
+        record.update({
+            "review_status": "reviewed",
+            "reviewed_at": reviewed_at,
+            "review_run_slug": review_run_slug,
+            "decision": decision,
+            "related_todo_ids": todo_ids,
+            "related_learning_slugs": learning_slugs,
+            "updated_at": iso_now(),
+        })
+        updated += 1
+    if updated:
+        write_json_file(YODA_FEEDBACK_PATH, rows)
+    return {"updated": updated, "requested": len(answer_ids)}
 
 
 def sanitize_diagnostics(diagnostics):
@@ -4380,6 +4539,11 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             slug = (query.get("slug") or [""])[0].strip()
             limit = (query.get("limit") or ["20"])[0]
             return self.end_json({"ok": True, "slug": slug, "entries": yoda_log_entries(slug or None, limit)})
+        if parsed.path == "/api/yoda-feedback":
+            query = parse_qs(parsed.query)
+            filters = {key: (values or [""])[0] for key, values in query.items()}
+            feedback, counts = list_yoda_feedback(filters)
+            return self.end_json({"ok": True, "feedback": feedback, "counts": counts})
         if parsed.path.startswith("/api/yoda-chat/"):
             slug = unquote(parsed.path.split("/api/yoda-chat/", 1)[1]).strip("/")
             return self.end_json({"ok": True, "slug": slug, "messages": yoda_chat_history(slug)})
@@ -4496,6 +4660,19 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
         return super().do_GET()
 
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/yoda-feedback/"):
+            answer_id = unquote(parsed.path.split("/api/yoda-feedback/", 1)[1]).strip("/")
+            try:
+                feedback = upsert_yoda_feedback(answer_id, self.read_json_body())
+                return self.end_json({"ok": True, "feedback": feedback})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        return self.end_json({"error": "Unknown PUT endpoint"}, status=HTTPStatus.NOT_FOUND)
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/refresh":
@@ -4515,6 +4692,13 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 if payload.get("reset"):
                     return self.end_json({"ok": True, **reset_yoda_system_prompt()})
                 return self.end_json({"ok": True, **save_yoda_system_prompt(payload.get("prompt"))})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/yoda-feedback/review":
+            try:
+                return self.end_json({"ok": True, **review_yoda_feedback(self.read_json_body())})
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001

@@ -273,6 +273,85 @@ try {
   await page.setViewportSize({ width: 1440, height: 1700 });
   await page.waitForTimeout(250);
 
+  await page.focus("#filterDrawerHandle");
+  await page.press("#filterDrawerHandle", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#mapFilterPanel")?.classList.contains("is-hidden"));
+  const desktopFilterBounds = await page.evaluate(() => {
+    const panel = document.querySelector("#mapFilterPanel")?.getBoundingClientRect();
+    return { right: panel?.right, bottom: panel?.bottom, width: innerWidth, height: innerHeight };
+  });
+  if (desktopFilterBounds.right > desktopFilterBounds.width || desktopFilterBounds.bottom > desktopFilterBounds.height) {
+    throw new Error(`Expected graph filters to remain in desktop viewport: ${JSON.stringify(desktopFilterBounds)}`);
+  }
+  await page.click("#mapFilterCloseButton");
+  const closedByButton = await page.evaluate(() => ({
+    hidden: document.querySelector("#mapFilterPanel")?.classList.contains("is-hidden"),
+    handleVisible: !document.querySelector("#filterDrawerHandle")?.classList.contains("is-hidden"),
+    focused: document.activeElement?.id,
+  }));
+  if (!closedByButton.hidden || !closedByButton.handleVisible || closedByButton.focused !== "filterDrawerHandle") {
+    throw new Error(`Expected close button to dismiss filters and return focus: ${JSON.stringify(closedByButton)}`);
+  }
+  await page.focus("#filterDrawerHandle");
+  await page.press("#filterDrawerHandle", "Enter");
+  await page.press("#filterDrawerHandle", "Escape");
+  const closedByEscape = await page.evaluate(() => ({
+    hidden: document.querySelector("#mapFilterPanel")?.classList.contains("is-hidden"),
+    focused: document.activeElement?.id,
+  }));
+  if (!closedByEscape.hidden || closedByEscape.focused !== "filterDrawerHandle") {
+    throw new Error(`Expected Escape to dismiss filters and return focus: ${JSON.stringify(closedByEscape)}`);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.focus("#filterDrawerHandle");
+  await page.press("#filterDrawerHandle", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#mapFilterPanel")?.classList.contains("is-hidden"));
+  const narrowFilterBounds = await page.evaluate(() => {
+    const panel = document.querySelector("#mapFilterPanel")?.getBoundingClientRect();
+    return { left: panel?.left, right: panel?.right, top: panel?.top, bottom: panel?.bottom, width: innerWidth, height: innerHeight };
+  });
+  if (narrowFilterBounds.left < 0 || narrowFilterBounds.right > narrowFilterBounds.width || narrowFilterBounds.top < 0 || narrowFilterBounds.bottom > narrowFilterBounds.height) {
+    throw new Error(`Expected graph filters to remain in 390x844 viewport: ${JSON.stringify(narrowFilterBounds)}`);
+  }
+  await page.click("#mapFilterCloseButton");
+  await page.setViewportSize({ width: 1440, height: 1700 });
+  await page.waitForTimeout(250);
+
+  await page.evaluate(async () => {
+    const api = window.__MEMORY_STARGRAPH__;
+    const state = api.getState();
+    await api.loadEntity("people/tony-guan", { source: "manual", recordHistory: false });
+    state.selectionHistory.slugs = ["people/tony-guan"];
+    state.selectionHistory.index = 0;
+    state.selectionHistory.navigating = false;
+  });
+  await openSearchFlyout();
+  await page.fill("#searchInput", "products/memory-stargraph");
+  await page.press("#searchInput", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && window.__MEMORY_STARGRAPH__.getState().focusSlug === "products/memory-stargraph", null, { timeout: 30000 });
+  const searchHistory = await page.evaluate(async () => {
+    const api = window.__MEMORY_STARGRAPH__;
+    const state = api.getState();
+    const afterSearch = [...state.selectionHistory.slugs];
+    const searchedUrl = location.search;
+    await api.navigateSelectionHistory(-1);
+    const afterBack = state.focusSlug;
+    const backUrl = location.search;
+    await api.navigateSelectionHistory(1);
+    return { afterSearch, searchedUrl, afterBack, backUrl, afterForward: state.focusSlug, forwardUrl: location.search };
+  });
+  if (JSON.stringify(searchHistory.afterSearch) !== JSON.stringify(["people/tony-guan", "products/memory-stargraph"]) || searchHistory.afterBack !== "people/tony-guan" || searchHistory.afterForward !== "products/memory-stargraph" || !searchHistory.searchedUrl.includes("products%2Fmemory-stargraph") || !searchHistory.backUrl.includes("people%2Ftony-guan") || !searchHistory.forwardUrl.includes("products%2Fmemory-stargraph")) {
+    throw new Error(`Expected search selection to support one Back and Forward with deep-link URLs: ${JSON.stringify(searchHistory)}`);
+  }
+  await openSearchFlyout();
+  await page.fill("#searchInput", "products/memory-stargraph");
+  await page.press("#searchInput", "Enter");
+  await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
+  const repeatedSearchHistory = await page.evaluate(() => [...window.__MEMORY_STARGRAPH__.getState().selectionHistory.slugs]);
+  if (JSON.stringify(repeatedSearchHistory) !== JSON.stringify(["people/tony-guan", "products/memory-stargraph"])) {
+    throw new Error(`Expected repeated same-node search not to duplicate history: ${JSON.stringify(repeatedSearchHistory)}`);
+  }
+
   await openSearchFlyout();
   await page.fill("#searchInput", "tony");
   await page.press("#searchInput", "Enter");
@@ -592,6 +671,10 @@ try {
       },
     });
   });
+  await page.click("#nodeMenuButton");
+  await page.waitForSelector("#contextMenu:not([hidden])");
+  await page.click('#contextMenu button[data-action="view"]');
+  await page.waitForSelector("#operationModal:not([hidden])");
   const markdownFormatting = await page.evaluate(() => {
     window.__MEMORY_STARGRAPH__.renderMarkdownView([
       "# Format Probe",
@@ -706,8 +789,8 @@ try {
   const gbrainOperationTemplates = [];
   await page.click("#nodeMenuButton");
   await page.waitForSelector("#contextMenu:not([hidden])");
-  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 12).map((button) => button.dataset.action));
-  const expectedMenuPrefix = ["view", "ask-yoda", "media", "view-relationships", "backlinks", "tags", "attach-file", "graph-query", "timeline-view", "history", "embed", "hide"];
+  const firstMenuActions = await page.evaluate(() => [...document.querySelectorAll("#contextMenu button")].slice(0, 13).map((button) => button.dataset.action));
+  const expectedMenuPrefix = ["view", "ask-yoda", "take-review", "media", "view-relationships", "backlinks", "tags", "attach-file", "graph-query", "timeline-view", "history", "embed", "hide"];
   if (JSON.stringify(firstMenuActions) !== JSON.stringify(expectedMenuPrefix)) {
     throw new Error(`Expected node menu order ${expectedMenuPrefix.join(", ")}, got ${firstMenuActions.join(", ")}`);
   }
@@ -913,26 +996,22 @@ try {
 
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled, null, { timeout: 30000 });
   await openSearchFlyout();
-  await page.fill("#searchInput", "RFC - JTuner - Part 03");
+  await page.fill("#searchInput", "gbrain usage 2026-07-16");
   await page.click("#searchButton");
   await page.waitForFunction(() => !document.querySelector("#searchInput")?.disabled && !document.querySelector("#searchButton")?.disabled, null, { timeout: 30000 });
-  await page.waitForFunction(
-    () => window.__MEMORY_STARGRAPH__.getState().matchSlugs.has("products/jtuner/rfc"),
-    null,
-    { timeout: 10000 },
-  );
   const partSearch = await page.evaluate(async () => {
     const state = window.__MEMORY_STARGRAPH__.getState();
     return {
       matches: state.matchSlugs.size,
       slugs: [...state.matchSlugs].slice(0, 8),
+      hasCollapsedParent: state.nodeMap.has("agent/reports/gbrain-usage"),
       hasCollapsedMetric: Boolean(document.querySelector("#metricCollapsed")),
       sourceStatus: state.graph.source.status,
       searchResults: state.graph.source.coverage?.search_results,
     };
   });
-  if (partSearch.matches < 1) {
-    throw new Error("Expected old part title search to find a collapsed parent node");
+  if (!partSearch.hasCollapsedParent || partSearch.searchResults < 1) {
+    throw new Error(`Expected dated usage search to preserve the collapsed parent and backend results: ${JSON.stringify(partSearch)}`);
   }
   if (partSearch.hasCollapsedMetric) {
     throw new Error("Expected Parts to be removed from the statistics row");

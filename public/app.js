@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.149";
+const UI_VERSION = "V1.0.150";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -75,6 +75,7 @@ const state = {
   modalAction: null,
   askYodaChats: new Map(),
   askYodaLogs: new Map(),
+  yodaFeedback: new Map(),
   yodaLogReturn: null,
   yodaModelReturn: null,
   slugSelectorSearch: new Map(),
@@ -151,6 +152,7 @@ const mapViewButton = document.getElementById("mapViewButton");
 const mapAskYodaButton = document.getElementById("mapAskYodaButton");
 const filterDrawerHandle = document.getElementById("filterDrawerHandle");
 const mapFilterPanel = document.getElementById("mapFilterPanel");
+const mapFilterCloseButton = document.getElementById("mapFilterCloseButton");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
 const zoomLevel = document.getElementById("zoomLevel");
@@ -492,6 +494,18 @@ function apiPost(url, payload = {}) {
   }));
 }
 
+function apiPut(url, payload = {}) {
+  return window.fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(async (response) => ({
+    ok: response.ok,
+    status: response.status,
+    data: await response.json(),
+  }));
+}
+
 function apiPostForm(url, formData) {
   return window.fetch(url, {
     method: "POST",
@@ -760,6 +774,11 @@ function hideFilterSidebar() {
   updateMapFilterPanel();
 }
 
+function dismissFilterSidebar({ restoreFocus = true } = {}) {
+  hideFilterSidebar();
+  if (restoreFocus) filterDrawerHandle?.focus();
+}
+
 function pointerStayedInsideFilterSidebar(target) {
   return Boolean(
     target
@@ -836,6 +855,11 @@ function recordSelectionHistory(slug) {
   }
   state.selectionHistory.index = state.selectionHistory.slugs.length - 1;
   updateSelectionHistoryControls();
+}
+
+function prepareSearchSelectionHistory(previousSlug) {
+  if (!previousSlug) return;
+  recordSelectionHistory(previousSlug);
 }
 
 async function navigateSelectionHistory(delta) {
@@ -1128,6 +1152,7 @@ async function runLazySearch(query) {
   setSearchLoading(true);
   const selectionVersion = state.selectionVersion;
   try {
+    prepareSearchSelectionHistory(state.focusSlug);
     const exactSlugLoaded = await tryExactSlugSearch(submittedQuery);
     if (exactSlugLoaded) {
       reportSearchTiming(searchStartedAt);
@@ -3228,6 +3253,8 @@ function normalizeYodaChatMessages(messages = []) {
       role: message.role,
       content: String(message.content || ""),
       timestamp: message.timestamp || chatTimestamp(),
+      ...(message.answer_id ? { answer_id: String(message.answer_id) } : {}),
+      ...(message.request_id ? { request_id: String(message.request_id) } : {}),
       ...(message.fallbackOutput ? { fallbackOutput: String(message.fallbackOutput) } : {}),
     }));
 }
@@ -3253,6 +3280,34 @@ async function loadYodaChatHistory(slug, label) {
     state.askYodaChats.set(slug, fallback);
   }
   return chatHistoryFor(slug, label, { mode: "yoda" });
+}
+
+async function loadYodaFeedback(slug) {
+  const params = new URLSearchParams({ slug, limit: "500" });
+  const response = await apiGet(`/api/yoda-feedback?${params.toString()}`);
+  if (!response.ok) throw new Error(response.data?.error || `Feedback load failed with ${response.status}`);
+  (response.data.feedback || []).forEach((item) => {
+    if (item?.answer_id) state.yodaFeedback.set(item.answer_id, item);
+  });
+}
+
+async function saveYodaFeedback(slug, message, patch = {}) {
+  const answerId = message.answer_id || message.request_id;
+  if (!answerId) throw new Error("This answer does not have a stable feedback identity.");
+  const current = state.yodaFeedback.get(answerId) || {};
+  const payload = {
+    request_id: message.request_id || current.request_id || "",
+    slug,
+    rating: patch.rating === undefined ? (current.rating || "") : patch.rating,
+    comment: patch.comment === undefined ? (current.comment || "") : patch.comment,
+    environment: "production",
+    synthetic: false,
+    test_run: false,
+  };
+  const response = await apiPut(`/api/yoda-feedback/${encodeURIComponent(answerId)}`, payload);
+  if (!response.ok) throw new Error(response.data?.error || `Feedback save failed with ${response.status}`);
+  state.yodaFeedback.set(answerId, response.data.feedback);
+  return response.data.feedback;
 }
 
 async function clearYodaChatHistory(slug, label) {
@@ -3319,6 +3374,109 @@ function renderHiddenFallbackReveal(message, parent) {
   parent.appendChild(wrapper);
 }
 
+function renderYodaFeedbackControls(slug, label, message, row) {
+  if (!message.answer_id || message.pending) return;
+  const saved = state.yodaFeedback.get(message.answer_id) || {};
+  const controls = document.createElement("div");
+  controls.className = "yoda-feedback-controls";
+
+  const status = document.createElement("span");
+  status.className = "yoda-feedback-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+
+  const ratingButtons = new Map();
+  const makeRatingButton = (rating, icon, labelText) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "yoda-feedback-button has-tooltip";
+    button.textContent = icon;
+    button.setAttribute("aria-label", labelText);
+    button.setAttribute("aria-pressed", saved.rating === rating ? "true" : "false");
+    setHudTooltip(button, labelText);
+    button.addEventListener("click", async () => {
+      const nextRating = state.yodaFeedback.get(message.answer_id)?.rating === rating ? "" : rating;
+      controls.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+      status.textContent = "Saving feedback...";
+      try {
+        await saveYodaFeedback(slug, message, { rating: nextRating });
+        controls.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+        ratingButtons.forEach((item, value) => item.setAttribute("aria-pressed", nextRating === value ? "true" : "false"));
+        status.textContent = nextRating ? "Feedback saved." : "Rating cleared.";
+      } catch (error) {
+        controls.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+        status.textContent = `Feedback was not saved. ${error.message || String(error)}`;
+      }
+    });
+    ratingButtons.set(rating, button);
+    controls.appendChild(button);
+  };
+
+  makeRatingButton("up", "👍", "Rate this answer helpful");
+  makeRatingButton("down", "👎", "Rate this answer unhelpful");
+
+  const commentButton = document.createElement("button");
+  commentButton.type = "button";
+  commentButton.className = "yoda-feedback-button has-tooltip";
+  commentButton.textContent = "💬";
+  commentButton.setAttribute("aria-label", "Write feedback for this answer");
+  commentButton.setAttribute("aria-expanded", "false");
+  setHudTooltip(commentButton, "Write feedback for this answer");
+  controls.append(commentButton, status);
+
+  const editor = document.createElement("div");
+  editor.className = "yoda-feedback-editor";
+  editor.hidden = true;
+  const textarea = document.createElement("textarea");
+  textarea.maxLength = 2000;
+  textarea.rows = 3;
+  textarea.value = saved.comment || "";
+  textarea.setAttribute("aria-label", "Feedback comment, 2000 characters maximum");
+  const actions = document.createElement("div");
+  actions.className = "yoda-feedback-editor-actions";
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "ghost-button compact-button";
+  saveButton.textContent = "Save";
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "ghost-button compact-button";
+  cancelButton.textContent = "Cancel";
+  actions.append(saveButton, cancelButton);
+  editor.append(textarea, actions);
+
+  commentButton.addEventListener("click", () => {
+    editor.hidden = !editor.hidden;
+    commentButton.setAttribute("aria-expanded", editor.hidden ? "false" : "true");
+    if (!editor.hidden) textarea.focus();
+  });
+  cancelButton.addEventListener("click", () => {
+    textarea.value = state.yodaFeedback.get(message.answer_id)?.comment || "";
+    editor.hidden = true;
+    commentButton.setAttribute("aria-expanded", "false");
+    commentButton.focus();
+  });
+  saveButton.addEventListener("click", async () => {
+    saveButton.disabled = true;
+    cancelButton.disabled = true;
+    textarea.disabled = true;
+    status.textContent = "Saving feedback...";
+    try {
+      await saveYodaFeedback(slug, message, { comment: textarea.value });
+      status.textContent = "Feedback saved.";
+      editor.hidden = true;
+      commentButton.setAttribute("aria-expanded", "false");
+      commentButton.focus();
+    } catch (error) {
+      saveButton.disabled = false;
+      cancelButton.disabled = false;
+      textarea.disabled = false;
+      status.textContent = `Feedback was not saved. ${error.message || String(error)}`;
+    }
+  });
+  row.append(controls, editor);
+}
+
 function renderAskChat(slug, label, options = {}) {
   const history = chatHistoryFor(slug, label, options);
   modalChatLog.innerHTML = "";
@@ -3355,6 +3513,9 @@ function renderAskChat(slug, label, options = {}) {
       bubble.appendChild(dots);
     }
     row.appendChild(bubble);
+    if (message.role === "assistant" && !message.pending) {
+      renderYodaFeedbackControls(slug, label, message, row);
+    }
 
     modalChatLog.appendChild(row);
   });
@@ -5567,6 +5728,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     syncYodaDepthControl();
     modalChatInput.value = "";
     await loadYodaChatHistory(slug, label);
+    await loadYodaFeedback(slug);
     renderAskChat(slug, label, { mode: "yoda" });
     setModalControlTooltips("Send", "Cancel");
     operationModal.hidden = false;
@@ -6066,7 +6228,7 @@ async function runModalPrimaryAction() {
         diagnostics: response.data.diagnostics,
       });
       if (modalYodaLogButton) modalYodaLogButton.disabled = false;
-      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", fallbackOutput: response.data.fallback_output || "", timestamp: chatTimestamp() };
+      history[history.length - 1] = { role: "assistant", content: response.data.output || "(No output)", fallbackOutput: response.data.fallback_output || "", timestamp: chatTimestamp(), answer_id: response.data.request_id, request_id: response.data.request_id };
       renderAskChat(slug, label, { mode: "yoda" });
       await persistYodaChat(slug);
       const timing = response.data.timings?.total_ms ? ` · ${response.data.timings.total_ms}ms` : "";
@@ -6558,15 +6720,31 @@ function bindEvents() {
   filterDrawerHandle?.addEventListener("pointerleave", (event) => {
     if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   });
-  filterDrawerHandle?.addEventListener("focus", showFilterSidebar);
+  filterDrawerHandle?.addEventListener("click", showFilterSidebar);
+  filterDrawerHandle?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    showFilterSidebar();
+  });
   mapFilterPanel?.addEventListener("pointerenter", showFilterSidebar);
   mapFilterPanel?.addEventListener("click", showFilterSidebar);
+  mapFilterCloseButton?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dismissFilterSidebar();
+  });
   mapFilterPanel?.addEventListener("pointerleave", (event) => {
     if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   });
   mapFilterPanel?.addEventListener("blur", (event) => {
     if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   }, true);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.mapFiltersVisible) {
+      event.preventDefault();
+      dismissFilterSidebar();
+    }
+  });
 
   searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;

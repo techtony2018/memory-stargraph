@@ -2145,6 +2145,67 @@ h2 {
   background: rgba(255, 198, 111, 0.08);
 }
 
+.yoda-feedback-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.yoda-feedback-button {
+  min-width: 30px;
+  min-height: 30px;
+  border: 1px solid rgba(143, 168, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(5, 8, 22, 0.68);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.yoda-feedback-button[aria-pressed="true"] {
+  border-color: rgba(136, 246, 255, 0.72);
+  background: rgba(136, 246, 255, 0.16);
+}
+
+.yoda-feedback-button:focus-visible,
+.yoda-feedback-editor textarea:focus-visible {
+  outline: 2px solid rgba(136, 246, 255, 0.72);
+  outline-offset: 2px;
+}
+
+.yoda-feedback-status {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.yoda-feedback-editor {
+  display: grid;
+  gap: 7px;
+  width: min(100%, 460px);
+}
+
+.yoda-feedback-editor[hidden] {
+  display: none;
+}
+
+.yoda-feedback-editor textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(143, 168, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(5, 8, 22, 0.9);
+  color: var(--text);
+  padding: 9px 10px;
+  font: 13px/1.4 Inter, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.yoda-feedback-editor-actions {
+  display: flex;
+  gap: 7px;
+}
+
 .chat-message.system .chat-bubble {
   color: var(--muted);
   font-style: italic;
@@ -4089,6 +4150,24 @@ body::after {
   background: rgba(2, 8, 22, 0.76);
   clip-path: var(--chamfer);
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.24), inset 0 0 18px rgba(34, 211, 238, 0.08);
+}
+
+.map-filter-close-button {
+  justify-self: end;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(143, 168, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(5, 8, 22, 0.82);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.map-filter-close-button:focus-visible {
+  outline: 2px solid rgba(136, 246, 255, 0.72);
+  outline-offset: 2px;
 }
 
 .yoda-log-window {

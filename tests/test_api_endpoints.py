@@ -177,6 +177,24 @@ class ApiEndpointTests(unittest.TestCase):
         MemoryStargraphHandler.do_GET(handler)
         return captured["status"], captured["payload"]
 
+    def dispatch_put(self, path, payload=None):
+        handler = object.__new__(MemoryStargraphHandler)
+        handler.path = path
+        captured = {}
+
+        def read_json_body(self):
+            return dict(payload or {})
+
+        def end_json(self, response_payload, status=200):
+            captured["status"] = int(status)
+            captured["payload"] = json.loads(json.dumps(response_payload))
+            return captured["payload"]
+
+        handler.read_json_body = types.MethodType(read_json_body, handler)
+        handler.end_json = types.MethodType(end_json, handler)
+        MemoryStargraphHandler.do_PUT(handler)
+        return captured["status"], captured["payload"]
+
     def test_api_test_harness_marks_ask_yoda_requests_as_synthetic_tests(self):
         fake_store = FakeStore()
         with (
@@ -731,6 +749,105 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(data["entries"]), 1)
         self.assertEqual(data["entries"][0]["request_id"], "diag-1")
+
+    def test_yoda_chat_assigns_stable_answer_identity_for_new_and_legacy_answers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chat_path = Path(tmpdir) / "yoda_chats.json"
+            with mock.patch("server.YODA_CHAT_PATH", chat_path):
+                status, saved = self.dispatch_post(
+                    "/api/yoda-chat/people%2Ftony-guan",
+                    {
+                        "messages": [
+                            {"role": "assistant", "content": "New answer", "timestamp": "Jul 17, 9:00 AM", "request_id": "yoda-new"},
+                            {"role": "assistant", "content": "Legacy answer", "timestamp": "Jul 17, 8:00 AM"},
+                        ]
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(saved["messages"][0]["answer_id"], "yoda-new")
+                legacy_id = saved["messages"][1]["answer_id"]
+                self.assertTrue(legacy_id.startswith("legacy-yoda-"))
+
+                status, restored = self.dispatch_get("/api/yoda-chat/people%2Ftony-guan")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(restored["messages"][1]["answer_id"], legacy_id)
+
+    def test_yoda_feedback_upserts_independently_of_chat_clear_and_isolates_tests(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with (
+                mock.patch("server.YODA_CHAT_PATH", data_dir / "yoda_chats.json"),
+                mock.patch("server.YODA_FEEDBACK_PATH", data_dir / "yoda_feedback.json"),
+            ):
+                status, first = self.dispatch_put(
+                    "/api/yoda-feedback/yoda-production-1",
+                    {"request_id": "yoda-production-1", "slug": "people/tony-guan", "rating": "up", "comment": "Useful sk-test-secret"},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(first["feedback"]["rating"], "up")
+                self.assertIn("[redacted]", first["feedback"]["comment"])
+                created_at = first["feedback"]["created_at"]
+
+                status, updated = self.dispatch_put(
+                    "/api/yoda-feedback/yoda-production-1",
+                    {"request_id": "yoda-production-1", "slug": "people/tony-guan", "rating": "down", "comment": "Needs a backlink"},
+                )
+                self.assertEqual(updated["feedback"]["rating"], "down")
+                self.assertEqual(updated["feedback"]["created_at"], created_at)
+
+                status, _test = self.dispatch_put(
+                    "/api/yoda-feedback/yoda-test-1",
+                    {
+                        "request_id": "yoda-test-1",
+                        "slug": "people/tony-guan",
+                        "rating": "down",
+                        "comment": "Synthetic probe",
+                        "environment": "test",
+                        "synthetic": True,
+                        "test_run": True,
+                        "pair_id": "feedback-probe-1",
+                    },
+                )
+                self.dispatch_post("/api/yoda-chat/people%2Ftony-guan", {"clear": True})
+                status, production = self.dispatch_get("/api/yoda-feedback?slug=people%2Ftony-guan")
+                status, auditable = self.dispatch_get("/api/yoda-feedback?slug=people%2Ftony-guan&include_test=true")
+
+        self.assertEqual(status, 200)
+        self.assertEqual([item["answer_id"] for item in production["feedback"]], ["yoda-production-1"])
+        self.assertEqual(production["counts"], {"production": 1, "test": 1})
+        self.assertEqual({item["answer_id"] for item in auditable["feedback"]}, {"yoda-production-1", "yoda-test-1"})
+        probe = next(item for item in auditable["feedback"] if item["answer_id"] == "yoda-test-1")
+        self.assertEqual(probe["pair_id"], "feedback-probe-1")
+        self.assertTrue(probe["synthetic"])
+
+    def test_yoda_feedback_validates_limits_and_review_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch("server.YODA_FEEDBACK_PATH", Path(tmpdir) / "yoda_feedback.json"):
+                status, invalid = self.dispatch_put("/api/yoda-feedback/a-1", {"slug": "people/tony-guan", "rating": "maybe"})
+                self.assertEqual(status, 400)
+                self.assertIn("rating", invalid["error"])
+                status, too_long = self.dispatch_put("/api/yoda-feedback/a-1", {"slug": "people/tony-guan", "comment": "x" * 2001})
+                self.assertEqual(status, 400)
+                self.assertIn("2000", too_long["error"])
+
+                self.dispatch_put("/api/yoda-feedback/a-1", {"slug": "people/tony-guan", "rating": "down"})
+                review = {
+                    "answer_ids": ["a-1"],
+                    "review_run_slug": "runs/daily-review-1",
+                    "decision": "data_quality_recommendation",
+                    "related_todo_ids": [],
+                    "related_learning_slugs": [],
+                    "reviewed_at": "2026-07-17T09:00:00-07:00",
+                }
+                status, first = self.dispatch_post("/api/yoda-feedback/review", review)
+                status, second = self.dispatch_post("/api/yoda-feedback/review", review)
+                status, listed = self.dispatch_get("/api/yoda-feedback?review_status=reviewed")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(first["updated"], 1)
+        self.assertEqual(second["updated"], 0)
+        self.assertEqual(listed["feedback"][0]["decision"], "data_quality_recommendation")
 
     def test_ask_yoda_endpoint_logs_resolver_event_and_persistent_log(self):
         fake_store = FakeStore()
