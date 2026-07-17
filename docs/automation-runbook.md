@@ -211,6 +211,34 @@ capture evidence, and metric claims before counting the work as progress. If
 direct task messaging is unavailable, the worker records
 `product_owner_notification_pending` with the same payload in its Run/report.
 
+### Product Owner Worker Watch
+
+Completion notifications are not enough because a system error can prevent a
+worker from ever reaching its terminal handoff. The
+`memory-stargraph-product-owner-worker-watch` heartbeat gives the Product Owner
+role-specific estimated durations and interim check windows after each scheduled
+heartbeat.
+
+The watch is a control-tower check, not another implementation worker. It uses
+`America/Los_Angeles` time, inspects only roles whose watch window is relevant
+or overdue, and compares live automation state, canonical destination task,
+latest task activity, Goal-linked Run/report evidence, and Product Owner
+notifications. It treats missing starts, stale in-progress runs, wrong
+destination tasks, unexpected pauses, duplicate recurring tasks, stale leases,
+failed tool/auth gates, `system error`, `model out of capacity`, `modal out of
+capacity`, and repeated retry loops as `blocked_or_silent`.
+
+When a role is `blocked_or_silent`, the Product Owner takes the next safe action
+immediately: send a bounded follow-up to the canonical worker task asking it to
+resume from durable evidence, terminalize truthfully, or report the blocker;
+route confirmed infrastructure or health failures to the daily SRE task using
+the incident handoff contract; or ask Tony only when human authority is
+required. If the same capacity or system error recurs twice in the same role
+window, record it as a Product Owner-visible blocker and request a bounded retry
+or reschedule instead of silently waiting for the next day. The watch reports
+only anomalies and actions taken, or a short quiet status when all relevant
+roles are inside their estimate.
+
 ## TODO Backlog Compaction
 
 The root backlog `notes/memory-starmap-todo-list` must stay lightweight. Run this before selecting nightly work and again after final TODO status updates:

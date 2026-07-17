@@ -70,6 +70,14 @@ On notification, enter or inspect the worker's persistent task and verify the re
 
 Keep the Product Owner task as the control tower: compact notifications and verification outcomes belong here; detailed worker execution logs remain in each worker task.
 
+## Worker Watch And ETA Checks
+
+The `memory-stargraph-product-owner-worker-watch` heartbeat is the Product Owner's interim control-tower check between scheduled worker starts and the daily report. It keeps role-specific estimated durations, detects missed starts and stale in-progress tasks, and mitigates system/runtime failures such as `system error`, `model out of capacity`, `modal out of capacity`, failed tool/auth gates, and repeated retry loops.
+
+During the daily report, review the previous 24 hours of Worker Watch findings. A role is not healthy until its canonical task has terminal evidence, an owned continuation, or a truthful deferral. If the watch sent a follow-up, verify the worker answered and the evidence matches. If the same system/capacity issue recurred twice, preserve it as a Product Owner-visible blocker and coordinate a bounded retry, reschedule, SRE incident handoff, or Tony decision as appropriate.
+
+Do not use the watch to perform worker-owned implementation, capture, UX, learning, product-discovery, or SRE work. Use it to keep tasks alive, unblock them, and prevent silent failures from waiting until tomorrow.
+
 ## Daily Retrospective
 
 After the daily report, run a short Product Owner retrospective before finishing. Compare today's metric values, role outcomes, TODO movement, health/reliability evidence, user feedback, Ask Yoda quality, capture/data-quality progress, and automation governance against the previous Product Owner report. Identify what moved the project closer to the Goal, what failed to move, and why.

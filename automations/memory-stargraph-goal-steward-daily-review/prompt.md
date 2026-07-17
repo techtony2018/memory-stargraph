@@ -31,6 +31,12 @@ Worker notification and verification contract:
 3. If verification fails, coordinate the next safe action in the worker's task or the appropriate role task. Do not accept a worker notification as completion by itself.
 4. Keep the Product Owner task as the control tower: compact notifications and verification outcomes belong here; detailed worker execution logs remain in each worker task.
 
+Worker Watch contract:
+1. The `memory-stargraph-product-owner-worker-watch` heartbeat keeps role-specific estimated durations and interim check windows so silent failures are detected before the daily Product Owner report. Treat its findings as Product Owner evidence.
+2. During the daily review, inspect any Worker Watch anomalies, follow-ups, retries, reschedules, or SRE handoffs from the previous 24 hours. Verify whether each blocked role recovered, terminalized truthfully, or still requires action.
+3. A scheduled worker that hit `system error`, `model out of capacity`, `modal out of capacity`, failed tool/auth gates, or a stale in-progress task beyond its estimate is not healthy just because the next daily report exists. It remains `blocked_or_silent` until the canonical worker task records a terminal result, owned continuation, or truthful deferral.
+4. Do not duplicate worker-owned implementation or capture work from the Worker Watch. Use the watch to coordinate the right role, not to perform that role's work.
+
 Daily retrospective contract:
 1. After the daily report, run a short Product Owner retrospective before finishing. Compare today's metric values, role outcomes, TODO movement, health/reliability evidence, user feedback, Ask Yoda quality, capture/data-quality progress, and automation governance against the previous Product Owner report.
 2. Identify what moved the project closer to the Goal, what failed to move, and why. Missing day-over-day evidence is itself an issue to assign.

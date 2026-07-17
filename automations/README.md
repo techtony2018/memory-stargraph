@@ -23,6 +23,7 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | Daily 2:00 AM | Memory Stargraph Developer | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
 | Daily 6:00 AM | Memory Stargraph UX Engineer | `memory-stargraph-ux-engineer-daily-dogfood` | Dogfood the dashboard-managed app, record journey evidence, and promote at most three reproduced UX findings into planned TODOs. |
 | Sunday 4:00 AM | Memory Stargraph Product Strategist | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
+| Daily watch windows | Memory Stargraph Product Owner Worker Watch | `memory-stargraph-product-owner-worker-watch` | Check role-specific ETA windows after heartbeats, detect silent/system failures, and nudge the canonical role task before the daily summary. |
 | Daily 7:00 AM | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated Product Owner task. |
 | Daily 8:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-daily-reliability` | During verified quiet time, inspect deployed-stack reliability, apply bounded documented remediation, and report capacity headroom. |
 | Sunday 11:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-weekly-resilience` | During verified quiet time, run safe-target load, isolated restore, failover, rollback, and capacity-envelope exercises. |
@@ -37,13 +38,18 @@ target distinct persistent tasks while sharing one SRE prompt, role, and
 quiet-time contract. Busy runs defer task-locally, and Sunday receives both the
 daily review and the separate weekly exercise.
 
-All nine automations work toward the persistent GBrain goal:
+All recurring Memory Stargraph automations work toward the persistent GBrain goal:
 
 ```text
 goals/memory-stargraph-continuous-learning-local-knowledge-os
 ```
 
-The Product Owner review is an accountability gate, not a passive digest. It
+The Product Owner review is an accountability gate, not a passive digest. The
+separate Product Owner Worker Watch keeps role-specific estimated durations so
+silent failures are caught before the morning summary. The watch checks expected
+start/progress/terminal windows, detects system errors such as model or modal
+capacity failures, and sends bounded follow-ups to the canonical role task or
+routes confirmed infrastructure issues to SRE. The daily Product Owner review
 must detect blocked or silent roles, take the next safe coordination action in
 the correct persistent task, clean up duplicate recurring destinations, and
 report a stable daily Goal progress percentage with the highest-leverage action
@@ -51,6 +57,20 @@ to improve it. After the daily report, Product Owner runs a retrospective that
 compares the current metrics and role outcomes against the previous day, assigns
 actions for regressions or stalls, and proposes new roles only for Tony's review
 when existing roles cannot cover the gap.
+
+## Worker Watch ETA Table
+
+| Role | Scheduled start | First watch | Expected terminal/deferral window |
+| --- | --- | --- | --- |
+| Memory Stargraph Knowledge Curator | Daily 12:00 AM | 12:30 AM | 60 minutes unless a large frozen snapshot has fresh progress |
+| GBrain Intelligence Researcher | Daily 12:15 AM | 12:30 AM | 45 minutes |
+| Memory Stargraph Quality & Learning Analyst | Daily 1:00 AM | 1:30 AM | 45 minutes |
+| Memory Stargraph Developer | Daily 2:00 AM | 2:30 AM | progress within 30 minutes; terminal, failed evidence, or owned continuation by 5:30 AM |
+| Memory Stargraph UX Engineer | Daily 6:00 AM | 6:30 AM | before the 7:00 AM Product Owner review |
+| Memory Stargraph Product Owner | Daily 7:00 AM | 8:30 AM if still active | 45 minutes |
+| Memory Stargraph SRE daily reliability | Daily 8:00 AM | 8:30 AM | 75 minutes |
+| Memory Stargraph Product Strategist | Sunday 4:00 AM | 5:30 AM | 90 minutes |
+| Memory Stargraph SRE weekly resilience | Sunday 11:00 AM | 12:30 PM | terminal, owned continuation, or quiet-time deferral by 2:30 PM |
 
 Worker tasks remain the system of record for detailed reports. Every recurring
 worker sends the canonical Product Owner task a compact completion/deferral

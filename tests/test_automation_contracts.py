@@ -46,6 +46,12 @@ class AutomationContractTests(unittest.TestCase):
                 "target_thread_id": "{{STEWARD_THREAD_ID}}",
                 "role_files": ("prompt.md", "steward-thread-prompt.md"),
             },
+            "memory-stargraph-product-owner-worker-watch": {
+                "title": "Memory Stargraph Product Owner Worker Watch",
+                "rrule": "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,8,9,12,14;BYMINUTE=30;BYSECOND=0",
+                "target_thread_id": "{{STEWARD_THREAD_ID}}",
+                "role_files": ("heartbeat-prompt.md",),
+            },
             "memory-stargraph-ux-engineer-daily-dogfood": {
                 "title": "Memory Stargraph UX Engineer",
                 "rrule": "FREQ=DAILY;BYHOUR=6;BYMINUTE=0;BYSECOND=0",
@@ -254,6 +260,52 @@ class AutomationContractTests(unittest.TestCase):
             "daily SRE task also accepts `mode=incident_response`",
             sre_bootstrap,
         )
+
+    def test_product_owner_worker_watch_has_eta_and_silent_failure_mitigation(self):
+        directory = ROOT / "automations/memory-stargraph-product-owner-worker-watch"
+        definition = tomllib.loads((directory / "automation.toml").read_text())
+        heartbeat = (directory / "heartbeat-prompt.md").read_text()
+        readme = (ROOT / "automations/README.md").read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        owner_bootstrap = (
+            ROOT
+            / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
+        ).read_text()
+        contract = "\n".join((heartbeat, readme, runbook, owner_prompt, owner_bootstrap))
+
+        self.assertEqual(definition["id"], "memory-stargraph-product-owner-worker-watch")
+        self.assertEqual(definition["name"], "Memory Stargraph Product Owner Worker Watch")
+        self.assertEqual(definition["timezone"], "America/Los_Angeles")
+        self.assertEqual(definition["destination"], "thread")
+        self.assertEqual(definition["target_thread_id"], "{{STEWARD_THREAD_ID}}")
+        self.assertEqual(
+            definition["worker_prompt_file"],
+            "../memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md",
+        )
+        for phrase in (
+            "role-specific estimated durations",
+            "Expected role durations and watch windows",
+            "Memory Stargraph Developer",
+            "progress within 30 minutes",
+            "by 5:30 AM",
+            "Memory Stargraph SRE weekly resilience",
+            "by 2:30 PM",
+            "missing start",
+            "stale in-progress",
+            "wrong destination task",
+            "system error",
+            "model out of capacity",
+            "modal out of capacity",
+            "blocked_or_silent",
+            "send a bounded follow-up",
+            "canonical worker task",
+            "route confirmed infrastructure or health failures to the daily SRE task",
+            "Do not duplicate worker-owned",
+        ):
+            self.assertIn(phrase, contract)
 
     def test_engineer_and_ux_engineer_coordinate_with_deployment_leases(self):
         engineer = (
