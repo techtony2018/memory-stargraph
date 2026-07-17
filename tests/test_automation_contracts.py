@@ -133,6 +133,29 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, contract)
 
+    def test_daily_learning_intake_runs_yoda_evaluator_before_promoting_gaps(self):
+        prompt = (ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md").read_text()
+        readme = (ROOT / "automations/README.md").read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        script = ROOT / "scripts/automation/yoda_gap_evaluator.py"
+        contract = "\n".join((prompt, readme, runbook))
+
+        self.assertTrue(script.exists())
+        for phrase in (
+            "Yoda Evaluator",
+            "scripts/automation/yoda_gap_evaluator.py run",
+            "at least 10",
+            "Ask Yoda API",
+            "environment=test",
+            "synthetic=true",
+            "test_run=true",
+            "same question in Codex",
+            "compare",
+            "TODO",
+            "deduplicate",
+        ):
+            self.assertIn(phrase, contract)
+
     def test_sre_automations_use_distinct_tasks_with_one_worker_contract(self):
         daily_dir = ROOT / "automations/memory-stargraph-sre-daily-reliability"
         weekly_dir = ROOT / "automations/memory-stargraph-sre-weekly-resilience"

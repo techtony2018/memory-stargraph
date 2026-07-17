@@ -198,6 +198,38 @@ new role or schedule change for Tony's review with scope, trigger, success
 metrics, safety boundaries, and why existing roles cannot cover it. New
 recurring roles require Tony's approval before creation.
 
+### Daily Yoda Evaluator
+
+The Memory Stargraph Quality & Learning Analyst owns the daily Yoda Evaluator
+inside `memory-stargraph-daily-learning-intake`; do not create a separate
+recurring worker unless Product Owner proposes it and Tony approves it.
+
+Each daily intake runs:
+
+```bash
+python3 scripts/automation/yoda_gap_evaluator.py run --output /tmp/yoda-evaluator-snapshot.json
+```
+
+The evaluator asks the Ask Yoda API at least 10 questions over recent daily dev,
+monitoring, TODO, logs, product, reliability, UX, and data-quality evidence.
+Every request uses `environment=test`, `synthetic=true`, `test_run=true`, and a
+stable `pair_id` so resolver telemetry and user-quality scoring can isolate the
+synthetic probes.
+
+The Codex worker then answers the same question in Codex using the same
+available evidence, compares the Codex answer to the Ask Yoda API answer, and
+classifies the gap. Run:
+
+```bash
+python3 scripts/automation/yoda_gap_evaluator.py report --snapshot /tmp/yoda-evaluator-reviewed.json --output /tmp/yoda-evaluator-report.json
+```
+
+Create or update TODOs only for bounded, deduplicated, evidence-backed
+`todo_candidate` gaps. Stylistic disagreement alone is not a TODO. Preserve
+reviewed evaluator snapshots or concise sanitized summaries in the Run/report;
+do not copy raw private questions, answers, comments, secrets, or
+chain-of-thought into GBrain.
+
 ### Worker completion notification
 
 Worker tasks remain the system of record for detailed execution reports. After

@@ -19,7 +19,7 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | --- | --- | --- | --- |
 | Daily 12:00 AM | Memory Stargraph Knowledge Curator | `memory-stargraph-capture-link-drain` | Freeze and drain every planned Capture Link request; when the first snapshot is empty, enrich up to two evidence-backed entities with people first. |
 | Daily 12:15 AM | GBrain Intelligence Researcher | `gbrain-x-intelligence-capture` | Collect public GBrain usage, releases, explanations, and product inspiration from X. |
-| Daily 1:00 AM | Memory Stargraph Quality & Learning Analyst | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs. |
+| Daily 1:00 AM | Memory Stargraph Quality & Learning Analyst | `memory-stargraph-daily-learning-intake` | Turn recent evidence into deduplicated, bounded planned TODOs, including the daily Yoda Evaluator comparison loop. |
 | Daily 2:00 AM | Memory Stargraph Developer | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
 | Daily 6:00 AM | Memory Stargraph UX Engineer | `memory-stargraph-ux-engineer-daily-dogfood` | Dogfood the dashboard-managed app, record journey evidence, and promote at most three reproduced UX findings into planned TODOs. |
 | Sunday 4:00 AM | Memory Stargraph Product Strategist | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
