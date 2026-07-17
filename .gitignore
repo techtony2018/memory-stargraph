@@ -4,10 +4,17 @@ __pycache__/
 .pytest_cache/
 node_modules/
 .worktrees/
+.venv/
+.playwright-cli/
 
 # Local runtime state
 data/*.json
 !data/.gitkeep
+logs/
+media/
+data/uploads/
+data/linkedin/
+data/gbrain-relationship-stats*.md
 
 # Local machine configuration
 config/local.json
@@ -17,3 +24,35 @@ config/local.json
 
 # Temporary QA output
 *.log
+
+# Local/generated planning and migration scratch files
+docs/superpowers/plans/2026-07-16-ask-yoda-user-feedback-learning-loop.md
+scripts/build_linkedin_local_archive.mjs
+scripts/debug_linkedin_post_page.mjs
+scripts/enrich_linkedin_posts.mjs
+scripts/export_linkedin_post_contents_only.mjs
+scripts/finalize_tony_publication_normalization.mjs
+scripts/find_wechat_publication_nodes.mjs
+scripts/fix_journal_media.py
+scripts/fix_msn_blog_media.py
+scripts/fix_tony_platform_frontmatter.mjs
+scripts/fix_tony_resume_type_and_links.mjs
+scripts/gbrain_relationship_stats.mjs
+scripts/hide_noise_source_collections_from_platform.mjs
+scripts/import_linkedin_commenters_fast.mjs
+scripts/import_linkedin_posts_to_gbrain.mjs
+scripts/inspect_pages_columns.mjs
+scripts/inspect_pages_constraints.mjs
+scripts/move_tony_resume_slug.mjs
+scripts/normalize_gbrain_relationships_batch1.mjs
+scripts/normalize_tony_publications.mjs
+scripts/normalize_wechat_public_account_articles.mjs
+scripts/replace_old_tony_resume_references.mjs
+scripts/sample_relationship_edges.mjs
+scripts/scrape_linkedin_posts.mjs
+scripts/screenshot_stargraph_linkedin_media.mjs
+scripts/upload_linkedin_files_to_gbrain.mjs
+scripts/verify_linkedin_import.mjs
+scripts/verify_tony_publication_normalization.mjs
+scripts/verify_tony_resume_new_slug.mjs
+scripts/verify_wechat_public_account_articles.mjs
