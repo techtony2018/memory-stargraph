@@ -168,6 +168,8 @@ python3 scripts/automation/compact_sg_todo_backlog.py --json
 
 Compaction is idempotent: existing completed archives are not rewritten or duplicated, but their rows are removed from the active root if a prior run stopped before the root rewrite. Treat compaction failure as a real automation failure unless GBrain itself is unreachable.
 
+When GBrain is unreachable, do not bury the failure in logs. The worker must surface it to Product Owner before finalizing the Run: record the exact failed command, endpoint or host evidence, containment used, and smallest recovery action in a Product Owner-visible Run section or planned TODO under `notes/memory-starmap-todo-list`. If the Wish/Developer worker files a TODO for a blocker in its own required workflow, that TODO is owned follow-up work for the next eligible Wish/Developer cycle unless Product Owner redirects it.
+
 ## GBrain Capture Quality Gate
 
 Use this before completing any GBrain capture/import work, including WeChat, LinkedIn, X/Twitter, web pages, PDFs/text extraction, and personal notes.
