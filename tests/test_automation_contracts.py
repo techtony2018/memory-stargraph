@@ -42,15 +42,9 @@ class AutomationContractTests(unittest.TestCase):
             },
             "memory-stargraph-goal-steward-daily-review": {
                 "title": "Memory Stargraph Product Owner",
-                "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0",
+                "rrule": "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,7,8,9,12,14;BYMINUTE=30;BYSECOND=0",
                 "target_thread_id": "{{STEWARD_THREAD_ID}}",
                 "role_files": ("prompt.md", "steward-thread-prompt.md"),
-            },
-            "memory-stargraph-product-owner-worker-watch": {
-                "title": "Memory Stargraph Product Owner Worker Watch",
-                "rrule": "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,8,9,12,14;BYMINUTE=30;BYSECOND=0",
-                "target_thread_id": "{{STEWARD_THREAD_ID}}",
-                "role_files": ("heartbeat-prompt.md",),
             },
             "memory-stargraph-ux-engineer-daily-dogfood": {
                 "title": "Memory Stargraph UX Engineer",
@@ -262,32 +256,29 @@ class AutomationContractTests(unittest.TestCase):
         )
 
     def test_product_owner_worker_watch_has_eta_and_silent_failure_mitigation(self):
-        directory = ROOT / "automations/memory-stargraph-product-owner-worker-watch"
+        directory = ROOT / "automations/memory-stargraph-goal-steward-daily-review"
         definition = tomllib.loads((directory / "automation.toml").read_text())
-        heartbeat = (directory / "heartbeat-prompt.md").read_text()
+        prompt = (directory / "prompt.md").read_text()
+        bootstrap = (directory / "steward-thread-prompt.md").read_text()
         readme = (ROOT / "automations/README.md").read_text()
         runbook = (ROOT / "docs/automation-runbook.md").read_text()
-        owner_prompt = (
-            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
-        ).read_text()
-        owner_bootstrap = (
-            ROOT
-            / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
-        ).read_text()
-        contract = "\n".join((heartbeat, readme, runbook, owner_prompt, owner_bootstrap))
+        contract = "\n".join((prompt, bootstrap, readme, runbook))
 
-        self.assertEqual(definition["id"], "memory-stargraph-product-owner-worker-watch")
-        self.assertEqual(definition["name"], "Memory Stargraph Product Owner Worker Watch")
+        self.assertEqual(definition["id"], "memory-stargraph-goal-steward-daily-review")
+        self.assertEqual(definition["name"], "Memory Stargraph Product Owner")
         self.assertEqual(definition["timezone"], "America/Los_Angeles")
         self.assertEqual(definition["destination"], "thread")
         self.assertEqual(definition["target_thread_id"], "{{STEWARD_THREAD_ID}}")
         self.assertEqual(
-            definition["worker_prompt_file"],
-            "../memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md",
+            definition["rrule"],
+            "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,7,8,9,12,14;BYMINUTE=30;BYSECOND=0",
         )
         for phrase in (
+            "Codex permits only one heartbeat per task",
             "role-specific estimated durations",
             "Expected role durations and watch windows",
+            "interim Worker Watch windows",
+            "morning full-review window",
             "Memory Stargraph Developer",
             "progress within 30 minutes",
             "by 5:30 AM",
@@ -303,7 +294,7 @@ class AutomationContractTests(unittest.TestCase):
             "send a bounded follow-up",
             "canonical worker task",
             "route confirmed infrastructure or health failures to the daily SRE task",
-            "Do not duplicate worker-owned",
+            "Do not duplicate worker-owned implementation",
         ):
             self.assertIn(phrase, contract)
 

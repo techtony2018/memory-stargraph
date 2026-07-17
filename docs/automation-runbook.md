@@ -214,10 +214,11 @@ direct task messaging is unavailable, the worker records
 ### Product Owner Worker Watch
 
 Completion notifications are not enough because a system error can prevent a
-worker from ever reaching its terminal handoff. The
-`memory-stargraph-product-owner-worker-watch` heartbeat gives the Product Owner
-role-specific estimated durations and interim check windows after each scheduled
-heartbeat.
+worker from ever reaching its terminal handoff. Because Codex permits only one
+heartbeat per task, the canonical `memory-stargraph-goal-steward-daily-review`
+heartbeat combines interim Worker Watch checks with the full morning Product
+Owner review. The watch windows give the Product Owner role-specific estimated
+durations after each scheduled worker heartbeat.
 
 The watch is a control-tower check, not another implementation worker. It uses
 `America/Los_Angeles` time, inspects only roles whose watch window is relevant

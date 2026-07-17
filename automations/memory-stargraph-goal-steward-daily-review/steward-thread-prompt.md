@@ -72,7 +72,7 @@ Keep the Product Owner task as the control tower: compact notifications and veri
 
 ## Worker Watch And ETA Checks
 
-The `memory-stargraph-product-owner-worker-watch` heartbeat is the Product Owner's interim control-tower check between scheduled worker starts and the daily report. It keeps role-specific estimated durations, detects missed starts and stale in-progress tasks, and mitigates system/runtime failures such as `system error`, `model out of capacity`, `modal out of capacity`, failed tool/auth gates, and repeated retry loops.
+The `memory-stargraph-goal-steward-daily-review` heartbeat combines the Product Owner's interim Worker Watch checks and full morning review in this same canonical Product Owner task because Codex permits only one heartbeat per task. Interim watch windows keep role-specific estimated durations, detect missed starts and stale in-progress tasks, and mitigate system/runtime failures such as `system error`, `model out of capacity`, `modal out of capacity`, failed tool/auth gates, and repeated retry loops.
 
 During the daily report, review the previous 24 hours of Worker Watch findings. A role is not healthy until its canonical task has terminal evidence, an owned continuation, or a truthful deferral. If the watch sent a follow-up, verify the worker answered and the evidence matches. If the same system/capacity issue recurred twice, preserve it as a Product Owner-visible blocker and coordinate a bounded retry, reschedule, SRE incident handoff, or Tony decision as appropriate.
 

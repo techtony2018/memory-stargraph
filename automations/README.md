@@ -23,8 +23,7 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | Daily 2:00 AM | Memory Stargraph Developer | `memory-stargraph-wish-to-reallity` | Plan, implement, test, iterate, deploy, and learn from the selected TODO batch. |
 | Daily 6:00 AM | Memory Stargraph UX Engineer | `memory-stargraph-ux-engineer-daily-dogfood` | Dogfood the dashboard-managed app, record journey evidence, and promote at most three reproduced UX findings into planned TODOs. |
 | Sunday 4:00 AM | Memory Stargraph Product Strategist | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
-| Daily watch windows | Memory Stargraph Product Owner Worker Watch | `memory-stargraph-product-owner-worker-watch` | Check role-specific ETA windows after heartbeats, detect silent/system failures, and nudge the canonical role task before the daily summary. |
-| Daily 7:00 AM | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated Product Owner task. |
+| Daily watch windows and morning review | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Run ETA-based Worker Watch checks after role heartbeats, then perform the full Goal health review in the morning Product Owner window. |
 | Daily 8:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-daily-reliability` | During verified quiet time, inspect deployed-stack reliability, apply bounded documented remediation, and report capacity headroom. |
 | Sunday 11:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-weekly-resilience` | During verified quiet time, run safe-target load, isolated restore, failover, rollback, and capacity-envelope exercises. |
 
@@ -44,19 +43,21 @@ All recurring Memory Stargraph automations work toward the persistent GBrain goa
 goals/memory-stargraph-continuous-learning-local-knowledge-os
 ```
 
-The Product Owner review is an accountability gate, not a passive digest. The
-separate Product Owner Worker Watch keeps role-specific estimated durations so
-silent failures are caught before the morning summary. The watch checks expected
-start/progress/terminal windows, detects system errors such as model or modal
-capacity failures, and sends bounded follow-ups to the canonical role task or
-routes confirmed infrastructure issues to SRE. The daily Product Owner review
-must detect blocked or silent roles, take the next safe coordination action in
-the correct persistent task, clean up duplicate recurring destinations, and
-report a stable daily Goal progress percentage with the highest-leverage action
-to improve it. After the daily report, Product Owner runs a retrospective that
-compares the current metrics and role outcomes against the previous day, assigns
-actions for regressions or stalls, and proposes new roles only for Tony's review
-when existing roles cannot cover the gap.
+The Product Owner review is an accountability gate, not a passive digest. Codex
+permits only one heartbeat per task, so the Product Owner automation combines
+interim Worker Watch windows and the full morning review in the same canonical
+Product Owner task. The watch windows keep role-specific estimated durations so
+silent failures are caught before the morning summary. They check expected
+start/progress/terminal windows, detect system errors such as model or modal
+capacity failures, and send bounded follow-ups to the canonical role task or
+route confirmed infrastructure issues to SRE. The full daily Product Owner
+review must detect blocked or silent roles, take the next safe coordination
+action in the correct persistent task, clean up duplicate recurring
+destinations, and report a stable daily Goal progress percentage with the
+highest-leverage action to improve it. After the daily report, Product Owner
+runs a retrospective that compares the current metrics and role outcomes against
+the previous day, assigns actions for regressions or stalls, and proposes new
+roles only for Tony's review when existing roles cannot cover the gap.
 
 ## Worker Watch ETA Table
 
