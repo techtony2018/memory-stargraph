@@ -369,7 +369,8 @@ try {
   await page.evaluate(() => {
     const panel = document.querySelector("#mapFilterPanel");
     if (panel && !panel.classList.contains("is-hidden")) {
-      document.querySelector("#mapFilterToggleButton")?.click();
+      panel.classList.add("is-hidden");
+      document.querySelector("#filterDrawerHandle")?.classList.remove("is-hidden");
     }
   });
   const clickPoint = await page.evaluate(() => {

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime
@@ -26,6 +28,7 @@ DEFAULT_CASES = [
         "cold_question": "What projects and operating systems are most connected to Tony?",
         "warm_question": "Which recent Memory Stargraph work should Tony inspect next?",
         "expected_targets": ["people/tony-guan"],
+        "force_slow_graph": True,
     },
     {
         "id": "todo-active",
@@ -34,6 +37,7 @@ DEFAULT_CASES = [
         "cold_question": "Which active implementation items are highest priority?",
         "warm_question": "What recently completed work provides context for the active queue?",
         "expected_targets": ["notes/memory-starmap-todo-list"],
+        "expire_cache_before_cold": True,
     },
     {
         "id": "product",
@@ -118,17 +122,27 @@ def summarize_results(
 ) -> dict[str, object]:
     cold_values = [int(result["cold_prompt_ms"]) for result in results]
     median_cold = int(statistics.median(cold_values)) if cold_values else 0
+    ordered_cold = sorted(cold_values)
+    p95_cold = ordered_cold[max(0, math.ceil(len(ordered_cold) * 0.95) - 1)] if ordered_cold else 0
     recalls = [float((result.get("grounding") or {}).get("recall", 0)) for result in results]
     improvement = ((baseline_ms - median_cold) / baseline_ms * 100) if baseline_ms else 0
     return {
         "case_count": len(results),
         "baseline_cold_prompt_ms": baseline_ms,
         "median_cold_prompt_ms": median_cold,
+        "p95_cold_prompt_ms": p95_cold,
         "improvement_percent": round(improvement, 2),
         "warm_cache_hits": sum(1 for result in results if result.get("warm_cache_hit") is True),
         "mean_grounding_recall": round(statistics.mean(recalls), 4) if recalls else 0,
         "provider_down_fallbacks": sum(
             1 for result in results if result.get("provider_down_fallback") is True
+        ),
+        "degraded_cold_cases": sum(
+            1 for result in results if result.get("cold_context_degraded") is True
+        ),
+        "max_cache_entries": max(
+            (int(result.get("cache_entries_after_warm") or 0) for result in results),
+            default=0,
         ),
     }
 
@@ -143,8 +157,11 @@ def read_health(service_url: str) -> dict[str, object]:
     }
 
 
-def run_case(case: dict[str, object]) -> dict[str, object]:
-    store = server.GraphStore()
+def run_case(
+    case: dict[str, object],
+    store: server.GraphStore | None = None,
+) -> dict[str, object]:
+    store = store or server.GraphStore()
     captured_prompts: list[str] = []
 
     def provider_down(prompt: str, return_details: bool = False):
@@ -161,10 +178,22 @@ def run_case(case: dict[str, object]) -> dict[str, object]:
         }
         return details if return_details else None
 
+    if case.get("expire_cache_before_cold"):
+        for entry in store.yoda_context_cache.values():
+            entry["created_at"] = 0
+
     previous_model = server.run_yoda_model
+    previous_gbrain = server.run_gbrain
+
+    def benchmark_gbrain(*args, **kwargs):
+        if case.get("force_slow_graph") and args and args[0] == "graph-query":
+            raise subprocess.TimeoutExpired(args, timeout=kwargs.get("timeout", 0))
+        return previous_gbrain(*args, **kwargs)
+
     store.ask_gbrain = lambda slug, question: f"Provider-down fallback for {slug}: {question}"
     try:
         server.run_yoda_model = provider_down
+        server.run_gbrain = benchmark_gbrain
         cold = store.ask_yoda(
             str(case["slug"]),
             str(case["cold_question"]),
@@ -177,6 +206,7 @@ def run_case(case: dict[str, object]) -> dict[str, object]:
         )
     finally:
         server.run_yoda_model = previous_model
+        server.run_gbrain = previous_gbrain
 
     cold_diagnostics = cold["diagnostics"]
     warm_diagnostics = warm["diagnostics"]
@@ -192,6 +222,10 @@ def run_case(case: dict[str, object]) -> dict[str, object]:
         "warm_subphases_ms": warm_diagnostics["context_subphases_ms"],
         "cold_counts": cold_diagnostics["context_counts"],
         "warm_counts": warm_diagnostics["context_counts"],
+        "cold_context_degraded": cold_diagnostics["context_degraded"],
+        "cold_degraded_reason": cold_diagnostics["context_degraded_reason"],
+        "broad_graph_budget_ms": cold_diagnostics["broad_graph_budget_ms"],
+        "cache_entries_after_warm": len(store.yoda_context_cache),
         "grounding": grounding_result(
             captured_prompts[0] if captured_prompts else "",
             list(case["expected_targets"]),
@@ -207,19 +241,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--service-url", default="http://127.0.0.1:8788")
     parser.add_argument("--baseline-ms", type=int, default=DEFAULT_BASELINE_MS)
+    parser.add_argument("--max-median-cold-ms", type=int, default=15000)
+    parser.add_argument("--max-p95-cold-ms", type=int, default=30000)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
-    results = [run_case(case) for case in DEFAULT_CASES]
+    store = server.GraphStore()
+    results = [run_case(case, store=store) for case in DEFAULT_CASES]
+    summary = summarize_results(results, args.baseline_ms)
+    gate = {
+        "median_cold_pass": summary["median_cold_prompt_ms"] <= args.max_median_cold_ms,
+        "p95_cold_pass": summary["p95_cold_prompt_ms"] <= args.max_p95_cold_ms,
+        "grounding_pass": summary["mean_grounding_recall"] == 1.0,
+        "slow_graph_degraded_pass": summary["degraded_cold_cases"] >= 1,
+        "multi_key_cache_pass": summary["max_cache_entries"] >= 2,
+    }
     payload = {
         "started_at": datetime.now(PACIFIC).replace(microsecond=0).isoformat(),
         "timezone": "America/Los_Angeles",
         "service": read_health(args.service_url),
-        "summary": summarize_results(results, args.baseline_ms),
+        "summary": summary,
+        "gate": gate,
         "cases": results,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2 if args.json else None))
-    return 0
+    return 0 if all(gate.values()) else 1
 
 
 if __name__ == "__main__":

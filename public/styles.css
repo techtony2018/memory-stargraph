@@ -742,7 +742,7 @@ h2 {
   position: absolute;
   right: 0;
   top: 33.333%;
-  width: 34px;
+  width: 20px;
   height: 33.333%;
   min-height: 168px;
   z-index: 34;
@@ -755,12 +755,12 @@ h2 {
   content: "";
   position: absolute;
   right: 2px;
-  top: 10%;
-  width: 14px;
-  height: 80%;
+  top: 26%;
+  width: 8px;
+  height: 48%;
   border: 1px solid rgba(136, 246, 255, 0.72);
   border-right: 0;
-  border-radius: 8px 0 0 8px;
+  border-radius: 6px 0 0 6px;
   background: linear-gradient(180deg, rgba(136, 246, 255, 0.42), rgba(143, 124, 255, 0.3));
   box-shadow: 0 0 0 1px rgba(5, 8, 22, 0.72), 0 0 24px rgba(34, 211, 238, 0.42);
   opacity: 0.9;
@@ -770,10 +770,10 @@ h2 {
 .filter-sidebar-drawer::after {
   content: "‹";
   position: absolute;
-  right: 3px;
+  right: 1px;
   top: 50%;
   color: rgba(224, 251, 255, 0.94);
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 900;
   line-height: 1;
   text-shadow: 0 0 10px rgba(34, 211, 238, 0.8);
@@ -782,9 +782,15 @@ h2 {
 
 .filter-sidebar-drawer:hover::before,
 .filter-sidebar-drawer:focus-visible::before {
-  width: 18px;
+  width: 11px;
   opacity: 1;
   box-shadow: 0 0 0 1px rgba(5, 8, 22, 0.72), 0 0 30px rgba(34, 211, 238, 0.68);
+}
+
+.filter-sidebar-drawer.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .filter-sidebar-drawer:focus-visible {
@@ -4056,37 +4062,10 @@ body::after {
   opacity: 1;
 }
 
-.new-node-icon-button,
-.map-filter-toggle-button {
+.new-node-icon-button {
   width: 36px;
   min-width: 36px;
   height: 36px;
-}
-
-.map-filter-toggle-button {
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.map-filter-toggle-button svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.map-filter-toggle-button.is-on {
-  color: #bff8ff;
-  background: rgba(34, 211, 238, 0.14);
-  box-shadow: 0 0 18px rgba(34, 211, 238, 0.28);
 }
 
 .graph-canvas-wrap > .map-filter-panel,

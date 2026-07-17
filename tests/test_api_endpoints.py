@@ -404,6 +404,9 @@ class ApiEndpointTests(unittest.TestCase):
                     "search_results": 5,
                     "direct_reads": 3,
                 },
+                "context_degraded": True,
+                "context_degraded_reason": "broad_graph_timeout",
+                "broad_graph_budget_ms": 8000,
                 "prompt": "private prompt body",
                 "context_source_slugs": ["private/node"],
             }
@@ -412,6 +415,9 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(safe["context_cache_hit"])
         self.assertEqual(safe["context_subphases_ms"]["graph"], 20)
         self.assertEqual(safe["context_counts"]["prompt_chars"], 1200)
+        self.assertTrue(safe["context_degraded"])
+        self.assertEqual(safe["context_degraded_reason"], "broad_graph_timeout")
+        self.assertEqual(safe["broad_graph_budget_ms"], 8000)
         self.assertNotIn("prompt", safe)
         self.assertNotIn("context_source_slugs", safe)
 

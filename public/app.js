@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.147";
+const UI_VERSION = "V1.0.149";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -150,7 +150,6 @@ const newNodeButton = document.getElementById("newNodeButton");
 const mapViewButton = document.getElementById("mapViewButton");
 const mapAskYodaButton = document.getElementById("mapAskYodaButton");
 const filterDrawerHandle = document.getElementById("filterDrawerHandle");
-const mapFilterToggleButton = document.getElementById("mapFilterToggleButton");
 const mapFilterPanel = document.getElementById("mapFilterPanel");
 const zoomOutButton = document.getElementById("zoomOutButton");
 const zoomInButton = document.getElementById("zoomInButton");
@@ -746,8 +745,7 @@ function updateCloudModeControl() {
 
 function updateMapFilterPanel() {
   mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
-  mapFilterToggleButton?.classList.toggle("is-on", state.mapFiltersVisible);
-  mapFilterToggleButton?.setAttribute("aria-pressed", state.mapFiltersVisible ? "true" : "false");
+  filterDrawerHandle?.classList.toggle("is-hidden", state.mapFiltersVisible);
 }
 
 function showFilterSidebar() {
@@ -2567,8 +2565,29 @@ function appendWebAddressLinks(parent, text) {
 
 function markdownTitleFromContent(content, fallback) {
   const text = String(content || "");
-  const frontmatterTitle = text.match(/^---\s*[\s\S]*?\ntitle:\s*['"]?([^\n'"]+)['"]?\s*\n[\s\S]*?---/);
-  if (frontmatterTitle?.[1]?.trim()) return frontmatterTitle[1].trim();
+  const frontmatter = text.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (frontmatter?.[1]) {
+    const lines = frontmatter[1].split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      const titleLine = lines[index].match(/^title:\s*(.*)$/);
+      if (!titleLine) continue;
+      const value = titleLine[1].trim();
+      if (/^[>|][+-]?$/.test(value)) {
+        const blockLines = [];
+        for (index += 1; index < lines.length && (/^\s/.test(lines[index]) || !lines[index].trim()); index += 1) {
+          blockLines.push(lines[index].trim());
+        }
+        const blockTitle = value.startsWith(">")
+          ? blockLines.filter(Boolean).join(" ")
+          : blockLines.join("\n").trim();
+        if (blockTitle) return blockTitle;
+        break;
+      }
+      const inlineTitle = value.replace(/^(['"])(.*)\1$/, "$2").trim();
+      if (inlineTitle) return inlineTitle;
+      break;
+    }
+  }
   const heading = text.match(/^#\s+(.+)$/m);
   if (heading?.[1]?.trim()) return heading[1].trim();
   return String(fallback || "Memory Stargraph").trim();
@@ -6534,11 +6553,6 @@ function bindEvents() {
     event.preventDefault();
     event.stopPropagation();
     if (state.focusSlug) void copySlug(state.focusSlug, selectionSlugAlways);
-  });
-  mapFilterToggleButton?.addEventListener("click", () => {
-    state.mapFiltersVisible = !state.mapFiltersVisible;
-    mapFilterPanel?.classList.toggle("is-hidden", !state.mapFiltersVisible);
-    updateMapFilterPanel();
   });
   filterDrawerHandle?.addEventListener("pointerenter", showFilterSidebar);
   filterDrawerHandle?.addEventListener("pointerleave", (event) => {

@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
     "yoda_api_key_env": "OPENAI_API_KEY",
     "yoda_timeout_seconds": 45,
     "yoda_graph_query_timeout_seconds": 30,
+    "yoda_broad_graph_budget_seconds": 8,
 }
 
 
@@ -154,7 +155,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.147"
+UI_VERSION = "V1.0.149"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -562,6 +563,9 @@ def sanitize_diagnostics(diagnostics):
         "context_cache_hit",
         "context_subphases_ms",
         "context_counts",
+        "context_degraded",
+        "context_degraded_reason",
+        "broad_graph_budget_ms",
     }
     safe = {}
     for key, value in diagnostics.items():
@@ -1233,6 +1237,13 @@ def yoda_runtime_config():
         graph_query_timeout = max(5, min(300, int(os.environ.get("MEMORY_STARGRAPH_YODA_GRAPH_QUERY_TIMEOUT_SECONDS") or config.get("yoda_graph_query_timeout_seconds") or 30)))
     except (TypeError, ValueError):
         graph_query_timeout = 30
+    try:
+        broad_graph_budget = max(1, min(
+            graph_query_timeout,
+            int(os.environ.get("MEMORY_STARGRAPH_YODA_BROAD_GRAPH_BUDGET_SECONDS") or config.get("yoda_broad_graph_budget_seconds") or 8),
+        ))
+    except (TypeError, ValueError):
+        broad_graph_budget = min(graph_query_timeout, 8)
     return {
         "backend": backend,
         "model": model,
@@ -1241,6 +1252,7 @@ def yoda_runtime_config():
         "agent": agent_ref,
         "timeout": timeout,
         "graph_query_timeout": graph_query_timeout,
+        "broad_graph_budget": broad_graph_budget,
     }
 
 
@@ -1822,21 +1834,39 @@ def parse_frontmatter(markdown):
     raw_meta, body = match.groups()
     meta = {}
     current_key = None
-    for line in raw_meta.splitlines():
+    lines = raw_meta.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if line.startswith("  - ") and current_key:
             meta.setdefault(current_key, []).append(line[4:].strip().strip("'\""))
+            index += 1
             continue
         if ":" not in line:
+            index += 1
             continue
         key, value = line.split(":", 1)
         key = key.strip()
         value = value.strip()
+        if re.fullmatch(r"[>|][+-]?", value):
+            block_lines = []
+            index += 1
+            while index < len(lines) and (not lines[index].strip() or lines[index][0].isspace()):
+                block_lines.append(lines[index].strip())
+                index += 1
+            if value.startswith(">"):
+                meta[key] = " ".join(part for part in block_lines if part)
+            else:
+                meta[key] = "\n".join(block_lines)
+            current_key = key
+            continue
         if value == "":
             meta[key] = []
             current_key = key
         else:
             meta[key] = value.strip("'\"")
             current_key = key
+        index += 1
     return meta, body
 
 
@@ -3623,6 +3653,8 @@ class GraphStore:
 
     def build_yoda_stable_context(self, slug, depth="4"):
         yoda_depth = clamp_yoda_depth(depth)
+        runtime_config = yoda_runtime_config()
+        broad_graph_budget = runtime_config["broad_graph_budget"]
 
         def timed_selected_node():
             started = time.perf_counter()
@@ -3631,6 +3663,8 @@ class GraphStore:
 
         def timed_graph():
             started = time.perf_counter()
+            degraded = False
+            degraded_reason = ""
             try:
                 output = run_gbrain(
                     "graph-query",
@@ -3639,11 +3673,16 @@ class GraphStore:
                     "both",
                     "--depth",
                     str(yoda_depth),
-                    timeout=yoda_runtime_config()["graph_query_timeout"],
+                    timeout=broad_graph_budget,
                 )
             except Exception as exc:  # noqa: BLE001
-                output = f"Direct relationship context unavailable: {exc}"
-            return output, int((time.perf_counter() - started) * 1000)
+                degraded = True
+                degraded_reason = "broad_graph_timeout" if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else "broad_graph_unavailable"
+                output = (
+                    "Broad graph context unavailable within retrieval budget. "
+                    "Use selected-node, backlink, search, and targeted relationship evidence below."
+                )
+            return output, int((time.perf_counter() - started) * 1000), degraded, degraded_reason
 
         def timed_backlinks():
             started = time.perf_counter()
@@ -3658,12 +3697,15 @@ class GraphStore:
             graph_future = executor.submit(timed_graph)
             backlinks_future = executor.submit(timed_backlinks)
             selected_node, selected_ms = selected_future.result()
-            graph_output, graph_ms = graph_future.result()
+            graph_output, graph_ms, degraded, degraded_reason = graph_future.result()
             backlink_output, backlinks_ms = backlinks_future.result()
         return {
             "selected_node": selected_node,
             "graph": graph_output,
             "backlinks": backlink_output,
+            "degraded": degraded,
+            "degraded_reason": degraded_reason,
+            "broad_graph_budget_ms": broad_graph_budget * 1000,
             "timings": {
                 "selected_node": selected_ms,
                 "graph": graph_ms,
@@ -3885,8 +3927,14 @@ class GraphStore:
         broad_graph_depth = 1 if is_targeted_relationship_question(retrieval_question) else yoda_depth
         cache_payload = json.dumps({"slug": slug, "depth": broad_graph_depth}, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
+        cache_now = time.time()
+        self.yoda_context_cache = {
+            key: entry
+            for key, entry in self.yoda_context_cache.items()
+            if cache_now - float(entry.get("created_at") or 0) <= 300
+        }
         cache_entry = self.yoda_context_cache.get(cache_key) or {}
-        context_cache_hit = bool(cache_entry and time.time() - float(cache_entry.get("created_at") or 0) <= 300)
+        context_cache_hit = bool(cache_entry)
         context_subphases_ms = {}
         if context_cache_hit:
             stable_context = dict(cache_entry["context"])
@@ -3895,9 +3943,14 @@ class GraphStore:
             }
         else:
             stable_context = self.build_yoda_stable_context(slug, broad_graph_depth)
-            self.yoda_context_cache = {
-                cache_key: {"created_at": time.time(), "context": stable_context}
-            }
+            self.yoda_context_cache[cache_key] = {"created_at": cache_now, "context": stable_context}
+            if len(self.yoda_context_cache) > 8:
+                oldest_keys = sorted(
+                    self.yoda_context_cache,
+                    key=lambda key: float(self.yoda_context_cache[key].get("created_at") or 0),
+                )
+                for oldest_key in oldest_keys[:-8]:
+                    self.yoda_context_cache.pop(oldest_key, None)
         context_counts = {}
         prompt = self.build_yoda_prompt(
             slug,
@@ -3938,6 +3991,9 @@ class GraphStore:
                 "retrieval_history_used": retrieval_history_used,
                 "broad_graph_depth": broad_graph_depth,
             },
+            "context_degraded": bool(stable_context.get("degraded")),
+            "context_degraded_reason": str(stable_context.get("degraded_reason") or ""),
+            "broad_graph_budget_ms": int(stable_context.get("broad_graph_budget_ms") or 0),
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
             "model_status": agent_result.get("model_status", "unknown") if isinstance(agent_result, dict) else "unknown",

@@ -45,6 +45,13 @@ from server import (
 
 
 class GraphParsingTests(unittest.TestCase):
+    def test_parse_frontmatter_preserves_folded_and_literal_titles(self):
+        folded, _ = parse_frontmatter("---\ntitle: >-\n  A long\n  folded title\n---\n# Body\n")
+        literal, _ = parse_frontmatter("---\ntitle: |-\n  Line one\n  Line two\n---\n# Body\n")
+
+        self.assertEqual(folded["title"], "A long folded title")
+        self.assertEqual(literal["title"], "Line one\nLine two")
+
     def test_effective_yoda_retrieval_question_inherits_short_followup_intent(self):
         history = [
             {"role": "user", "content": "which of my X posts were reposted by Garry Tan?"},
@@ -996,7 +1003,7 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4", timeout=30),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
@@ -1066,7 +1073,7 @@ cover_image: companies/example-inc/logo.jpg
         run.assert_has_calls(
             [
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5", timeout=30),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What does White Swan connect to? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("get", "notes/tai-chi/white-swan"),
@@ -1214,7 +1221,7 @@ cover_image: companies/example-inc/logo.jpg
         self.assertTrue(result["diagnostics"]["context_counts"]["retrieval_history_used"])
         self.assertEqual(result["diagnostics"]["context_counts"]["targeted_entities"], 1)
         self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
-        run.assert_any_call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30)
+        run.assert_any_call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=8)
 
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
@@ -1287,6 +1294,70 @@ cover_image: companies/example-inc/logo.jpg
             set(context["timings"]),
             {"selected_node", "graph", "backlinks"},
         )
+
+    def test_yoda_stable_context_bounds_slow_broad_graph_and_marks_degraded(self):
+        store = GraphStore()
+
+        def gbrain_result(*args, **kwargs):
+            if args[0] == "get":
+                return "# Tony\n\nEngineer"
+            if args[0] == "backlinks":
+                return "selected backlinks"
+            if args[0] == "graph-query":
+                raise TimeoutError("forced slow graph traversal")
+            raise AssertionError(args)
+
+        with (
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_runtime_config",
+                return_value={"graph_query_timeout": 60, "broad_graph_budget": 8},
+            ),
+        ):
+            context = store.build_yoda_stable_context("people/tony-guan", depth=4)
+
+        graph_call = next(call for call in run.call_args_list if call.args[0] == "graph-query")
+        self.assertEqual(graph_call.kwargs["timeout"], 8)
+        self.assertTrue(context["degraded"])
+        self.assertEqual(context["degraded_reason"], "broad_graph_timeout")
+        self.assertEqual(context["broad_graph_budget_ms"], 8000)
+        self.assertIn("Broad graph context unavailable within retrieval budget", context["graph"])
+        self.assertNotIn("forced slow graph traversal", context["graph"])
+
+    def test_yoda_context_cache_preserves_fresh_multi_key_entries_and_prunes_expired(self):
+        store = GraphStore()
+        store.yoda_context_cache = {
+            "stale": {"created_at": 600, "context": {}},
+            "fresh": {"created_at": 900, "context": {}},
+        }
+        stable_context = {
+            "selected_node": "# Node",
+            "graph": "graph",
+            "backlinks": "backlinks",
+            "timings": {"selected_node": 1, "graph": 1, "backlinks": 1},
+            "degraded": False,
+            "degraded_reason": "",
+            "broad_graph_budget_ms": 8000,
+        }
+        model_result = {
+            "output": "answer",
+            "backend": "openclaw",
+            "model_status": "answered",
+            "openclaw_status": "ok",
+        }
+
+        with (
+            mock.patch("server.time.time", return_value=1000),
+            mock.patch.object(store, "build_yoda_stable_context", return_value=stable_context),
+            mock.patch.object(store, "build_yoda_prompt", return_value="prompt"),
+            mock.patch("server.run_yoda_model", return_value=model_result),
+        ):
+            result = store.ask_yoda("products/memory-stargraph", "What changed?", depth=3)
+
+        self.assertFalse(result["diagnostics"]["context_cache_hit"])
+        self.assertEqual(len(store.yoda_context_cache), 2)
+        self.assertIn("fresh", store.yoda_context_cache)
+        self.assertTrue(all(entry["created_at"] >= 700 for entry in store.yoda_context_cache.values()))
 
     def test_forced_graph_refresh_invalidates_stable_yoda_context(self):
         store = GraphStore()
