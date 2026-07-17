@@ -1,0 +1,12 @@
+version = 1
+id = "memory-stargraph-sre-weekly-resilience"
+kind = "heartbeat"
+name = "Memory Stargraph SRE Weekly Resilience"
+status = "ACTIVE"
+rrule = "FREQ=WEEKLY;BYDAY=SU;BYHOUR=11;BYMINUTE=0;BYSECOND=0"
+timezone = "America/Los_Angeles"
+destination = "thread"
+target_thread_id = "{{SRE_WEEKLY_THREAD_ID}}"
+prompt_file = "heartbeat-prompt.md"
+worker_prompt_file = "../memory-stargraph-sre/prompt.md"
+thread_bootstrap_file = "../memory-stargraph-sre/thread-bootstrap.md"

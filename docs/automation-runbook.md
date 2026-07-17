@@ -54,6 +54,22 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
+Preflight health is tri-state: every target is `healthy`, `unhealthy`, or
+`unverified`. A failed loopback or transport probe from a restricted or unknown
+execution context is always `unverified`, never an outage by itself. Configure
+`MEMORY_STARGRAPH_AUTHORITATIVE_LOCAL_HEALTH_URL` and, when available, an
+independent `MEMORY_STARGRAPH_LOCAL_CORROBORATION_URL` in the private deployment
+file. The analogous dashboard variables are
+`MEMORY_STARGRAPH_AUTHORITATIVE_DASHBOARD_URL` and
+`MEMORY_STARGRAPH_DASHBOARD_CORROBORATION_URL`. The preflight retries through
+the authoritative host-context route and reports `unhealthy` only after that
+route and an independent corroboration route both return explicit HTTP-unhealthy
+responses. The preflight preserves typed outcomes: `healthy`,
+`http_unhealthy`, and `transport_unverified`. Dual transport failures and mixed
+transport-plus-HTTP failures remain `unverified`; only two explicit
+HTTP-unhealthy observations may produce `unhealthy`. A single-route remote
+failure stays `unverified`.
+
 ## Engineer and UX Deployment Quiescence
 
 The Memory Stargraph Engineer and UX Engineer use Goal-linked Runs as
@@ -88,6 +104,51 @@ version, served HTML/JS, and process-cwd verification passes. Failure,
 interruption, or crash evidence remains visible. A stale UX lease or stale
 Engineer marker requires Product Owner resolution and is never bypassed
 automatically.
+
+## SRE reliability and resilience
+
+`memory-stargraph-sre-daily-reliability` runs daily at 8:00 AM and
+`memory-stargraph-sre-weekly-resilience` runs Sunday at 11:00 AM in
+`America/Los_Angeles`. Codex permits only one active heartbeat per task, so
+they target distinct persistent Memory Stargraph SRE tasks while sharing the
+same worker prompt, role, and quiet-time contract.
+
+The SRE operates only when live task state and Goal-linked Runs/leases show no
+other Memory Stargraph work. Busy or racing invocations defer as
+`deferred_due_to_worker_activity`; other workers take priority. Daily work
+checks deployed health, version and served-asset identity, resources, storage,
+backups, attachments, resolver health, worker trends, and capacity headroom.
+Bounded remediation uses only documented retry, dashboard-managed restart,
+cache/routing recovery, or documented last-known-good rollback with before and
+after verification.
+
+Weekly work adds gradual synthetic load, isolated temporary restore rehearsal,
+and one safe fault at a time on an explicitly synthetic, disposable, or
+redundant target. Without a safe target it records
+`chaos_skipped_no_safe_target`. Resolver health checks are read-only. An
+end-to-end resolver probe requires `environment=test`, `synthetic=true`,
+`test_run=true`, and `pair_id=sre:{mode}:{invocation_id}:{probe_slug}`; when
+isolation cannot be verified, record
+`resolver_probe_skipped_isolation_unverified` and skip the probe.
+
+### Product Owner incident handoff
+
+The Product Owner also uses healthy, unhealthy, or unverified classification.
+It must never report an outage from a transport failure alone. After a direct
+failure it retries an authoritative host-context route and requires independent
+corroboration from process, dashboard, user-impact, or separately authoritative
+remote evidence. Conflicting or inaccessible evidence remains `unverified`.
+
+On a confirmed outage, the Product Owner completes and terminalizes its own
+review before dispatching an evidence-only `mode=incident_response` handoff to
+the persistent daily SRE task. The handoff contains the originating Product
+Owner task id, logical affected target, timezone-aware America/Los_Angeles
+timestamp, authoritative failure, and independent corroboration, without
+secrets or private coordinates. The SRE waits for verified quiet time, creates
+a Goal-linked Run and incident report, diagnoses from authoritative context,
+applies only bounded documented remediation, verifies recovery, releases its
+lease, and sends a concise result back to the originating task. Incident mode
+must not create resolver events or synthetic resolver/Ask Yoda traffic.
 
 ## TODO Backlog Compaction
 
