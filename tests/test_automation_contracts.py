@@ -42,7 +42,7 @@ class AutomationContractTests(unittest.TestCase):
             },
             "memory-stargraph-goal-steward-daily-review": {
                 "title": "Memory Stargraph Product Owner",
-                "rrule": "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,7,8,9,12,14;BYMINUTE=30;BYSECOND=0",
+                "rrule": "FREQ=DAILY;BYHOUR=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14;BYMINUTE=0,30;BYSECOND=0",
                 "target_thread_id": "{{STEWARD_THREAD_ID}}",
                 "role_files": ("prompt.md", "steward-thread-prompt.md"),
             },
@@ -271,7 +271,7 @@ class AutomationContractTests(unittest.TestCase):
         self.assertEqual(definition["target_thread_id"], "{{STEWARD_THREAD_ID}}")
         self.assertEqual(
             definition["rrule"],
-            "FREQ=DAILY;BYHOUR=0,1,2,4,5,6,7,8,9,12,14;BYMINUTE=30;BYSECOND=0",
+            "FREQ=DAILY;BYHOUR=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14;BYMINUTE=0,30;BYSECOND=0",
         )
         for phrase in (
             "Codex permits only one heartbeat per task",
@@ -279,6 +279,7 @@ class AutomationContractTests(unittest.TestCase):
             "Expected role durations and watch windows",
             "interim Worker Watch windows",
             "morning full-review window",
+            "very fast no-op check",
             "Memory Stargraph Developer",
             "progress within 30 minutes",
             "by 5:30 AM",

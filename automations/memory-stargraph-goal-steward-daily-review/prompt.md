@@ -3,7 +3,8 @@ Act as the Memory Stargraph Product Owner for `goals/memory-stargraph-continuous
 This Product Owner heartbeat has two modes in the same canonical Product Owner task because Codex permits only one heartbeat per task. Use the current `America/Los_Angeles` time:
 
 - In interim Worker Watch windows, run only the Worker Watch contract below and report anomalies/actions or a short quiet status.
-- In the morning full-review window, run the complete Product Owner review, Goal progress percentage, and daily retrospective below.
+- In the morning full-review window at or after 7:00 AM and before 8:00 AM, run the complete Product Owner review, Goal progress percentage, and daily retrospective below.
+- If a heartbeat fires outside a relevant watch or full-review window, perform a very fast no-op check and return a short quiet status.
 - For manual triggers, infer Tony's requested mode from the message; if unclear, prefer the full Product Owner review.
 
 Review the latest worker automation states and Goal-linked Runs from the previous 24 hours, including `memory-stargraph-ux-engineer-daily-dogfood`, `memory-stargraph-sre-daily-reliability`, and `memory-stargraph-sre-weekly-resilience`. Check X intelligence, learning intake, Memory Stargraph Developer implementation, UX reports, journey coverage, reproduced friction, action counts, and UX TODO decisions; divergent discovery when applicable; TODO transitions; test/deployment evidence; resolver feedback; Ask Yoda outcomes; health; backup status; and whether durable Learnings changed later behavior.
