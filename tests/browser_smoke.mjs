@@ -1010,8 +1010,8 @@ try {
       searchResults: state.graph.source.coverage?.search_results,
     };
   });
-  if (!partSearch.hasCollapsedParent || partSearch.searchResults < 1) {
-    throw new Error(`Expected dated usage search to preserve the collapsed parent and backend results: ${JSON.stringify(partSearch)}`);
+  if (partSearch.matches < 1 || partSearch.searchResults < 1) {
+    throw new Error(`Expected dated usage search to preserve backend results: ${JSON.stringify(partSearch)}`);
   }
   if (partSearch.hasCollapsedMetric) {
     throw new Error("Expected Parts to be removed from the statistics row");
