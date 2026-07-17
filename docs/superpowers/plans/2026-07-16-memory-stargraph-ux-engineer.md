@@ -25,9 +25,11 @@
 ## Deployment Quiescence Amendment
 
 - Use Goal-linked Runs as cooperative change and UX leases for scheduled and manual invocations; there is no fixed kickoff or cutoff time.
-- Before editing code, restarting, or deploying, the Memory Stargraph Engineer writes an active-change marker with invocation id, start time, intended scope, and a deployment fingerprint containing `ui_version`, health source state and timestamp, served HTML/JS asset version or hash, and local process cwd when available.
+- Before editing code, restarting, or deploying, the Memory Stargraph Engineer writes an active-change marker with invocation id, start time, intended scope, and a deployment fingerprint. Every health sample records `health_observed_at` and any source timestamp as evidence.
+  Stable deployment fingerprint fields: `health_state`, `ui_version`, `served_html_js_identity`, `process_cwd`, `source_deployment_identity`.
+  `served_html_js_identity` is the served HTML/JS asset version or hash; `process_cwd` is the local process cwd when available; include `source_deployment_identity` only when its source documents it as stable. `health_observed_at` and source timestamp evidence are volatile and are excluded from deployment fingerprint equality.
 - UX confirms there is no marker, records the fingerprint, creates an active UX Run/lease, and re-reads active Runs before journeys. Engineer priority wins a concurrent-start race.
-- UX rechecks marker, health, and fingerprint before and after every journey. Instability discards the run's observations, creates or updates no TODOs, and terminalizes the lease as `deferred_due_to_active_change` with before/after evidence.
+- UX rechecks marker, health, and stable fingerprint before and after every journey. It defers only when an active-change marker appears, health is unhealthy or unstable, or the stable fingerprint changes; differences in observation or source timestamps alone do not cause deferral. Qualifying instability discards the run's observations, creates or updates no TODOs, and terminalizes the lease as `deferred_due_to_active_change` with before/after evidence.
 - Before restart or deployment, Engineer re-reads active UX leases, waits for UX acknowledgement and terminalization, and must not silently deploy through an active UX lease.
 - Failed changes remain visible. A stale UX lease or stale Engineer marker requires Product Owner resolution rather than automatic bypass.
 

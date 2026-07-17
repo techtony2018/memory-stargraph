@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import tomllib
 import unittest
 
@@ -139,16 +140,17 @@ class AutomationContractTests(unittest.TestCase):
         ux = (
             ROOT / "automations/memory-stargraph-ux-engineer-daily-dogfood/prompt.md"
         ).read_text()
-        docs = "\n".join(
-            path.read_text()
-            for path in (
-                ROOT / "docs/automation-runbook.md",
-                ROOT
-                / "docs/superpowers/specs/2026-07-16-memory-stargraph-ux-engineer-design.md",
-                ROOT
-                / "docs/superpowers/plans/2026-07-16-memory-stargraph-ux-engineer.md",
-            )
+        contract_paths = (
+            ROOT / "automations/memory-stargraph-wish-to-reallity/prompt.md",
+            ROOT / "automations/memory-stargraph-ux-engineer-daily-dogfood/prompt.md",
+            ROOT / "docs/automation-runbook.md",
+            ROOT
+            / "docs/superpowers/specs/2026-07-16-memory-stargraph-ux-engineer-design.md",
+            ROOT
+            / "docs/superpowers/plans/2026-07-16-memory-stargraph-ux-engineer.md",
         )
+        contracts = {path: path.read_text() for path in contract_paths}
+        docs = "\n".join(contracts[path] for path in contract_paths[2:])
 
         for phrase in (
             "active-change marker",
@@ -157,7 +159,6 @@ class AutomationContractTests(unittest.TestCase):
             "intended scope",
             "deployment fingerprint",
             "ui_version",
-            "health source state and timestamp",
             "served HTML/JS asset version or hash",
             "local process cwd when available",
             "active UX Run/lease",
@@ -183,6 +184,42 @@ class AutomationContractTests(unittest.TestCase):
             "before/after evidence",
         ):
             self.assertIn(phrase, ux)
+
+        expected_stable_fields = {
+            "health_state",
+            "ui_version",
+            "served_html_js_identity",
+            "process_cwd",
+            "source_deployment_identity",
+        }
+        volatile_fields = {"health_observed_at", "source_timestamp"}
+        stable_line_pattern = re.compile(
+            r"Stable deployment fingerprint fields:\s*([^\n]+)"
+        )
+        for path, contract in contracts.items():
+            match = stable_line_pattern.search(contract)
+            self.assertIsNotNone(
+                match, f"{path} must define the stable fingerprint fields"
+            )
+            stable_fields = set(re.findall(r"`([^`]+)`", match.group(1)))
+            self.assertEqual(expected_stable_fields, stable_fields, str(path))
+            self.assertTrue(volatile_fields.isdisjoint(stable_fields), str(path))
+            self.assertIn("health_observed_at", contract, str(path))
+            self.assertIn("source timestamp", contract, str(path))
+            self.assertIn(
+                "excluded from deployment fingerprint equality", contract, str(path)
+            )
+            self.assertNotIn("health source state and timestamp", contract, str(path))
+
+        self.assertNotIn("any fingerprint field changes", ux)
+        self.assertIn(
+            "Differences in `health_observed_at` or source timestamps alone never cause deferral",
+            ux,
+        )
+        self.assertIn(
+            "defer only when an active-change marker appears, health is unhealthy or unstable, or the stable deployment fingerprint changes",
+            ux.lower(),
+        )
 
         marker = engineer.index("active-change marker")
         editing = engineer.index("editing code", marker)

@@ -62,15 +62,22 @@ invocations and has no fixed kickoff or cutoff time.
 
 Before editing code, restarting a service, or deploying, the Engineer creates
 or updates an active Goal-linked Run with an `active-change` marker, invocation
-id, start time, intended scope, and deployment fingerprint. At minimum, the
-fingerprint records `ui_version`, health source state and timestamp, served
-HTML/JS asset version or hash, and local process cwd when available.
+id, start time, intended scope, and deployment fingerprint. Every health sample
+records `health_observed_at` and any source timestamp as evidence. Stable deployment fingerprint fields: `health_state`, `ui_version`, `served_html_js_identity`, `process_cwd`, `source_deployment_identity`.
+`served_html_js_identity` is the served HTML/JS asset version or hash;
+`process_cwd` is the local process cwd when available; and
+`source_deployment_identity` is included only when its source documents it as
+stable. `health_observed_at` and source timestamp evidence are volatile and are
+excluded from deployment fingerprint equality.
 
 Before journeys, UX verifies there is no active Engineer marker, records the
 fingerprint, creates an active UX Run/lease, and re-reads active Runs. If an
 Engineer marker appeared concurrently, Engineer priority wins and UX
 terminalizes as `deferred_due_to_active_change`. UX rechecks the marker, health,
-and fingerprint before and after every journey. On any instability it stops,
+and stable fingerprint before and after every journey. It defers only when an
+active-change marker appears, health is unhealthy or unstable, or the stable
+fingerprint changes; different observation or source timestamps alone do not
+cause deferral. On any qualifying instability it stops,
 discards all observations from that invocation, creates or updates no TODOs,
 and records before/after evidence.
 
