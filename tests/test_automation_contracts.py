@@ -132,6 +132,73 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, contract)
 
+    def test_engineer_and_ux_engineer_coordinate_with_deployment_leases(self):
+        engineer = (
+            ROOT / "automations/memory-stargraph-wish-to-reallity/prompt.md"
+        ).read_text()
+        ux = (
+            ROOT / "automations/memory-stargraph-ux-engineer-daily-dogfood/prompt.md"
+        ).read_text()
+        docs = "\n".join(
+            path.read_text()
+            for path in (
+                ROOT / "docs/automation-runbook.md",
+                ROOT
+                / "docs/superpowers/specs/2026-07-16-memory-stargraph-ux-engineer-design.md",
+                ROOT
+                / "docs/superpowers/plans/2026-07-16-memory-stargraph-ux-engineer.md",
+            )
+        )
+
+        for phrase in (
+            "active-change marker",
+            "invocation id",
+            "start time",
+            "intended scope",
+            "deployment fingerprint",
+            "ui_version",
+            "health source state and timestamp",
+            "served HTML/JS asset version or hash",
+            "local process cwd when available",
+            "active UX Run/lease",
+            "wait for UX to acknowledge and terminalize",
+            "stale UX lease",
+            "stale Engineer marker",
+            "Product Owner",
+            "only after every required target passes",
+            "leave active or failed change evidence visible",
+        ):
+            self.assertIn(phrase, engineer)
+
+        for phrase in (
+            "active-change marker",
+            "deployment fingerprint",
+            "active UX Run/lease",
+            "re-read active Runs",
+            "Engineer priority wins",
+            "before and after every journey",
+            "discard all observations from the unstable run",
+            "create or update no TODOs",
+            "deferred_due_to_active_change",
+            "before/after evidence",
+        ):
+            self.assertIn(phrase, ux)
+
+        marker = engineer.index("active-change marker")
+        editing = engineer.index("editing code", marker)
+        self.assertLess(marker, editing)
+        ux_lease = ux.index("active UX Run/lease")
+        reread = ux.index("re-read active Runs", ux_lease)
+        self.assertLess(ux_lease, reread)
+
+        for phrase in (
+            "Goal-linked Runs as cooperative change and UX leases",
+            "scheduled and manual invocations",
+            "no fixed kickoff or cutoff time",
+            "must not silently deploy through an active UX lease",
+        ):
+            self.assertIn(phrase, docs)
+
     def test_every_worker_uses_dst_aware_pacific_reporting(self):
         workers = (
             "gbrain-x-intelligence-capture",

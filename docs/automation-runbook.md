@@ -54,6 +54,34 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
+## Engineer and UX Deployment Quiescence
+
+The Memory Stargraph Engineer and UX Engineer use Goal-linked Runs as
+cooperative change and UX leases. The protocol applies to scheduled and manual
+invocations and has no fixed kickoff or cutoff time.
+
+Before editing code, restarting a service, or deploying, the Engineer creates
+or updates an active Goal-linked Run with an `active-change` marker, invocation
+id, start time, intended scope, and deployment fingerprint. At minimum, the
+fingerprint records `ui_version`, health source state and timestamp, served
+HTML/JS asset version or hash, and local process cwd when available.
+
+Before journeys, UX verifies there is no active Engineer marker, records the
+fingerprint, creates an active UX Run/lease, and re-reads active Runs. If an
+Engineer marker appeared concurrently, Engineer priority wins and UX
+terminalizes as `deferred_due_to_active_change`. UX rechecks the marker, health,
+and fingerprint before and after every journey. On any instability it stops,
+discards all observations from that invocation, creates or updates no TODOs,
+and records before/after evidence.
+
+Before restart or deployment, the Engineer re-reads active UX leases. It waits
+for UX to acknowledge and terminalize and must not silently deploy through an
+active UX lease. The Engineer clears its marker only after target health,
+version, served HTML/JS, and process-cwd verification passes. Failure,
+interruption, or crash evidence remains visible. A stale UX lease or stale
+Engineer marker requires Product Owner resolution and is never bypassed
+automatically.
+
 ## TODO Backlog Compaction
 
 The root backlog `notes/memory-starmap-todo-list` must stay lightweight. Run this before selecting nightly work and again after final TODO status updates:

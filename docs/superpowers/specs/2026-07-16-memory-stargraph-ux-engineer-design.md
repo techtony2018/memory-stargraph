@@ -37,6 +37,32 @@ direction, differentiation, packaging, and market opportunity. The UX Engineer
 is responsible for daily hands-on usability evidence from the currently
 deployed product.
 
+## Deployment Quiescence
+
+The Memory Stargraph Engineer and UX Engineer use Goal-linked Runs as
+cooperative change and UX leases. This protocol applies to scheduled and manual
+invocations and has no fixed kickoff or cutoff time.
+
+Before editing code, restarting, or deploying, the Engineer publishes an
+active-change marker with invocation id, start time, intended scope, and a
+deployment fingerprint. The fingerprint includes `ui_version`, health source
+state and timestamp, served HTML/JS asset version or hash, and local process cwd
+when available. Before restart or deployment, the Engineer re-reads active UX
+leases. It must wait for UX to acknowledge and terminalize and must not silently
+deploy through an active UX lease.
+
+Before journeys, UX verifies there is no Engineer marker, records the same
+fingerprint, creates an active UX Run/lease, and re-reads active Runs. An
+Engineer marker that appears in that race has priority and causes UX to defer.
+UX repeats marker, health, and fingerprint checks before and after every
+journey. Any change makes the entire invocation unstable: observations are
+discarded, no TODO is created or updated, and the UX Run is terminalized as
+`deferred_due_to_active_change` with before/after evidence.
+
+The Engineer clears its marker only after required deployment verification
+passes. Failed or interrupted changes remain visible. A stale UX lease or stale
+Engineer marker requires Product Owner resolution, never automatic bypass.
+
 ## Schedule And Target
 
 Run daily at 6:00 AM in `America/Los_Angeles`, after the 2:00 AM Memory
@@ -223,6 +249,7 @@ Automation contract tests verify:
 - maximum of three evidence-backed planned TODOs;
 - deduplication and no implementation/deployment authority;
 - Goal-linked Run and report ownership;
+- deployment fingerprint stability, race deferral, and cooperative lease handling;
 - Product Strategist and UX Engineer responsibilities remain separate.
 
 ## Out Of Scope

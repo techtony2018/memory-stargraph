@@ -22,6 +22,15 @@
 - Remain separate from the weekly Memory Stargraph Product Strategist.
 - Use timezone-aware ISO 8601 in `America/Los_Angeles`.
 
+## Deployment Quiescence Amendment
+
+- Use Goal-linked Runs as cooperative change and UX leases for scheduled and manual invocations; there is no fixed kickoff or cutoff time.
+- Before editing code, restarting, or deploying, the Memory Stargraph Engineer writes an active-change marker with invocation id, start time, intended scope, and a deployment fingerprint containing `ui_version`, health source state and timestamp, served HTML/JS asset version or hash, and local process cwd when available.
+- UX confirms there is no marker, records the fingerprint, creates an active UX Run/lease, and re-reads active Runs before journeys. Engineer priority wins a concurrent-start race.
+- UX rechecks marker, health, and fingerprint before and after every journey. Instability discards the run's observations, creates or updates no TODOs, and terminalizes the lease as `deferred_due_to_active_change` with before/after evidence.
+- Before restart or deployment, Engineer re-reads active UX leases, waits for UX acknowledgement and terminalization, and must not silently deploy through an active UX lease.
+- Failed changes remain visible. A stale UX lease or stale Engineer marker requires Product Owner resolution rather than automatic bypass.
+
 ---
 
 ### Task 1: Add The Tracked UX Engineer Contract
