@@ -1,0 +1,12 @@
+version = 1
+id = "memory-stargraph-sre-daily-reliability"
+kind = "heartbeat"
+name = "Memory Stargraph SRE Daily Reliability"
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=8;BYMINUTE=0;BYSECOND=0"
+timezone = "America/Los_Angeles"
+destination = "thread"
+target_thread_id = "{{SRE_DAILY_THREAD_ID}}"
+prompt_file = "heartbeat-prompt.md"
+worker_prompt_file = "../memory-stargraph-sre/prompt.md"
+thread_bootstrap_file = "../memory-stargraph-sre/thread-bootstrap.md"

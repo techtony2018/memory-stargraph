@@ -24,14 +24,20 @@ placeholders before restoring a definition through the Codex automation UI/API.
 | Daily 6:00 AM | Memory Stargraph UX Engineer | `memory-stargraph-ux-engineer-daily-dogfood` | Dogfood the dashboard-managed app, record journey evidence, and promote at most three reproduced UX findings into planned TODOs. |
 | Sunday 4:00 AM | Memory Stargraph Product Strategist | `memory-stargraph-divergent-product-discovery` | Explore usability, performance, customer value, and productization opportunities outside the existing backlog. |
 | Daily 7:00 AM | Memory Stargraph Product Owner | `memory-stargraph-goal-steward-daily-review` | Review all worker runs, Goal health, risks, approvals, and the next coordination action in the dedicated Product Owner task. |
+| Daily 8:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-daily-reliability` | During verified quiet time, inspect deployed-stack reliability, apply bounded documented remediation, and report capacity headroom. |
+| Sunday 11:00 AM | Memory Stargraph SRE | `memory-stargraph-sre-weekly-resilience` | During verified quiet time, run safe-target load, isolated restore, failover, rollback, and capacity-envelope exercises. |
 
 The midnight Capture Link drain and the 12:15 AM X intelligence capture are
 independently scheduled; neither depends on the other finishing. The Capture
 Knowledge Curator may also be triggered manually at any time without a cutoff.
 The UX Engineer runs after the Engineer and before the Product Owner so the
 morning steward review includes fresh journey evidence and UX TODO decisions.
+Codex permits only one active heartbeat per task, so the two SRE automations
+target distinct persistent tasks while sharing one SRE prompt, role, and
+quiet-time contract. Busy runs defer task-locally, and Sunday receives both the
+daily review and the separate weekly exercise.
 
-All seven automations work toward the persistent GBrain goal:
+All nine automations work toward the persistent GBrain goal:
 
 ```text
 goals/memory-stargraph-continuous-learning-local-knowledge-os

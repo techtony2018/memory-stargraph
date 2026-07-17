@@ -133,6 +133,128 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, contract)
 
+    def test_sre_automations_use_distinct_tasks_with_one_worker_contract(self):
+        daily_dir = ROOT / "automations/memory-stargraph-sre-daily-reliability"
+        weekly_dir = ROOT / "automations/memory-stargraph-sre-weekly-resilience"
+        shared_dir = ROOT / "automations/memory-stargraph-sre"
+        daily = tomllib.loads((daily_dir / "automation.toml").read_text())
+        weekly = tomllib.loads((weekly_dir / "automation.toml").read_text())
+        prompt = (shared_dir / "prompt.md").read_text()
+        bootstrap = (shared_dir / "thread-bootstrap.md").read_text()
+        heartbeats = "\n".join(
+            ((daily_dir / "heartbeat-prompt.md").read_text(),
+             (weekly_dir / "heartbeat-prompt.md").read_text())
+        )
+        contract = "\n".join((prompt, bootstrap, heartbeats))
+
+        self.assertEqual(daily["id"], "memory-stargraph-sre-daily-reliability")
+        self.assertEqual(daily["name"], "Memory Stargraph SRE Daily Reliability")
+        self.assertEqual(daily["rrule"], "FREQ=DAILY;BYHOUR=8;BYMINUTE=0;BYSECOND=0")
+        self.assertEqual(weekly["id"], "memory-stargraph-sre-weekly-resilience")
+        self.assertEqual(weekly["name"], "Memory Stargraph SRE Weekly Resilience")
+        self.assertEqual(weekly["rrule"], "FREQ=WEEKLY;BYDAY=SU;BYHOUR=11;BYMINUTE=0;BYSECOND=0")
+        for definition in (daily, weekly):
+            self.assertEqual(definition["timezone"], "America/Los_Angeles")
+            self.assertEqual(definition["destination"], "thread")
+            self.assertEqual(definition["worker_prompt_file"], "../memory-stargraph-sre/prompt.md")
+            self.assertEqual(definition["thread_bootstrap_file"], "../memory-stargraph-sre/thread-bootstrap.md")
+        self.assertEqual(daily["target_thread_id"], "{{SRE_DAILY_THREAD_ID}}")
+        self.assertEqual(weekly["target_thread_id"], "{{SRE_WEEKLY_THREAD_ID}}")
+        self.assertNotEqual(daily["target_thread_id"], weekly["target_thread_id"])
+
+        for phrase in (
+            "Memory Stargraph SRE", "live Codex task state",
+            "active Goal-linked Runs or leases", "performs no health probing",
+            "task-local deferral", "deferred_due_to_worker_activity",
+            "at most one completed daily review", "at most one completed weekly review",
+            "7-day and 30-day baselines", "capacity headroom",
+            "documented last-known-good", "chaos_skipped_no_safe_target",
+            "resolver_probe_skipped_isolation_unverified",
+            "pair_id=sre:{mode}:{invocation_id}:{probe_slug}",
+            "must not implement product or GBrain code", "manual trigger",
+            "no fixed cutoff",
+        ):
+            self.assertIn(phrase, contract)
+        self.assertIn("mode=daily_reliability", heartbeats)
+        self.assertIn("mode=weekly_resilience", heartbeats)
+
+    def test_sre_evidence_reaches_owner_learning_and_engineer(self):
+        paths = (
+            ROOT / "automations/README.md",
+            ROOT / "docs/automation-runbook.md",
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md",
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md",
+            ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md",
+            ROOT / "automations/memory-stargraph-wish-to-reallity/prompt.md",
+        )
+        contract = "\n".join(path.read_text() for path in paths)
+        for phrase in (
+            "memory-stargraph-sre-daily-reliability",
+            "memory-stargraph-sre-weekly-resilience",
+            "Daily 8:00 AM",
+            "Sunday 11:00 AM",
+            "SRE Runs",
+            "capacity headroom",
+            "reliability incidents",
+            "repeated reliability",
+            "released its SRE lease",
+            "critical SRE handoff",
+            "resolver_probe_skipped_isolation_unverified",
+            "chaos_skipped_no_safe_target",
+        ):
+            self.assertIn(phrase, contract)
+
+    def test_product_owner_confirms_health_and_hands_incidents_to_sre(self):
+        owner_paths = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md",
+            ROOT
+            / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md",
+        )
+        sre = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
+        sre_bootstrap = (
+            ROOT / "automations/memory-stargraph-sre/thread-bootstrap.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        owner = "\n".join(path.read_text() for path in owner_paths)
+
+        for phrase in (
+            "healthy, unhealthy, or unverified",
+            "restricted or unknown execution context",
+            "authoritative host-context route",
+            "independent corroboration",
+            "never report an outage from a transport failure alone",
+            "mode=incident_response",
+            "originating Product Owner task id",
+            "affected target",
+            "America/Los_Angeles timestamp",
+            "finish the Product Owner review",
+            "persistent daily SRE task",
+        ):
+            self.assertIn(phrase, owner + "\n" + runbook)
+
+        for phrase in (
+            "mode=incident_response",
+            "verified quiet time",
+            "originating Product Owner task id",
+            "bounded documented remediation",
+            "Goal-linked Run",
+            "incident report",
+            "send a concise result back",
+            "resolver events",
+        ):
+            self.assertIn(phrase, sre + "\n" + runbook)
+        for phrase in (
+            "healthy, unhealthy, or unverified",
+            "authoritative host context",
+            "independent corroboration",
+            "must not remediate an unverified target",
+        ):
+            self.assertIn(phrase, sre)
+        self.assertIn(
+            "daily SRE task also accepts `mode=incident_response`",
+            sre_bootstrap,
+        )
+
     def test_engineer_and_ux_engineer_coordinate_with_deployment_leases(self):
         engineer = (
             ROOT / "automations/memory-stargraph-wish-to-reallity/prompt.md"
@@ -245,6 +367,7 @@ class AutomationContractTests(unittest.TestCase):
             "memory-stargraph-goal-steward-daily-review",
             "memory-stargraph-capture-link-drain",
             "memory-stargraph-ux-engineer-daily-dogfood",
+            "memory-stargraph-sre",
         )
         required = (
             "America/Los_Angeles",

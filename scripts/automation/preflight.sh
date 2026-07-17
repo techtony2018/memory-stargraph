@@ -17,6 +17,67 @@ local_url="${MEMORY_STARGRAPH_LOCAL_URL:-http://127.0.0.1:8788}"
 dashboard_url="${MEMORY_STARGRAPH_DASHBOARD_URL:-}"
 dashboard_restart_url="${MEMORY_STARGRAPH_DASHBOARD_RESTART_URL:-}"
 remote_health_urls="${MEMORY_STARGRAPH_REMOTE_HEALTH_URLS:-}"
+authoritative_local_health_url="${MEMORY_STARGRAPH_AUTHORITATIVE_LOCAL_HEALTH_URL:-}"
+local_corroboration_url="${MEMORY_STARGRAPH_LOCAL_CORROBORATION_URL:-}"
+authoritative_dashboard_url="${MEMORY_STARGRAPH_AUTHORITATIVE_DASHBOARD_URL:-}"
+dashboard_corroboration_url="${MEMORY_STARGRAPH_DASHBOARD_CORROBORATION_URL:-}"
+
+probe_http_outcome() {
+  local url="$1"
+  local code
+  if ! code="$(curl -k -sS --max-time 5 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)"; then
+    printf 'transport_unverified'
+    return
+  fi
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    printf 'healthy'
+  else
+    printf 'http_unhealthy'
+  fi
+}
+
+classify_health() {
+  local target="$1"
+  local direct_url="$2"
+  local authoritative_url="${3:-}"
+  local corroboration_url="${4:-}"
+  local direct_outcome
+  local authoritative_outcome
+  local corroboration_outcome
+
+  direct_outcome="$(probe_http_outcome "$direct_url")"
+  if [[ "$direct_outcome" == "healthy" ]]; then
+    echo "health_state=healthy target=$target source=direct"
+    return
+  fi
+
+  # A transport or loopback failure can be an execution-context restriction.
+  # It is never outage evidence by itself.
+  if [[ -z "$authoritative_url" ]]; then
+    echo "health_state=unverified target=$target reason=direct_$direct_outcome"
+    return
+  fi
+  authoritative_outcome="$(probe_http_outcome "$authoritative_url")"
+  if [[ "$authoritative_outcome" == "healthy" ]]; then
+    echo "health_state=healthy target=$target source=authoritative_host"
+    return
+  fi
+  if [[ -z "$corroboration_url" ]]; then
+    echo "health_state=unverified target=$target reason=authoritative_failure_without_corroboration"
+    return
+  fi
+  corroboration_outcome="$(probe_http_outcome "$corroboration_url")"
+  if [[ "$corroboration_outcome" == "healthy" ]]; then
+    echo "health_state=unverified target=$target reason=conflicting_authoritative_evidence"
+    return
+  fi
+
+  if [[ "$authoritative_outcome" == "http_unhealthy" && "$corroboration_outcome" == "http_unhealthy" ]]; then
+    echo "health_state=unhealthy target=$target source=authoritative_host corroboration=independent"
+  else
+    echo "health_state=unverified target=$target reason=authoritative_or_corroboration_transport_unverified"
+  fi
+}
 
 echo "== Memory Stargraph automation preflight =="
 echo "cwd: $(pwd)"
@@ -40,20 +101,23 @@ fi
 
 echo
 echo "== local service =="
-curl -sS --max-time 5 "$local_url/api/health" || echo "warn: local health unavailable at $local_url"
+classify_health \
+  "local_service" \
+  "$local_url/api/health" \
+  "$authoritative_local_health_url" \
+  "$local_corroboration_url"
 
 echo
 echo "== dashboard =="
 if [[ -n "$dashboard_url" ]]; then
-  dashboard_code="$(curl -sS --max-time 5 -o /tmp/memory-stargraph-dashboard-preflight.html -w "%{http_code}" "$dashboard_url/" || true)"
-  if [[ "$dashboard_code" == "200" ]]; then
-    echo "ok: dashboard root reachable"
-    [[ -n "$dashboard_restart_url" ]] && echo "restart endpoint configured"
-  else
-    echo "warn: dashboard root unavailable, http_code=${dashboard_code:-none}"
-  fi
+  classify_health \
+    "dashboard" \
+    "$dashboard_url/" \
+    "$authoritative_dashboard_url" \
+    "$dashboard_corroboration_url"
+  [[ -n "$dashboard_restart_url" ]] && echo "restart endpoint configured"
 else
-  echo "warn: dashboard URL not configured in local deployment config"
+  echo "health_state=unverified target=dashboard reason=route_not_configured"
 fi
 
 echo
@@ -63,11 +127,18 @@ curl -sS --max-time 5 http://127.0.0.1:9333/json/version || echo "warn: Chrome C
 echo
 echo "== remote reachability =="
 if [[ -n "$remote_health_urls" ]]; then
+  remote_index=0
   for url in $remote_health_urls; do
-    curl -k -sS --max-time 5 "$url" || echo "warn: remote health unavailable: $url"
+    remote_index=$((remote_index + 1))
+    remote_outcome="$(probe_http_outcome "$url")"
+    if [[ "$remote_outcome" == "healthy" ]]; then
+      echo "health_state=healthy target=remote_target_$remote_index source=configured_route"
+    else
+      echo "health_state=unverified target=remote_target_$remote_index reason=single_route_$remote_outcome"
+    fi
   done
 else
-  echo "warn: remote health URLs not configured in local deployment config"
+  echo "health_state=unverified target=remote_targets reason=routes_not_configured"
 fi
 
 exit "$missing"
