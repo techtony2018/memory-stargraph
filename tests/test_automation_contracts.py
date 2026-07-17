@@ -23,7 +23,7 @@ class AutomationContractTests(unittest.TestCase):
                 "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
             },
             "memory-stargraph-wish-to-reallity": {
-                "title": "Memory Stargraph Engineer",
+                "title": "Memory Stargraph Developer",
                 "rrule": "FREQ=DAILY;BYHOUR=2;BYMINUTE=0;BYSECOND=0",
                 "target_thread_id": "{{WISH_TO_REALLITY_THREAD_ID}}",
                 "role_files": ("prompt.md", "heartbeat-prompt.md", "thread-bootstrap.md"),
@@ -286,7 +286,7 @@ class AutomationContractTests(unittest.TestCase):
             "active UX Run/lease",
             "wait for UX to acknowledge and terminalize",
             "stale UX lease",
-            "stale Engineer marker",
+            "stale Developer marker",
             "Product Owner",
             "only after every required target passes",
             "leave active or failed change evidence visible",
@@ -298,7 +298,7 @@ class AutomationContractTests(unittest.TestCase):
             "deployment fingerprint",
             "active UX Run/lease",
             "re-read active Runs",
-            "Engineer priority wins",
+            "Developer priority wins",
             "before and after every journey",
             "discard all observations from the unstable run",
             "create or update no TODOs",
@@ -378,8 +378,55 @@ class AutomationContractTests(unittest.TestCase):
         )
         for worker in workers:
             prompt = (ROOT / "automations" / worker / "prompt.md").read_text()
+            prompt_lower = prompt.lower()
             for phrase in required:
-                self.assertIn(phrase, prompt, f"{worker} missing {phrase}")
+                self.assertIn(
+                    phrase.lower(), prompt_lower, f"{worker} missing {phrase}"
+                )
+
+    def test_workers_notify_product_owner_after_terminal_or_deferred_runs(self):
+        workers = (
+            "gbrain-x-intelligence-capture",
+            "memory-stargraph-daily-learning-intake",
+            "memory-stargraph-wish-to-reallity",
+            "memory-stargraph-divergent-product-discovery",
+            "memory-stargraph-capture-link-drain",
+            "memory-stargraph-ux-engineer-daily-dogfood",
+            "memory-stargraph-sre",
+        )
+        required = (
+            "Keep the detailed report in this worker task",
+            "After a terminal outcome or deferral",
+            "notify the canonical Memory Stargraph Product Owner task",
+            "compact completion payload",
+            "worker task id",
+            "automation id",
+            "invocation id",
+            "terminal status",
+            "Run/report slugs",
+            "blockers",
+            "approvals needed",
+            "requested Product Owner follow-up",
+            "product_owner_notification_pending",
+        )
+        for worker in workers:
+            prompt = (ROOT / "automations" / worker / "prompt.md").read_text()
+            prompt_lower = prompt.lower()
+            for phrase in required:
+                self.assertIn(
+                    phrase.lower(), prompt_lower, f"{worker} missing {phrase}"
+                )
+
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        for phrase in (
+            "Worker notification and verification contract",
+            "Workers keep their full reports in their own persistent tasks",
+            "On notification, enter or inspect the worker's persistent task",
+            "Do not accept a worker notification as completion by itself",
+        ):
+            self.assertIn(phrase, owner_prompt)
 
     def test_capture_worker_is_persistent_midnight_and_manually_triggerable(self):
         definition = tomllib.loads(

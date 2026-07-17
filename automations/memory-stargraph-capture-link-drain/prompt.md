@@ -49,6 +49,8 @@ Human-control contract: do not auto-approve resolver proposals. Do not bypass au
 
 Reporting contract: every user-facing GBrain slug must be an exact-label Markdown link to `http://127.0.0.1:8788/?slug=<URL-encoded-slug>`. Report the invocation id, frozen item ids, coherent batches, parent/child transition evidence, terminal status for every frozen item, post-snapshot ids deferred to the next invocation, Goal-linked Run slug, durable Learnings, and any human action required.
 
+Product Owner notification contract: keep the detailed report in this worker task. After a terminal outcome or deferral, notify the canonical Memory Stargraph Product Owner task with a compact completion payload: this worker task id, automation id, invocation id, terminal status, Run/report slugs, terminal capture/enrichment item ids, changed metrics, blockers, approvals needed, and requested Product Owner follow-up. If direct task messaging is unavailable, record `product_owner_notification_pending` with the same payload in this Run/report.
+
 Every frozen request must end this invocation as `completed` or `failed`; no frozen request may remain `capturing`. Requests created after the frozen snapshot stay planned for the next invocation.
 
 Pacific-time reporting contract: worker-generated logs, Run records, batch reports, status-transition evidence, timestamped filenames, and final reports must use timezone-aware ISO 8601 values in `America/Los_Angeles`. This means PDT in summer (`-07:00`) and PST in winter (`-08:00`). Do not use a fixed UTC-8 offset or label UTC values as Pacific time. Preserve source-native timestamps as provenance when needed, but add a Pacific-normalized value for worker evidence.

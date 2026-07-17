@@ -70,13 +70,13 @@ transport-plus-HTTP failures remain `unverified`; only two explicit
 HTTP-unhealthy observations may produce `unhealthy`. A single-route remote
 failure stays `unverified`.
 
-## Engineer and UX Deployment Quiescence
+## Developer and UX Deployment Quiescence
 
-The Memory Stargraph Engineer and UX Engineer use Goal-linked Runs as
+The Memory Stargraph Developer and UX Engineer use Goal-linked Runs as
 cooperative change and UX leases. The protocol applies to scheduled and manual
 invocations and has no fixed kickoff or cutoff time.
 
-Before editing code, restarting a service, or deploying, the Engineer creates
+Before editing code, restarting a service, or deploying, the Developer creates
 or updates an active Goal-linked Run with an `active-change` marker, invocation
 id, start time, intended scope, and deployment fingerprint. Every health sample
 records `health_observed_at` and any source timestamp as evidence. Stable deployment fingerprint fields: `health_state`, `ui_version`, `served_html_js_identity`, `process_cwd`, `source_deployment_identity`.
@@ -86,9 +86,9 @@ records `health_observed_at` and any source timestamp as evidence. Stable deploy
 stable. `health_observed_at` and source timestamp evidence are volatile and are
 excluded from deployment fingerprint equality.
 
-Before journeys, UX verifies there is no active Engineer marker, records the
+Before journeys, UX verifies there is no active Developer marker, records the
 fingerprint, creates an active UX Run/lease, and re-reads active Runs. If an
-Engineer marker appeared concurrently, Engineer priority wins and UX
+Developer marker appeared concurrently, Developer priority wins and UX
 terminalizes as `deferred_due_to_active_change`. UX rechecks the marker, health,
 and stable fingerprint before and after every journey. It defers only when an
 active-change marker appears, health is unhealthy or unstable, or the stable
@@ -97,12 +97,12 @@ cause deferral. On any qualifying instability it stops,
 discards all observations from that invocation, creates or updates no TODOs,
 and records before/after evidence.
 
-Before restart or deployment, the Engineer re-reads active UX leases. It waits
+Before restart or deployment, the Developer re-reads active UX leases. It waits
 for UX to acknowledge and terminalize and must not silently deploy through an
-active UX lease. The Engineer clears its marker only after target health,
+active UX lease. The Developer clears its marker only after target health,
 version, served HTML/JS, and process-cwd verification passes. Failure,
 interruption, or crash evidence remains visible. A stale UX lease or stale
-Engineer marker requires Product Owner resolution and is never bypassed
+Developer marker requires Product Owner resolution and is never bypassed
 automatically.
 
 ## SRE reliability and resilience
@@ -149,6 +149,67 @@ a Goal-linked Run and incident report, diagnoses from authoritative context,
 applies only bounded documented remediation, verifies recovery, releases its
 lease, and sends a concise result back to the originating task. Incident mode
 must not create resolver events or synthetic resolver/Ask Yoda traffic.
+
+## Product Owner accountability and progress metric
+
+The Product Owner owns progress across roles, not report forwarding. Each daily
+review must reconcile the expected schedule, live automation state, persistent
+destination task, latest heartbeat, latest terminal Run, and latest report for
+every recurring Memory Stargraph role. Missing terminal evidence, a stale active
+Run, wrong destination task, unexpected paused state, or a report that lacks the
+required outcome evidence is treated as `blocked_or_silent`.
+
+For each `blocked_or_silent` role, the Product Owner takes the next safe
+coordination action in the same review: follow up in the persistent worker task,
+dispatch the proper role for diagnosis, create or update one evidence-backed
+TODO when a product fix is needed, or ask Tony only when human authority is
+required. Examples, setup-only results, plans, and partial progress do not count
+as completion. A Developer run that does not terminalize selected TODOs as
+`completed` or `failed` with evidence is a failed coordination outcome.
+
+Every Product Owner report includes a daily `Goal progress` percentage. The
+stable rubric is:
+
+| Dimension | Weight |
+| --- | ---: |
+| Usability and onboarding | 15% |
+| Retrieval and Ask Yoda answer quality | 20% |
+| Continuous-learning feedback loop | 20% |
+| Reliability, backup, restore, and SRE readiness | 15% |
+| Data quality, relationships, backlinks, and capture coverage | 10% |
+| Productization, adoption readiness, and packaging | 10% |
+| Automation governance, role health, and human-control safety | 10% |
+
+Each dimension is scored from 0-100 using current Runs, TODO states, tests,
+deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture
+quality, and user feedback. Missing evidence lowers confidence and becomes a
+coordination action. Reports include the delta from the previous Product Owner
+report when available, or `baseline established` for the first scored report,
+plus the one highest-leverage action to improve the percentage.
+
+After the daily report, the Product Owner runs a short retrospective comparing
+today against the previous Product Owner report: metric values, role outcomes,
+TODO movement, health and reliability evidence, user feedback, Ask Yoda quality,
+capture/data-quality progress, and automation governance. Regressions, stalled
+metrics, missing day-over-day evidence, and role failures receive an immediate
+coordination action in the correct role boundary unless human approval is
+required. If the current role set is insufficient, the Product Owner proposes a
+new role or schedule change for Tony's review with scope, trigger, success
+metrics, safety boundaries, and why existing roles cannot cover it. New
+recurring roles require Tony's approval before creation.
+
+### Worker completion notification
+
+Worker tasks remain the system of record for detailed execution reports. After
+a terminal outcome or deferral, every recurring worker sends the canonical
+Product Owner task a compact notification: worker task id, automation id,
+invocation id, terminal status, Run/report slugs, changed TODO ids or no-op
+reason, key metrics changed, blockers, approvals needed, and requested Product
+Owner follow-up. The Product Owner then enters or inspects the worker task and
+verifies the report, Run evidence, TODO/status transitions, deployment or
+capture evidence, and metric claims before counting the work as progress. If
+direct task messaging is unavailable, the worker records
+`product_owner_notification_pending` with the same payload in its Run/report.
 
 ## TODO Backlog Compaction
 
