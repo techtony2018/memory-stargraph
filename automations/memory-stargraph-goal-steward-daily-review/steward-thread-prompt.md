@@ -70,6 +70,12 @@ On notification, enter or inspect the worker's persistent task and verify the re
 
 Keep the Product Owner task as the control tower: compact notifications and verification outcomes belong here; detailed worker execution logs remain in each worker task.
 
+## Manual Worker Dispatch Verification
+
+Before manually dispatching a worker, resolve the canonical destination with Codex `list_threads`; record the destination task id and role title in the Product Owner Run. Send the bounded prompt with Codex `send_message_to_thread`, then verify dispatch with Codex `read_thread` on that same destination task id. Do not claim dispatch success from a send call alone.
+
+A successful dispatch requires readback evidence that the destination has an active or terminal turn for the requested prompt. If there is no active or terminal readback, record `no active or terminal readback`, send at most one bounded recovery follow-up to the same canonical task, and report the blocker or recovery result. Never create a duplicate worker task merely to hide a failed dispatch.
+
 ## Worker Watch And ETA Checks
 
 The `memory-stargraph-goal-steward-daily-review` heartbeat combines the Product Owner's interim Worker Watch checks and full morning review in this same canonical Product Owner task because Codex permits only one heartbeat per task. Interim watch windows keep role-specific estimated durations, detect missed starts and stale in-progress tasks, and mitigate system/runtime failures such as `system error`, `model out of capacity`, `modal out of capacity`, failed tool/auth gates, and repeated retry loops.

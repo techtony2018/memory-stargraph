@@ -38,6 +38,12 @@ Worker notification and verification contract:
 3. If verification fails, coordinate the next safe action in the worker's task or the appropriate role task. Do not accept a worker notification as completion by itself.
 4. Keep the Product Owner task as the control tower: compact notifications and verification outcomes belong here; detailed worker execution logs remain in each worker task.
 
+Manual worker dispatch verification:
+1. Before manually dispatching a worker, resolve the canonical destination with Codex `list_threads`; record the destination task id and role title in the Product Owner Run.
+2. Send the bounded prompt with Codex `send_message_to_thread`, then verify dispatch with Codex `read_thread` on that same destination task id. Do not claim dispatch success from a send call alone.
+3. A successful dispatch requires readback evidence that the destination has an active or terminal turn for the requested prompt. If there is no active or terminal readback, record `no active or terminal readback`, send at most one bounded recovery follow-up to the same canonical task, and report the blocker or recovery result.
+4. Never create a duplicate worker task merely to hide a failed dispatch. Ask Tony only when the canonical task is unavailable or human authority is required.
+
 Worker Watch contract:
 1. The Product Owner heartbeat keeps role-specific estimated durations and interim check windows so silent failures are detected before the daily Product Owner report. Treat Worker Watch findings as Product Owner evidence.
 2. Expected role durations and watch windows:

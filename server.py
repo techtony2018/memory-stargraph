@@ -156,7 +156,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.150"
+UI_VERSION = "V1.0.151"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1463,6 +1463,56 @@ def save_yoda_model_config(payload):
     })
     write_local_config_file(config)
     return public_yoda_model_config()
+
+
+def split_markdown_table_row(line):
+    text = line.strip().removeprefix("|").removesuffix("|")
+    cells = []
+    current = []
+    escaped = False
+    for char in text:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current).strip())
+    return cells
+
+
+def parse_memory_starmap_todo_rows(markdown):
+    lines = str(markdown or "").splitlines()
+    columns = ("id", "status", "priority", "title", "node", "updated", "notes")
+    start = None
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        cells = tuple(cell.lower() for cell in split_markdown_table_row(line))
+        if cells[: len(columns)] == columns:
+            start = index
+            break
+    if start is None:
+        return []
+    rows = []
+    for line in lines[start + 2 :]:
+        if not line.strip().startswith("|"):
+            break
+        cells = split_markdown_table_row(line)
+        if len(cells) >= len(columns):
+            rows.append({column: cells[index] for index, column in enumerate(columns)})
+    return rows
+
+
+def todo_row_node_slug(row):
+    match = re.search(r"\[\[([^\]]+)\]\]", str(row.get("node") or ""))
+    return match.group(1).strip() if match else ""
 
 
 def yoda_details(backend, model="", timeout=45):
@@ -3955,6 +4005,83 @@ class GraphStore:
             },
         }
 
+    def build_yoda_current_todo_context(self, question, selected_slug):
+        question_text = str(question or "").lower()
+        selected = str(selected_slug or "").strip()
+        todo_root = "notes/memory-starmap-todo-list"
+        is_todo_question = (
+            selected == todo_root
+            or selected.startswith(f"{todo_root}/")
+            or any(
+                phrase in question_text
+                for phrase in (
+                    "todo",
+                    "planned",
+                    "failed",
+                    "completed",
+                    "priority",
+                    "prioritize",
+                    "current",
+                    "still open",
+                    "next work",
+                    "gap",
+                    "sg-",
+                )
+            )
+        )
+        if not is_todo_question:
+            return {"text": "", "counts": {}}
+
+        root_raw = self.get_entity_raw(todo_root) or ""
+        rows = parse_memory_starmap_todo_rows(root_raw)
+        if not rows:
+            return {"text": "", "counts": {"current_todo_rows": 0, "current_todo_child_reads": 0}}
+
+        mentioned_ids = {match.group(0).upper() for match in re.finditer(r"\bSG-\d{4}\b", str(question or ""), re.IGNORECASE)}
+        active_statuses = {"planned", "implementing", "failed"}
+        selected_rows = [
+            row
+            for row in rows
+            if row.get("status") in active_statuses or row.get("id") in mentioned_ids
+        ][:80]
+        if not selected_rows:
+            selected_rows = rows[:20]
+
+        lines = [
+            "Authoritative current TODO state:",
+            "This section is read directly from notes/memory-starmap-todo-list at answer time. "
+            "Do not recommend completed TODOs as current work, even if historical Runs mention them.",
+            "| id | status | priority | title | node | updated |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        child_slugs: list[tuple[str, str]] = []
+        for row in selected_rows:
+            node_slug = todo_row_node_slug(row)
+            lines.append(
+                f"| {row.get('id', '')} | {row.get('status', '')} | {row.get('priority', '')} | "
+                f"{row.get('title', '')} | {node_slug or row.get('node', '')} | {row.get('updated', '')} |"
+            )
+            if node_slug and (row.get("id") in mentioned_ids or row.get("status") in active_statuses):
+                child_slugs.append((row.get("id", node_slug), node_slug))
+
+        child_reads = 0
+        if child_slugs:
+            lines.extend(["", "Direct current TODO child-node reads:"])
+        for item_id, node_slug in child_slugs[:8]:
+            child_raw = self.get_entity_raw(node_slug) or ""
+            if not child_raw:
+                continue
+            child_reads += 1
+            lines.extend([f"## {item_id} child node", child_raw[:1800]])
+
+        return {
+            "text": "\n".join(lines),
+            "counts": {
+                "current_todo_rows": len(selected_rows),
+                "current_todo_child_reads": child_reads,
+            },
+        }
+
     def build_yoda_prompt(
         self,
         slug,
@@ -4022,6 +4149,18 @@ class GraphStore:
                 backlink_preview,
             ]
         )
+        phase_started = time.perf_counter()
+        current_todo_context = self.build_yoda_current_todo_context(effective_question or question, slug)
+        current_todo_text = current_todo_context.get("text") or ""
+        if current_todo_text:
+            lines.extend(
+                [
+                    "",
+                    current_todo_text,
+                ]
+            )
+            counts.update(current_todo_context.get("counts") or {})
+            trace["current_todo_state"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
         try:
             search_output = run_gbrain(
@@ -4149,6 +4288,14 @@ class GraphStore:
                 "relationship_source_reads": context_counts.get("relationship_source_reads", 0),
                 "retrieval_history_used": retrieval_history_used,
                 "broad_graph_depth": broad_graph_depth,
+                **(
+                    {
+                        "current_todo_rows": context_counts.get("current_todo_rows", 0),
+                        "current_todo_child_reads": context_counts.get("current_todo_child_reads", 0),
+                    }
+                    if "current_todo_rows" in context_counts or "current_todo_child_reads" in context_counts
+                    else {}
+                ),
             },
             "context_degraded": bool(stable_context.get("degraded")),
             "context_degraded_reason": str(stable_context.get("degraded_reason") or ""),

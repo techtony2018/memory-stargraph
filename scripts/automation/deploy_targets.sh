@@ -30,8 +30,12 @@ tracked_files=(
   public/index.html
   public/styles.css
   public/assets/brand/yoda-selection-avatar.png
+  scripts/automation/gbrain_worker_api.py
+  scripts/automation/yoda_gap_evaluator.py
   tests/browser_smoke.mjs
   tests/test_frontend_static.py
+  tests/test_todo_backlog_compaction.py
+  tests/test_yoda_gap_evaluator.py
 )
 
 verify_url() {

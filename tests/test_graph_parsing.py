@@ -1223,6 +1223,50 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
         run.assert_any_call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=8)
 
+    def test_ask_yoda_current_todo_questions_include_authoritative_status_context(self):
+        store = GraphStore()
+        backlog = """# Memory Starmap Todo List
+
+## Todo Items
+
+| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG-0123 | completed | P1 | Already fixed regression | [[notes/memory-starmap-todo-list/already-fixed-regression]] | 2026-07-17 | Completed with verification. |
+| SG-0146 | planned | P1 | Reconcile Ask Yoda recommendations with authoritative current state | [[notes/memory-starmap-todo-list/reconcile-ask-yoda-recommendations-with-authoritative-current-state]] | 2026-07-18 | Planned. |
+"""
+
+        def raw_entity(slug):
+            return {
+                "notes/memory-starmap-todo-list": backlog,
+                "notes/memory-starmap-todo-list/already-fixed-regression": "# Already fixed\n\nStatus: completed",
+                "notes/memory-starmap-todo-list/reconcile-ask-yoda-recommendations-with-authoritative-current-state": "# Reconcile\n\nStatus: planned",
+            }.get(slug)
+
+        with (
+            mock.patch.object(store, "get_entity_raw", side_effect=raw_entity),
+            mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
+            mock.patch("server.run_gbrain", return_value=""),
+        ):
+            prompt = store.build_yoda_prompt(
+                "notes/memory-starmap-todo-list",
+                "Which current planned TODOs should we prioritize next, and is SG-0123 still open?",
+                depth=4,
+                stable_context={
+                    "selected_node": "# Root",
+                    "graph": "",
+                    "backlinks": "",
+                    "timings": {},
+                },
+                counts={},
+            )
+
+        self.assertIn("Authoritative current TODO state", prompt)
+        self.assertIn("SG-0123 | completed | P1 | Already fixed regression", prompt)
+        self.assertIn("SG-0146 | planned | P1 | Reconcile Ask Yoda recommendations with authoritative current state", prompt)
+        self.assertIn("Do not recommend completed TODOs as current work", prompt)
+        self.assertIn("## SG-0123 child node", prompt)
+        self.assertIn("Status: completed", prompt)
+
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
 

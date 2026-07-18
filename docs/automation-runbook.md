@@ -243,6 +243,21 @@ capture evidence, and metric claims before counting the work as progress. If
 direct task messaging is unavailable, the worker records
 `product_owner_notification_pending` with the same payload in its Run/report.
 
+### Manual worker dispatch verification
+
+When the Product Owner manually dispatches or retries any recurring worker,
+resolve the canonical destination with Codex `list_threads` first. Record the
+destination task id, role title, and prompt purpose in the Product Owner Run.
+Send the bounded prompt with Codex `send_message_to_thread`, then verify the
+same destination task with Codex `read_thread`.
+
+Do not claim dispatch success from a send call alone. A successful dispatch
+requires readback evidence that the destination task has an active or terminal
+turn for the requested prompt. If there is no active or terminal readback,
+record `no active or terminal readback`, send at most one bounded recovery
+follow-up to the same canonical task, and report the blocker or recovery result.
+Never create a duplicate worker task merely to hide a failed dispatch.
+
 ### Product Owner Worker Watch
 
 Completion notifications are not enough because a system error can prevent a

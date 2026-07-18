@@ -2,10 +2,14 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from scripts.automation.compact_sg_todo_backlog import (
     ARCHIVE_SIZE,
     TODO_COLUMNS,
+    gbrain_get,
+    gbrain_link,
+    gbrain_put,
     parse_todo_rows,
     plan_compaction,
     render_todo_table,
@@ -94,6 +98,34 @@ class TodoBacklogCompactionTests(unittest.TestCase):
 
         self.assertEqual(parsed[0]["title"], "Fix A | B")
         self.assertEqual(parsed[0]["notes"], "Completed with A | B evidence")
+
+    def test_gbrain_operations_fall_back_to_memory_stargraph_http_api(self):
+        calls = []
+
+        def fake_run(cmd, input=None, text=None, capture_output=None, timeout=None, check=None):
+            calls.append((cmd, input))
+            if cmd[0] == "gbrain":
+                return subprocess.CompletedProcess(cmd, 1, "", "mcp unavailable")
+            if cmd[0] == "curl" and cmd[1:3] == ["-sS", "--fail"]:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    '{"slug":"notes/memory-starmap-todo-list","content":"# Todo\\n"}',
+                    "",
+                )
+            if cmd[0] == "curl" and "-X" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, '{"ok":true}', "")
+            raise AssertionError(cmd)
+
+        with mock.patch("scripts.automation.compact_sg_todo_backlog.subprocess.run", side_effect=fake_run):
+            self.assertEqual(gbrain_get("notes/memory-starmap-todo-list"), "# Todo\n")
+            gbrain_put("notes/memory-starmap-todo-list", "# Updated\n")
+            self.assertTrue(gbrain_link("notes/root", "notes/child", "has_todo"))
+
+        flattened = [" ".join(command) for command, _ in calls]
+        self.assertTrue(any("/api/entity-raw/notes%2Fmemory-starmap-todo-list" in call for call in flattened))
+        self.assertTrue(any("/api/entity-save/notes%2Fmemory-starmap-todo-list" in call for call in flattened))
+        self.assertTrue(any("/api/entity-link/notes%2Froot" in call for call in flattened))
 
 
 if __name__ == "__main__":

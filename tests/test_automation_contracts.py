@@ -154,7 +154,18 @@ class AutomationContractTests(unittest.TestCase):
             "TODO",
             "deduplicate",
         ):
-            self.assertIn(phrase, contract)
+                self.assertIn(phrase, contract)
+
+    def test_deployment_packaging_includes_yoda_evaluator_and_worker_api_helpers(self):
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+
+        for path in (
+            "scripts/automation/yoda_gap_evaluator.py",
+            "scripts/automation/gbrain_worker_api.py",
+            "tests/test_yoda_gap_evaluator.py",
+            "tests/test_todo_backlog_compaction.py",
+        ):
+            self.assertIn(path, deploy)
 
     def test_sre_automations_use_distinct_tasks_with_one_worker_contract(self):
         daily_dir = ROOT / "automations/memory-stargraph-sre-daily-reliability"
@@ -319,6 +330,29 @@ class AutomationContractTests(unittest.TestCase):
             "canonical worker task",
             "route confirmed infrastructure or health failures to the daily SRE task",
             "Do not duplicate worker-owned implementation",
+        ):
+            self.assertIn(phrase, contract)
+
+    def test_product_owner_manual_dispatch_requires_send_and_readback_verification(self):
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        owner_bootstrap = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = "\n".join((owner_prompt, owner_bootstrap, runbook))
+
+        for phrase in (
+            "Manual worker dispatch verification",
+            "list_threads",
+            "send_message_to_thread",
+            "read_thread",
+            "destination task id",
+            "active or terminal turn",
+            "no active or terminal readback",
+            "bounded recovery follow-up",
+            "Do not claim dispatch success from a send call alone",
         ):
             self.assertIn(phrase, contract)
 
