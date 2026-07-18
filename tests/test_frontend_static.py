@@ -875,8 +875,8 @@ class FrontendStaticTests(unittest.TestCase):
         handle_rule = styles[handle_start:handle_end]
         self.assertIn("width: 2px", handle_rule)
         self.assertIn("height: 52%", handle_rule)
-        self.assertNotIn("border:", handle_rule)
-        self.assertNotIn("border-radius", handle_rule)
+        self.assertIn("border: 0", handle_rule)
+        self.assertIn("border-radius: 0", handle_rule)
         self.assertIn("@keyframes filterDrawerPulse", styles)
         self.assertIn(".filter-sidebar-drawer.is-hidden", styles)
 
