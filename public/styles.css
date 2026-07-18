@@ -811,6 +811,10 @@ h2 {
 
 .js-hud-tooltips .filter-sidebar-drawer::before {
   display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  clip-path: none;
 }
 
 .filter-sidebar {

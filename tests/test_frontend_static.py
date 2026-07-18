@@ -829,6 +829,7 @@ class FrontendStaticTests(unittest.TestCase):
             ".js-hud-tooltips .filter-sidebar-drawer::before {\n  display: block;",
             styles,
         )
+        self.assertIn("clip-path: none", styles)
         self.assertIn("opacity: 0.9", styles)
         self.assertIn(".filter-sidebar-drawer.is-hidden", styles)
         self.assertIn("right: 18px", styles)
