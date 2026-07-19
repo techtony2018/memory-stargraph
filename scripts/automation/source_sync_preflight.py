@@ -110,7 +110,9 @@ def run_git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def snapshot_checkout(root: Path, dashboard_ui_version: str, required_paths: tuple[str, ...]) -> CheckoutSnapshot:
+def snapshot_checkout(
+    root: Path, dashboard_ui_version: str, required_paths: tuple[str, ...]
+) -> CheckoutSnapshot:
     head = run_git(root, "rev-parse", "HEAD") or "unknown"
     origin_main = run_git(root, "rev-parse", "origin/main") or "unknown"
     dirty = bool(run_git(root, "status", "--porcelain"))

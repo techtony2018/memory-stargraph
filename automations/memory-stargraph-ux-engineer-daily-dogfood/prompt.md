@@ -6,6 +6,10 @@ Backlog: `notes/memory-starmap-todo-list`
 
 This worker runs daily at 6:00 AM in `America/Los_Angeles` and may run by manual trigger at any time; there is no fixed cutoff. It is separate from the weekly Product Strategist, which owns broad product direction.
 
+GBrain and Memory Stargraph API access for worker roles: use top-level `curl -sS` calls to the Memory Stargraph HTTP APIs for GBrain reads, writes, search, graph, backlinks, Ask Yoda logs, health checks, and configured remote Memory Stargraph targets. Use `python3 scripts/automation/gbrain_worker_api.py routes` only to list the dashboard local route and configured remote routes from the private deployment config; do not use Python networking for worker API calls because sandboxed Python sockets may be blocked. Direct `gbrain` CLI/MCP may be used only after a successful preflight; if direct MCP fails, use the HTTP API route and record the MCP failure as evidence instead of stopping silently.
+
+Source-sync preflight: before health checks, lease creation, browser journeys, or TODO creation, record workspace path, branch, local `HEAD`, upstream `HEAD`, dirty/divergent state, deployed Memory Stargraph version, and selected source surface. If the checkout is clean and only behind the configured upstream, fast-forward safely and continue from the updated workspace. If the checkout is dirty, divergent, detached, fetch fails, or the safe upstream is ambiguous, do not overwrite local work; defer or terminalize truthfully with `source_sync_preflight=blocked` and include Product Owner follow-up. UX observations from a stale source context must be clearly labeled or discarded.
+
 1. Record invocation id and timezone-aware `started_at` in `America/Los_Angeles`.
 2. Read recent Goal Runs, deployments, UX reports, Learnings, user corrections, Ask Yoda evidence, and backlog. Build rolling seven-day journey coverage.
 3. Verify `http://127.0.0.1:8788/api/health`; record `ui_version`, source state, warnings, attachments, the sample time as `health_observed_at`, and any source timestamp as evidence. Confirm there is no active Developer active-change marker and record the stable deployment fingerprint.

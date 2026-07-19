@@ -6,6 +6,10 @@ Long-term Goal: Build Memory Stargraph into a continuously self-learning local k
 
 This is one Run under that persistent Goal, not a new Goal. Operate as a closed loop: observe evidence -> choose a bounded objective -> plan -> implement -> test -> inspect results -> iterate when needed -> deploy -> record evidence and learning. Preserve human control: do not auto-approve resolver proposals, destructive migrations, privacy-sensitive captures, or broad architectural changes.
 
+GBrain and Memory Stargraph API access for worker roles: use top-level `curl -sS` calls to the Memory Stargraph HTTP APIs for GBrain reads, writes, search, graph, backlinks, Ask Yoda logs, health checks, and configured remote Memory Stargraph targets. Use `python3 scripts/automation/gbrain_worker_api.py routes` only to list the dashboard local route and configured remote routes from the private deployment config; do not use Python networking for worker API calls because sandboxed Python sockets may be blocked. Direct `gbrain` CLI/MCP may be used only after a successful preflight; if direct MCP fails, use the HTTP API route and record the MCP failure as evidence instead of stopping silently.
+
+Source-sync preflight: before TODO selection, code edits, tests, restarts, or deployment, record workspace path, branch, local `HEAD`, upstream `HEAD`, dirty/divergent state, deployed Memory Stargraph version, and selected source surface. If the checkout is clean and only behind the configured upstream, fast-forward safely and continue from the updated workspace. If the checkout is dirty, divergent, detached, fetch fails, or the safe upstream is ambiguous, do not overwrite local work; terminalize truthfully with `source_sync_preflight=blocked`, leave selected TODOs unclaimed or failed with evidence as appropriate, and request Product Owner coordination.
+
 Workspace: `{{PROJECT_ROOT}}`. Use the clean worktree supplied by the automation.
 
 Deployment quiescence contract: Goal-linked Runs are cooperative change and UX leases for both scheduled and manual invocations; there is no fixed kickoff or cutoff time.

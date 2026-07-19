@@ -54,13 +54,38 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
-For persistent script-dependent workers, the preflight also runs a
-source-sync preflight. It records checkout HEAD, origin/main, dashboard service
-version, required script existence, and the chosen script path. A clean stale
-checkout may be repaired only with a fast-forward-only sync. A dirty or divergent checkout is a bounded blocker: preserve unrelated local changes,
-record the blocker in the Run/report, and use a verified dashboard service copy
-only when the deployed service version and required script existence are read
-back.
+Before any recurring Memory Stargraph worker performs role-specific work, it must
+run a source-sync preflight for its local checkout. Record the workspace path,
+branch, local `HEAD`, configured upstream, upstream `HEAD`, dirty/divergent
+state, deployed Memory Stargraph version when applicable, and selected source
+surface in the Run/report. If the checkout is clean and only behind the
+configured upstream, the worker should fast-forward safely and continue from the
+updated workspace. If the checkout is dirty, divergent, detached, fetch fails,
+or the safe upstream is ambiguous, the worker must not overwrite local work; it
+must block or defer truthfully with `source_sync_preflight=blocked` and request
+Product Owner/Developer coordination. A worker may use a deployed service copy
+only as an explicit fallback surface, and must record that choice instead of
+presenting the stale local checkout as authoritative.
+
+Use the maintained helper when available:
+
+```bash
+python3 scripts/automation/source_sync_preflight.py --root . --dashboard-ui-version "$UI_VERSION" --sync-clean-fast-forward --json
+```
+
+The helper performs only fast-forward-only syncs for clean stale checkouts. It
+does not overwrite dirty or divergent worktrees.
+
+All recurring Memory Stargraph roles must be able to access GBrain data and the
+configured local/remote Memory Stargraph APIs. Use top-level `curl -sS` calls to
+the Memory Stargraph HTTP APIs for sandbox-safe GBrain reads, writes, search,
+graph, backlinks, Ask Yoda logs, health, and configured remote Stargraph routes.
+Use `python3 scripts/automation/gbrain_worker_api.py routes` only to list the
+local and remote routes from the private deployment-target config; do not use
+Python networking for worker API calls because sandboxed Python sockets may be
+blocked. Direct `gbrain` CLI/MCP access is optional and must be preflighted; a
+remote MCP transport failure is not a reason for a worker to stop if the HTTP API
+can reach GBrain through Memory Stargraph.
 
 Preflight health is tri-state: every target is `healthy`, `unhealthy`, or
 `unverified`. A failed loopback or transport probe from a restricted or unknown

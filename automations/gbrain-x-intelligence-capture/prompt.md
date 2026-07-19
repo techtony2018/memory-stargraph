@@ -6,6 +6,12 @@ GBrain product: `products/gbrain`
 
 Memory Stargraph product: `products/memory-stargraph`
 
+GBrain and Memory Stargraph API access for worker roles: use top-level `curl -sS` calls to the Memory Stargraph HTTP APIs for GBrain reads, writes, search, graph, backlinks, Ask Yoda logs, health checks, and configured remote Memory Stargraph targets. Use `python3 scripts/automation/gbrain_worker_api.py routes` only to list the dashboard local route and configured remote routes from the private deployment config; do not use Python networking for worker API calls because sandboxed Python sockets may be blocked. Direct `gbrain` CLI/MCP may be used only after a successful preflight; if direct MCP fails, use the HTTP API route and record the MCP failure as evidence instead of stopping silently.
+
+Source-sync preflight: before external research, watermark reads, captures, or GBrain writes, record workspace path, branch, local `HEAD`, upstream `HEAD`, dirty/divergent state, deployed Memory Stargraph version when applicable, and selected source surface. If the checkout is clean and only behind the configured upstream, fast-forward safely and continue from the updated workspace. If the checkout is dirty, divergent, detached, fetch fails, or the safe upstream is ambiguous, do not overwrite local work; defer or terminalize truthfully with `source_sync_preflight=blocked` and include Product Owner follow-up.
+
+Browser and Chrome CDP fallback contract: when browser verification, authenticated source inspection, or visual evidence is needed, inspect existing in-app browser tabs first and reuse a suitable same-origin or same-source tab. If the in-app browser is unavailable, cannot capture a fresh state, or the task requires the user's authenticated Chrome session, use Chrome CDP at `127.0.0.1:9333`; inspect existing Chrome tabs first, reuse a suitable matching tab when possible, never close a reused user tab, and close only temporary tabs created by this invocation. Record the browser surface used and persistent tab counts before and after.
+
 Destination collection: `collections/gbrain-x-intelligence`
 
 Purpose: discover and preserve useful public knowledge shared on X about GBrain usage, explanations, integrations, workflows, releases, new features, limitations, problems, and product ideas. Feed evidence into Memory Stargraph learning and product discovery without turning noise into backlog.
