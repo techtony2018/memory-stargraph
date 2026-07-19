@@ -141,4 +141,18 @@ else
   echo "health_state=unverified target=remote_targets reason=routes_not_configured"
 fi
 
+echo
+echo "== source sync =="
+dashboard_version="unknown"
+if command -v python3 >/dev/null 2>&1 && [[ -f scripts/automation/source_sync_preflight.py ]]; then
+  dashboard_version="$(curl -sS --max-time 5 "$local_url/api/health" 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("ui_version") or "unknown"))' 2>/dev/null || echo unknown)"
+  python3 scripts/automation/source_sync_preflight.py \
+    --root . \
+    --dashboard-ui-version "$dashboard_version" \
+    --required-path scripts/automation/yoda_gap_evaluator.py \
+    --json || echo "warn: source-sync preflight recorded a blocker"
+else
+  echo "source_sync_status=unverified reason=helper_or_python_missing"
+fi
+
 exit "$missing"

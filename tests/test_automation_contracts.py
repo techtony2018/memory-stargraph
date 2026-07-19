@@ -162,10 +162,32 @@ class AutomationContractTests(unittest.TestCase):
         for path in (
             "scripts/automation/yoda_gap_evaluator.py",
             "scripts/automation/gbrain_worker_api.py",
+            "scripts/automation/source_sync_preflight.py",
             "tests/test_yoda_gap_evaluator.py",
             "tests/test_todo_backlog_compaction.py",
+            "tests/test_source_sync_preflight.py",
         ):
             self.assertIn(path, deploy)
+
+    def test_daily_learning_intake_has_source_sync_preflight_contract(self):
+        prompt = (
+            ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = "\n".join((prompt, runbook))
+
+        for phrase in (
+            "source-sync preflight",
+            "checkout HEAD",
+            "origin/main",
+            "dashboard service version",
+            "required script existence",
+            "fast-forward-only sync",
+            "dirty or divergent checkout",
+            "verified dashboard service copy",
+            "preserve unrelated local changes",
+        ):
+            self.assertIn(phrase, contract)
 
     def test_sre_automations_use_distinct_tasks_with_one_worker_contract(self):
         daily_dir = ROOT / "automations/memory-stargraph-sre-daily-reliability"

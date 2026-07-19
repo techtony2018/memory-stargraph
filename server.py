@@ -156,7 +156,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.151"
+UI_VERSION = "V1.0.152"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -4082,6 +4082,94 @@ class GraphStore:
             },
         }
 
+    def build_yoda_operational_remediation_context(self, question, selected_slug):
+        question_text = str(question or "").lower()
+        selected = str(selected_slug or "").strip()
+        todo_root = "notes/memory-starmap-todo-list"
+        operational_tokens = (
+            "current",
+            "gap",
+            "gaps",
+            "blocker",
+            "blockers",
+            "remain",
+            "remaining",
+            "reliability",
+            "operational",
+            "incident",
+            "resolved",
+            "resolver",
+            "synthetic",
+            "provenance",
+            "telemetry",
+            "timeout",
+            "broad graph",
+            "ask yoda",
+            "monitoring",
+            "health",
+            "learning",
+        )
+        if selected != todo_root and not selected.startswith(f"{todo_root}/"):
+            if not any(token in question_text for token in operational_tokens):
+                return {"text": "", "counts": {}}
+        if not any(token in question_text for token in operational_tokens):
+            return {"text": "", "counts": {}}
+
+        root_raw = self.get_entity_raw(todo_root) or ""
+        rows = parse_memory_starmap_todo_rows(root_raw)
+        if not rows:
+            return {"text": "", "counts": {"operational_state_rows": 0, "operational_state_child_reads": 0}}
+
+        question_terms = {
+            term
+            for term in re.findall(r"[a-z0-9-]{4,}", question_text)
+            if term not in {"what", "current", "remain", "remaining", "around", "with", "from", "that", "this"}
+        }
+        operational_match_terms = set(operational_tokens) | question_terms
+        completed_rows = []
+        for row in rows:
+            if row.get("status") != "completed":
+                continue
+            haystack = f"{row.get('id', '')} {row.get('title', '')} {row.get('notes', '')}".lower()
+            if any(term in haystack for term in operational_match_terms):
+                completed_rows.append(row)
+        if not completed_rows:
+            return {"text": "", "counts": {"operational_state_rows": 0, "operational_state_child_reads": 0}}
+
+        lines = [
+            "Operational remediation status reconciliation:",
+            "This section reconciles present-tense operational recommendations against completed remediation TODOs. "
+            "Do not restate completed remediation as a current blocker; label it as historical evidence unless current health or active TODO state proves a regression.",
+            "| id | status | priority | title | node | updated |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        child_slugs = []
+        for row in completed_rows[:12]:
+            node_slug = todo_row_node_slug(row)
+            lines.append(
+                f"| {row.get('id', '')} | {row.get('status', '')} | {row.get('priority', '')} | "
+                f"{row.get('title', '')} | {node_slug or row.get('node', '')} | {row.get('updated', '')} |"
+            )
+            if node_slug:
+                child_slugs.append((row.get("id", node_slug), node_slug))
+
+        child_reads = 0
+        if child_slugs:
+            lines.extend(["", "Direct completed remediation child-node reads:"])
+        for item_id, node_slug in child_slugs[:6]:
+            child_raw = self.get_entity_raw(node_slug) or ""
+            if not child_raw:
+                continue
+            child_reads += 1
+            lines.extend([f"## {item_id} completed remediation", child_raw[:1600]])
+        return {
+            "text": "\n".join(lines),
+            "counts": {
+                "operational_state_rows": len(completed_rows[:12]),
+                "operational_state_child_reads": child_reads,
+            },
+        }
+
     def build_yoda_prompt(
         self,
         slug,
@@ -4161,6 +4249,18 @@ class GraphStore:
             )
             counts.update(current_todo_context.get("counts") or {})
             trace["current_todo_state"] = int((time.perf_counter() - phase_started) * 1000)
+        phase_started = time.perf_counter()
+        operational_context = self.build_yoda_operational_remediation_context(effective_question or question, slug)
+        operational_text = operational_context.get("text") or ""
+        if operational_text:
+            lines.extend(
+                [
+                    "",
+                    operational_text,
+                ]
+            )
+            counts.update(operational_context.get("counts") or {})
+            trace["operational_state"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
         try:
             search_output = run_gbrain(
@@ -4294,6 +4394,14 @@ class GraphStore:
                         "current_todo_child_reads": context_counts.get("current_todo_child_reads", 0),
                     }
                     if "current_todo_rows" in context_counts or "current_todo_child_reads" in context_counts
+                    else {}
+                ),
+                **(
+                    {
+                        "operational_state_rows": context_counts.get("operational_state_rows", 0),
+                        "operational_state_child_reads": context_counts.get("operational_state_child_reads", 0),
+                    }
+                    if "operational_state_rows" in context_counts or "operational_state_child_reads" in context_counts
                     else {}
                 ),
             },

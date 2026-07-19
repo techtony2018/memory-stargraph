@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.151";
+const UI_VERSION = "V1.0.152";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -2616,6 +2616,35 @@ function markdownTitleFromContent(content, fallback) {
   const heading = text.match(/^#\s+(.+)$/m);
   if (heading?.[1]?.trim()) return heading[1].trim();
   return String(fallback || "Memory Stargraph").trim();
+}
+
+function frontmatterValueFromContent(content, key) {
+  const text = String(content || "");
+  const frontmatter = text.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!frontmatter?.[1]) return "";
+  const pattern = new RegExp(`^${key}:\\s*(.*)$`, "mi");
+  const match = frontmatter[1].match(pattern);
+  return match?.[1]?.replace(/^(['"])(.*)\1$/, "$2").trim() || "";
+}
+
+async function hydratePartialSelectionFromRaw(slug, requested) {
+  try {
+    const rawResponse = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
+    if (!rawResponse.ok || !rawResponse.data?.content) return false;
+    const content = rawResponse.data.content;
+    const title = markdownTitleFromContent(content, requested?.label || slug);
+    const type = frontmatterValueFromContent(content, "type") || requested?.type || requested?.category || "entity";
+    const sourceUrl = frontmatterValueFromContent(content, "source_url") || frontmatterValueFromContent(content, "url");
+    detailTitle.textContent = title;
+    detailType.textContent = `${type} · raw page exists`;
+    detailSummary.textContent = sourceUrl
+      ? `Markdown page is available for ${slug}. Source/provenance is available: ${sourceUrl}`
+      : `Markdown page is available for ${slug}. View selected node to inspect the saved raw page.`;
+    hoverLabel.textContent = `Partial graph info hydrated from raw markdown for ${slug}.`;
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function createEntityMarkdownLink(query, label = query) {
@@ -6384,9 +6413,12 @@ async function loadEntity(slug, options = {}) {
       detailTitle.textContent = requested?.label || slug;
       if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
       detailType.textContent = `${requested?.category || requested?.type || "entity"} · partial info`;
-      detailSummary.textContent = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}.`;
+      const hydratedFromRaw = await hydratePartialSelectionFromRaw(slug, requested);
+      if (!hydratedFromRaw) {
+        detailSummary.textContent = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}.`;
+      }
       if (options.source !== "system") replaceLocationSlug(slug);
-      hoverLabel.textContent = `Node unavailable: ${slug}. The graph remains ready.`;
+      if (!hydratedFromRaw) hoverLabel.textContent = `Node unavailable: ${slug}. The graph remains ready.`;
       setHover(slug);
       return { status: "partial", slug, httpStatus: response.status };
     }

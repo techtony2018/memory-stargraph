@@ -54,6 +54,14 @@ scripts/automation/preflight.sh
 
 The preflight records the active `CODEX_HOME`, checks required binaries, probes the configured dashboard/local service, verifies Chrome CDP at `127.0.0.1:9333`, and checks configured remote health routes. Concrete deployment routes belong in the local-only config, not in the public repo.
 
+For persistent script-dependent workers, the preflight also runs a
+source-sync preflight. It records checkout HEAD, origin/main, dashboard service
+version, required script existence, and the chosen script path. A clean stale
+checkout may be repaired only with a fast-forward-only sync. A dirty or divergent checkout is a bounded blocker: preserve unrelated local changes,
+record the blocker in the Run/report, and use a verified dashboard service copy
+only when the deployed service version and required script existence are read
+back.
+
 Preflight health is tri-state: every target is `healthy`, `unhealthy`, or
 `unverified`. A failed loopback or transport probe from a restricted or unknown
 execution context is always `unverified`, never an outage by itself. Configure
