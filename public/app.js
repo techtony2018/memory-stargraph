@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.152";
+const UI_VERSION = "V1.0.153";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -221,6 +221,8 @@ const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
 const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsButton");
+const sampleBrainButton = document.getElementById("sampleBrainButton");
+const memoryDigestButton = document.getElementById("memoryDigestButton");
 const modalCloseButton = document.getElementById("modalCloseButton");
 const modalCancelButton = document.getElementById("modalCancelButton");
 const modalPrimaryButton = document.getElementById("modalPrimaryButton");
@@ -762,8 +764,8 @@ function updateMapFilterPanel() {
   filterDrawerHandle?.classList.toggle("is-hidden", state.mapFiltersVisible);
 }
 
-function showFilterSidebar() {
-  const activationZone = "right side middle third";
+function showFilterSidebar(reason = "right side third-height trigger") {
+  const activationZone = String(reason || "right side third-height trigger");
   state.mapFiltersVisible = true;
   updateMapFilterPanel();
   return activationZone;
@@ -2627,9 +2629,27 @@ function frontmatterValueFromContent(content, key) {
   return match?.[1]?.replace(/^(['"])(.*)\1$/, "$2").trim() || "";
 }
 
+function rawEntityIsUnknown(rawResponse) {
+  const content = String(rawResponse?.data?.content || rawResponse?.data?.error || "");
+  return !rawResponse?.ok
+    || /unknown entity/i.test(content)
+    || content.includes("<!-- gbrain:index:start -->");
+}
+
+function showMissingSelectionState(slug, requested, summary = "") {
+  detailTitle.textContent = requested?.label || slug;
+  detailType.textContent = `${requested?.category || requested?.type || "entity"} · missing page`;
+  detailSummary.textContent = summary || `No saved markdown page was found for ${requested?.label || slug}. The graph is still available, but this deep link does not resolve to a GBrain page.`;
+  hoverLabel.textContent = `Missing page: ${slug}.`;
+}
+
 async function hydratePartialSelectionFromRaw(slug, requested) {
   try {
     const rawResponse = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
+    if (rawEntityIsUnknown(rawResponse)) {
+      showMissingSelectionState(slug, requested);
+      return false;
+    }
     if (!rawResponse.ok || !rawResponse.data?.content) return false;
     const content = rawResponse.data.content;
     const title = markdownTitleFromContent(content, requested?.label || slug);
@@ -3695,6 +3715,66 @@ async function openSetupDiagnosticsWindow() {
   pre.textContent = response.ok
     ? JSON.stringify(response.data, null, 2)
     : `Diagnostics unavailable: ${response.data?.error || response.status}`;
+  modalMarkdown.appendChild(pre);
+}
+
+async function openSampleBrainWindow() {
+  hideFloatingPanels();
+  modalKicker.textContent = "Sample brain";
+  modalTitle.textContent = "Privacy-safe first-value demo";
+  modalMessage.textContent = "Demo mode uses bundled synthetic data only. It does not include private GBrain content.";
+  modalPrimaryButton.textContent = "Close";
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  operationModal.hidden = false;
+  state.modalAction = { action: "sample-brain", slug: "sample-memory-hub", label: "Sample brain demo" };
+  const response = await apiGet("/api/sample-brain");
+  if (response.ok && response.data?.graph) {
+    const sampleSlug = response.data.sample_slug || "sample-memory-hub";
+    applyGraphPayload(response.data.graph, sampleSlug);
+    const sampleNode = state.nodeMap.get(sampleSlug);
+    state.focusSlug = sampleSlug;
+    updateAskYodaButtons();
+    detailTitle.textContent = sampleNode?.label || "Sample Memory Hub";
+    detailType.textContent = `${sampleNode?.type || "sample"} · demo mode`;
+    detailSummary.textContent = sampleNode?.summary || "Privacy-safe sample graph loaded.";
+    if (selectionSlugAlways) selectionSlugAlways.textContent = sampleSlug;
+    setHover(sampleSlug);
+  }
+  const pre = document.createElement("pre");
+  pre.className = "yoda-log-window";
+  pre.textContent = response.ok
+    ? JSON.stringify(response.data, null, 2)
+    : `Sample brain unavailable: ${response.data?.error || response.status}`;
+  modalMarkdown.appendChild(pre);
+}
+
+async function openMemoryDigestWindow() {
+  hideFloatingPanels();
+  modalKicker.textContent = "Memory value";
+  modalTitle.textContent = "Goal progress digest";
+  modalMessage.textContent = "Read-only digest from Runs, Learnings, TODO movement, health, and feedback evidence.";
+  modalPrimaryButton.textContent = "Close";
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  modalMarkdown.innerHTML = "";
+  operationModal.hidden = false;
+  state.modalAction = { action: "memory-digest", slug: "goals/memory-stargraph-continuous-learning-local-knowledge-os", label: "Memory value digest" };
+  const response = await apiGet("/api/memory-value-digest?window=day");
+  const pre = document.createElement("pre");
+  pre.className = "yoda-log-window";
+  pre.textContent = response.ok
+    ? JSON.stringify(response.data, null, 2)
+    : `Memory value digest unavailable: ${response.data?.error || response.status}`;
   modalMarkdown.appendChild(pre);
 }
 
@@ -6049,7 +6129,7 @@ async function runModalPrimaryAction() {
     return;
   }
   const { action, slug, label } = state.modalAction;
-  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics") {
+  if (action === "view" || action === "media" || action === "result" || action === "take-review" || action === "setup-diagnostics" || action === "sample-brain" || action === "memory-digest") {
     closeModal();
     return;
   }
@@ -6415,7 +6495,8 @@ async function loadEntity(slug, options = {}) {
       detailType.textContent = `${requested?.category || requested?.type || "entity"} · partial info`;
       const hydratedFromRaw = await hydratePartialSelectionFromRaw(slug, requested);
       if (!hydratedFromRaw) {
-        detailSummary.textContent = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}.`;
+        const missingSummary = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}; no saved markdown page was found for this deep link.`;
+        showMissingSelectionState(slug, requested, missingSummary);
       }
       if (options.source !== "system") replaceLocationSlug(slug);
       if (!hydratedFromRaw) hoverLabel.textContent = `Node unavailable: ${slug}. The graph remains ready.`;
@@ -6721,6 +6802,12 @@ function bindEvents() {
   settingsDiagnosticsButton?.addEventListener("click", () => {
     void openSetupDiagnosticsWindow();
   });
+  sampleBrainButton?.addEventListener("click", () => {
+    void openSampleBrainWindow();
+  });
+  memoryDigestButton?.addEventListener("click", () => {
+    void openMemoryDigestWindow();
+  });
   resolverReviewCloseButton?.addEventListener("click", closeResolverReviewModal);
   resolverRefreshButton?.addEventListener("click", () => {
     void loadResolverProposals();
@@ -6748,18 +6835,18 @@ function bindEvents() {
     event.stopPropagation();
     if (state.focusSlug) void copySlug(state.focusSlug, selectionSlugAlways);
   });
-  filterDrawerHandle?.addEventListener("pointerenter", showFilterSidebar);
+  filterDrawerHandle?.addEventListener("pointerenter", () => showFilterSidebar("drawer hover"));
   filterDrawerHandle?.addEventListener("pointerleave", (event) => {
     if (!pointerStayedInsideFilterSidebar(event.relatedTarget)) hideFilterSidebar();
   });
-  filterDrawerHandle?.addEventListener("click", showFilterSidebar);
+  filterDrawerHandle?.addEventListener("click", () => showFilterSidebar("drawer click"));
   filterDrawerHandle?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    showFilterSidebar();
+    showFilterSidebar("drawer keyboard");
   });
-  mapFilterPanel?.addEventListener("pointerenter", showFilterSidebar);
-  mapFilterPanel?.addEventListener("click", showFilterSidebar);
+  mapFilterPanel?.addEventListener("pointerenter", () => showFilterSidebar("panel hover"));
+  mapFilterPanel?.addEventListener("click", () => showFilterSidebar("panel interaction"));
   mapFilterCloseButton?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();

@@ -217,6 +217,19 @@ class AutomationContractTests(unittest.TestCase):
         self.assertEqual(daily["target_thread_id"], "{{SRE_DAILY_THREAD_ID}}")
         self.assertEqual(weekly["target_thread_id"], "{{SRE_WEEKLY_THREAD_ID}}")
         self.assertNotEqual(daily["target_thread_id"], weekly["target_thread_id"])
+        for phrase in (
+            "source-sync preflight",
+            "checkout HEAD",
+            "origin/main HEAD",
+            "deployed Memory Stargraph version",
+            "selected source path",
+            "clean stale",
+            "fast-forward safely",
+            "dirty or divergent",
+            "do not overwrite user work",
+            "Product Owner can verify",
+        ):
+            self.assertIn(phrase, contract)
 
         for phrase in (
             "Memory Stargraph SRE", "live Codex task state",

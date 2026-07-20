@@ -600,6 +600,46 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertFalse(attachment["ok"])
         self.assertEqual(attachment["detail"], "durable storage unavailable")
 
+    def test_sample_brain_endpoint_returns_privacy_safe_demo_graph(self):
+        status, data = self.dispatch_get("/api/sample-brain")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["graph"]["source"]["mode"], "demo")
+        self.assertEqual(data["graph"]["source"]["status"], "sample")
+        self.assertTrue(data["privacy_safe"])
+        self.assertIn("sample", data["label"].lower())
+        self.assertNotIn("tony", json.dumps(data).lower())
+        self.assertIn("sample-memory-hub", {node["slug"] for node in data["graph"]["nodes"]})
+
+    def test_memory_value_digest_is_read_only_and_links_evidence(self):
+        fake_store = FakeStore()
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.run_gbrain") as run_gbrain,
+            mock.patch(
+                "server.resolver_feedback_health",
+                return_value={"events_24h": 3, "synthetic_test_events_24h": 1},
+            ),
+        ):
+            run_gbrain.side_effect = [
+                "| SG-0150 | completed | P1 | Done | [[notes/done]] | 2026-07-19 | Completed. |\n"
+                "| SG-0151 | implementing | P1 | Current | [[notes/current]] | 2026-07-20 | Implementing. |",
+                "# Learning\n\n- Reuse source-sync preflight.",
+            ]
+            status, data = self.dispatch_get("/api/memory-value-digest?window=day")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["window"], "day")
+        self.assertTrue(data["read_only"])
+        self.assertEqual(data["todo_movement"]["completed"], 1)
+        self.assertEqual(data["todo_movement"]["implementing"], 1)
+        self.assertIn("runs", data["evidence_links"])
+        self.assertIn("learnings", data["evidence_links"])
+        self.assertIn("next_action", data)
+        self.assertEqual(fake_store.calls[-1], ("get_seed_graph", False))
+
 
     def test_take_proposals_endpoint_bounds_filters_and_returns_counts(self):
         fake_store = FakeStore()

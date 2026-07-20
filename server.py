@@ -156,7 +156,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.152"
+UI_VERSION = "V1.0.153"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -363,6 +363,75 @@ DEMO_GRAPH = {
             "links": ["graph-cache", "collective-knowledge-system"],
             "updated_at": "2026-06-27T09:10:00",
         },
+    ],
+}
+
+SAMPLE_FIRST_VALUE_GRAPH = {
+    "title": "Memory Stargraph Sample Brain",
+    "source": {
+        "mode": "demo",
+        "status": "sample",
+        "message": "Demo mode uses bundled synthetic data only. No private GBrain content is loaded.",
+        "updated_at": None,
+    },
+    "nodes": [
+        {
+            "id": "sample-memory-hub",
+            "slug": "sample-memory-hub",
+            "label": "Sample Memory Hub",
+            "type": "sample",
+            "summary": "Synthetic starting point for trying search, selection, relationships, View, and Ask Yoda without private data.",
+            "tags": ["sample", "demo", "privacy-safe"],
+            "links": ["sample-project-alpha", "sample-learning-loop", "sample-source-note"],
+            "updated_at": "2026-07-20T02:10:00-07:00",
+        },
+        {
+            "id": "sample-project-alpha",
+            "slug": "sample-project-alpha",
+            "label": "Sample Project Alpha",
+            "type": "project",
+            "summary": "A fictional project node that demonstrates relationship traversal and provenance inspection.",
+            "tags": ["sample", "project"],
+            "links": ["sample-memory-hub", "sample-source-note"],
+            "updated_at": "2026-07-20T02:10:00-07:00",
+        },
+        {
+            "id": "sample-learning-loop",
+            "slug": "sample-learning-loop",
+            "label": "Sample Learning Loop",
+            "type": "learning",
+            "summary": "Synthetic learning evidence showing how runs, feedback, and future improvements connect.",
+            "tags": ["sample", "learning"],
+            "links": ["sample-memory-hub", "sample-weekly-digest"],
+            "updated_at": "2026-07-20T02:10:00-07:00",
+        },
+        {
+            "id": "sample-source-note",
+            "slug": "sample-source-note",
+            "label": "Sample Source Note",
+            "type": "note",
+            "summary": "Redacted provenance placeholder used to demonstrate source review without exposing real content.",
+            "tags": ["sample", "provenance"],
+            "links": ["sample-memory-hub", "sample-project-alpha"],
+            "updated_at": "2026-07-20T02:10:00-07:00",
+        },
+        {
+            "id": "sample-weekly-digest",
+            "slug": "sample-weekly-digest",
+            "label": "Sample Weekly Digest",
+            "type": "report",
+            "summary": "Synthetic digest node summarizing learned items, fixed issues, blockers, and next action.",
+            "tags": ["sample", "digest"],
+            "links": ["sample-learning-loop"],
+            "updated_at": "2026-07-20T02:10:00-07:00",
+        },
+    ],
+    "edges": [
+        {"source": "sample-memory-hub", "target": "sample-project-alpha", "types": ["demo_related"]},
+        {"source": "sample-memory-hub", "target": "sample-learning-loop", "types": ["demo_related"]},
+        {"source": "sample-memory-hub", "target": "sample-source-note", "types": ["has_provenance"]},
+        {"source": "sample-project-alpha", "target": "sample-source-note", "types": ["cites"]},
+        {"source": "sample-learning-loop", "target": "sample-weekly-digest", "types": ["summarized_by"]},
     ],
 }
 
@@ -4682,6 +4751,104 @@ def setup_diagnostics():
     }
 
 
+def privacy_safe_sample_brain():
+    graph = finalize_graph(SAMPLE_FIRST_VALUE_GRAPH)
+    graph["ui_version"] = UI_VERSION
+    return {
+        "ok": True,
+        "label": "Privacy-safe sample brain",
+        "privacy_safe": True,
+        "sample_slug": "sample-memory-hub",
+        "walkthrough": [
+            "Open sample-memory-hub.",
+            "Inspect demo relationships and the synthetic provenance note.",
+            "Use View to read the sample node details.",
+            "Ask Yoda a grounded question about the sample learning loop.",
+            "Export setup diagnostics when ready to connect real GBrain data.",
+        ],
+        "warning": "Demo mode uses bundled synthetic data only. It does not include private nodes, credentials, hostnames, or real user content.",
+        "graph": graph,
+    }
+
+
+def safe_gbrain_get_text(slug):
+    try:
+        return run_gbrain("get", slug, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        return f"unavailable: {exc}"
+
+
+def count_todo_statuses(markdown):
+    counts = {"planned": 0, "implementing": 0, "completed": 0, "failed": 0}
+    for line in str(markdown or "").splitlines():
+        match = re.match(r"\|\s*SG-\d+\s*\|\s*([^|]+)\|", line)
+        if not match:
+            continue
+        status = match.group(1).strip()
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def memory_value_digest(window="day"):
+    window = str(window or "day").strip().lower()
+    if window not in {"day", "week"}:
+        window = "day"
+    graph = STORE.get_seed_graph()
+    source = graph.get("source") or {}
+    backlog = safe_gbrain_get_text("notes/memory-starmap-todo-list")
+    learnings = safe_gbrain_get_text("learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight")
+    todo_movement = count_todo_statuses(backlog)
+    try:
+        resolver_health = resolver_feedback_health()
+    except Exception as exc:  # noqa: BLE001
+        resolver_health = {"error": str(exc)}
+    learned_items = []
+    if "source-sync" in learnings.lower() or "source sync" in learnings.lower():
+        learned_items.append("Source-sync preflight is now treated as worker runtime evidence, not only deployment evidence.")
+    if "operational" in learnings.lower():
+        learned_items.append("Ask Yoda should reconcile current operational state against completed remediation evidence.")
+    if not learned_items:
+        learned_items.append("No recent durable Learning was readable; inspect Learning evidence directly.")
+    unresolved = [
+        f"{status}: {count}"
+        for status, count in todo_movement.items()
+        if status in {"planned", "implementing", "failed"} and count
+    ]
+    next_action = (
+        "Finish implementing rows currently in progress and rerun final TODO compaction."
+        if todo_movement["implementing"]
+        else "Pick the next evidence-backed planned TODO or run Product Owner prioritization if no planned work remains."
+    )
+    return {
+        "ok": True,
+        "read_only": True,
+        "ui_version": UI_VERSION,
+        "window": window,
+        "source_mode": str(source.get("mode") or "unknown"),
+        "source_status": str(source.get("status") or "unknown"),
+        "graph_stats": graph.get("stats") or {},
+        "todo_movement": todo_movement,
+        "learned_items": learned_items,
+        "implemented_improvements": [
+            "Completed TODO rows are compacted into immutable archives when the backlog reaches the archive boundary.",
+            "Runs, Learnings, TODO movement, resolver health, and graph health are linked as inspectable evidence instead of hidden chat-only summaries.",
+        ],
+        "unresolved_blockers": unresolved,
+        "resolver_health": resolver_health,
+        "evidence_links": {
+            "goal": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+            "todo_backlog": "notes/memory-starmap-todo-list",
+            "runs": "runs",
+            "learnings": "learnings",
+            "health": "/api/health",
+            "resolver": "/api/resolver/health",
+        },
+        "next_action": next_action,
+        "privacy": "Private node content is not embedded in this digest; inspect linked evidence only when authorized.",
+    }
+
+
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -4772,6 +4939,11 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             )
         if parsed.path == "/api/setup-diagnostics":
             return self.end_json(setup_diagnostics())
+        if parsed.path == "/api/sample-brain":
+            return self.end_json(privacy_safe_sample_brain())
+        if parsed.path == "/api/memory-value-digest":
+            query = parse_qs(parsed.query)
+            return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))
         if parsed.path == "/api/graph":
             graph = STORE.get_seed_graph()
             return self.end_json(graph)
