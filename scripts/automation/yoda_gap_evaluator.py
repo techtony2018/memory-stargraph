@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 DEFAULT_BASE_URL = "http://127.0.0.1:8788"
 DEFAULT_DEPTH = 4
 DEFAULT_MIN_QUESTIONS = 10
+DEFAULT_QUESTION_LOG = Path("data/yoda_gap_evaluator_question_log.json")
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
@@ -99,6 +100,42 @@ def default_question_suite() -> list[Question]:
             "intent": "productization gap discovery",
             "question": "What productization, packaging, or customer-adoption gaps are now evident from daily dev, monitoring, TODOs, and logs?",
         },
+        {
+            "id": "source-sync-readiness",
+            "slug": "notes/memory-stargraph-automation-runbook",
+            "intent": "source-sync and worker readiness gap discovery",
+            "question": "Which source-sync, checkout freshness, or worker startup safeguards still need improvement before recurring workers can run without stale local context?",
+        },
+        {
+            "id": "sre-resilience-gaps",
+            "slug": "notes/memory-stargraph-automation-runbook",
+            "intent": "weekly resilience gap discovery",
+            "question": "Which restore, backup, rollback, load, or capacity assumptions still lack weekly resilience evidence?",
+        },
+        {
+            "id": "capture-quality-regressions",
+            "slug": "notes/memory-starmap-capture-list",
+            "intent": "capture quality gap discovery",
+            "question": "Which recent capture, enrichment, title, provenance, or attachment patterns suggest a data-quality regression worth investigating?",
+        },
+        {
+            "id": "resolver-isolation",
+            "slug": "products/memory-stargraph",
+            "intent": "resolver isolation gap discovery",
+            "question": "Where could synthetic resolver, Ask Yoda, or worker probes contaminate production feedback or hide user-facing quality problems?",
+        },
+        {
+            "id": "po-team-governance",
+            "slug": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+            "intent": "Product Owner team-governance gap discovery",
+            "question": "Which repeated worker blockers show that Product Owner should evolve a prompt, runbook, automation, or permission boundary instead of forwarding the same problem again?",
+        },
+        {
+            "id": "first-value-demo",
+            "slug": "products/memory-stargraph",
+            "intent": "first-value onboarding gap discovery",
+            "question": "What first-value demo, sample brain, or guided onboarding gap most blocks a new user from understanding Memory Stargraph quickly?",
+        },
     ]
 
 
@@ -130,6 +167,44 @@ def read_question_suite(path: Path | None, min_questions: int = DEFAULT_MIN_QUES
     if len(set(ids)) != len(ids):
         raise ValueError("question ids must be unique")
     return cleaned
+
+
+def read_question_log(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {"_schema": "memory-stargraph-yoda-gap-question-log-v1", "no_noticeable_gap": {}}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("question log must be a JSON object")
+    data.setdefault("_schema", "memory-stargraph-yoda-gap-question-log-v1")
+    no_gap = data.setdefault("no_noticeable_gap", {})
+    if not isinstance(no_gap, dict):
+        raise ValueError("question log no_noticeable_gap must be an object")
+    return data
+
+
+def no_gap_question_ids(log: dict[str, Any]) -> set[str]:
+    no_gap = log.get("no_noticeable_gap")
+    if not isinstance(no_gap, dict):
+        return set()
+    return {str(key) for key in no_gap}
+
+
+def select_question_suite(
+    suite: list[Question],
+    *,
+    question_log: dict[str, Any] | None = None,
+    min_questions: int = DEFAULT_MIN_QUESTIONS,
+) -> list[Question]:
+    suppressed = no_gap_question_ids(question_log or {})
+    fresh = [item for item in suite if item["id"] not in suppressed]
+    if len(fresh) >= min_questions:
+        return fresh[:min_questions]
+    selected_ids = {item["id"] for item in fresh}
+    fallback = [item for item in suite if item["id"] not in selected_ids]
+    selected = fresh + fallback[: max(0, min_questions - len(fresh))]
+    if len(selected) < min_questions:
+        raise ValueError(f"at least {min_questions} selectable questions are required")
+    return selected
 
 
 def make_http_post_yoda(base_url: str, timeout: float = 120.0) -> PostYoda:
@@ -252,6 +327,49 @@ def build_comparison_report(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def update_no_gap_question_log(snapshot: dict[str, Any], path: Path) -> dict[str, Any]:
+    log = read_question_log(path)
+    no_gap = log.setdefault("no_noticeable_gap", {})
+    metadata = snapshot.get("metadata") if isinstance(snapshot.get("metadata"), dict) else {}
+    run_id = str(metadata.get("run_id") or "").strip()
+    now = datetime.now(PACIFIC).isoformat()
+    added = 0
+    updated = 0
+    for row in snapshot.get("questions", []):
+        if not isinstance(row, dict):
+            continue
+        gap = row.get("gap") if isinstance(row.get("gap"), dict) else {}
+        if str(gap.get("decision") or "").strip() != "no_action":
+            continue
+        question_id = str(row.get("id") or "").strip()
+        if not question_id:
+            continue
+        existing = no_gap.get(question_id)
+        if isinstance(existing, dict):
+            updated += 1
+        else:
+            existing = {"first_logged_at": now, "runs": []}
+            no_gap[question_id] = existing
+            added += 1
+        runs = existing.setdefault("runs", [])
+        if run_id and run_id not in runs:
+            runs.append(run_id)
+        existing.update({
+            "last_logged_at": now,
+            "slug": str(row.get("slug") or "").strip(),
+            "intent": str(row.get("intent") or "").strip(),
+            "question": str(row.get("question") or "").strip(),
+            "decision": "no_action",
+            "summary": str(gap.get("summary") or "").strip(),
+            "yoda_answer_excerpt": str(row.get("yoda_answer") or "")[:500],
+            "codex_answer_excerpt": str(row.get("codex_answer") or "")[:500],
+        })
+    log["updated_at"] = now
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(log, indent=2, sort_keys=True) + "\n")
+    return {"path": str(path), "added": added, "updated": updated, "suppressed_count": len(no_gap)}
+
+
 def load_json(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text())
     if not isinstance(data, dict):
@@ -275,15 +393,20 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--run-id", default="")
     run_parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
     run_parser.add_argument("--min-questions", type=int, default=DEFAULT_MIN_QUESTIONS)
+    run_parser.add_argument("--question-log", type=Path, default=DEFAULT_QUESTION_LOG)
 
     report_parser = subcommands.add_parser("report", help="Build TODO-candidate report from a Codex-reviewed snapshot.")
     report_parser.add_argument("--snapshot", type=Path, required=True)
     report_parser.add_argument("--output", type=Path, required=True)
+    report_parser.add_argument("--question-log", type=Path, default=DEFAULT_QUESTION_LOG)
+    report_parser.add_argument("--no-update-question-log", action="store_true")
 
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
             suite = read_question_suite(args.suite, args.min_questions)
+            question_log = read_question_log(args.question_log)
+            suite = select_question_suite(suite, question_log=question_log, min_questions=args.min_questions)
             snapshot = run_suite(
                 suite,
                 post_yoda=make_http_post_yoda(args.base_url),
@@ -291,10 +414,19 @@ def main(argv: list[str] | None = None) -> int:
                 depth=args.depth,
                 output_path=args.output,
             )
-            print(json.dumps({"ok": True, "output": str(args.output), **snapshot["metadata"]}, sort_keys=True))
+            print(json.dumps({
+                "ok": True,
+                "output": str(args.output),
+                "question_log": str(args.question_log),
+                "suppressed_no_gap_questions": len(no_gap_question_ids(question_log)),
+                **snapshot["metadata"],
+            }, sort_keys=True))
             return 0
         if args.command == "report":
-            report = build_comparison_report(load_json(args.snapshot))
+            snapshot = load_json(args.snapshot)
+            report = build_comparison_report(snapshot)
+            if not args.no_update_question_log:
+                report["metadata"]["question_log"] = update_no_gap_question_log(snapshot, args.question_log)
             write_json(args.output, report)
             print(json.dumps({"ok": True, "output": str(args.output), **report["metadata"]}, sort_keys=True))
             return 0

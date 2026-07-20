@@ -243,10 +243,14 @@ Each daily intake runs:
 python3 scripts/automation/yoda_gap_evaluator.py run --output /tmp/yoda-evaluator-snapshot.json
 ```
 
-The evaluator asks the Ask Yoda API at least 10 questions over recent daily dev,
-monitoring, TODO, logs, product, reliability, UX, and data-quality evidence.
-Every request uses `environment=test`, `synthetic=true`, `test_run=true`, and a
-stable `pair_id` so resolver telemetry and user-quality scoring can isolate the
+The evaluator asks the Ask Yoda API at least 10 active questions over recent
+daily dev, monitoring, TODO, logs, product, reliability, UX, and data-quality
+evidence. It maintains a larger question pool. By default it reads the local
+persistent no-gap log at `data/yoda_gap_evaluator_question_log.json`, skips
+questions that previously produced `no_action` / no noticeable gap, and replaces
+them from the remaining pool so the next run keeps probing new surfaces. Every
+request uses `environment=test`, `synthetic=true`, `test_run=true`, and a stable
+`pair_id` so resolver telemetry and user-quality scoring can isolate the
 synthetic probes.
 
 The Codex worker then answers the same question in Codex using the same
@@ -258,10 +262,12 @@ python3 scripts/automation/yoda_gap_evaluator.py report --snapshot /tmp/yoda-eva
 ```
 
 Create or update TODOs only for bounded, deduplicated, evidence-backed
-`todo_candidate` gaps. Stylistic disagreement alone is not a TODO. Preserve
-reviewed evaluator snapshots or concise sanitized summaries in the Run/report;
-do not copy raw private questions, answers, comments, secrets, or
-chain-of-thought into GBrain.
+`todo_candidate` gaps. Stylistic disagreement alone is not a TODO. The report
+step appends reviewed `no_action` questions, no-gap summaries, and bounded Yoda
+/ Codex answer excerpts to `data/yoda_gap_evaluator_question_log.json` for
+operator review and future replacement. Preserve reviewed evaluator snapshots or
+concise sanitized summaries in the Run/report; do not copy raw private
+questions, answers, comments, secrets, or chain-of-thought into GBrain.
 
 ### Worker completion notification
 
