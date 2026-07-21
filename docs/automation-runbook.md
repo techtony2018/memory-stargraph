@@ -164,7 +164,7 @@ automatically.
 
 ## SRE reliability and resilience
 
-`memory-stargraph-sre-daily-reliability` runs daily at 8:00 AM and
+`memory-stargraph-sre-daily-reliability` runs daily at 3:00 AM and
 `memory-stargraph-sre-weekly-resilience` runs Sunday at 11:00 AM in
 `America/Los_Angeles`. Codex permits only one active heartbeat per task, so
 they target distinct persistent Memory Stargraph SRE tasks while sharing the
@@ -321,6 +321,21 @@ verifies the report, Run evidence, TODO/status transitions, deployment or
 capture evidence, and metric claims before counting the work as progress. If
 direct task messaging is unavailable, the worker records
 `product_owner_notification_pending` with the same payload in its Run/report.
+
+Delivery is not successful from a send call alone. The worker may set
+`product_owner_notification_pending: false` only after the Product Owner task
+acknowledges, starts a fresh turn, or readback shows the payload was appended to
+the canonical Product Owner task. If the thread-message tool is unavailable,
+exposed but not callable in the turn, errors, times out, or returns without
+acknowledgment, the worker must record
+`product_owner_notification_status: pending_unacknowledged_delivery`,
+`product_owner_notification_pending: true`, the attempted timestamp, destination
+task id, exact tool error or no-ack evidence, and the full compact payload in
+both the Run and report. During Product Owner review, recover that payload from
+the worker Run/report, verify the worker outcome, then update the worker
+Run/report to `product_owner_notification_status: acknowledged_by_product_owner`
+and `product_owner_notification_pending: false` before coordinating any retry or
+blocker handoff.
 
 ### Manual worker dispatch verification
 
