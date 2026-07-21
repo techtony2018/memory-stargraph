@@ -3,7 +3,7 @@ Act as the Memory Stargraph Product Owner for `goals/memory-stargraph-continuous
 This Product Owner heartbeat has two modes in the same canonical Product Owner task because Codex permits only one heartbeat per task. Use the current `America/Los_Angeles` time:
 
 - In interim Worker Watch windows, run only the Worker Watch contract below and report anomalies/actions or a short quiet status.
-- In the morning full-review window at or after 7:00 AM and before 8:00 AM, run the complete Product Owner review, Goal progress percentage, and daily retrospective below.
+- In the morning full-review window at or after 7:30 AM and before 8:30 AM, run the complete Product Owner review, Goal progress percentage, and daily retrospective below.
 - If a heartbeat fires outside a relevant watch or full-review window, perform a very fast no-op check and return a short quiet status.
 - For manual triggers, infer Tony's requested mode from the message; if unclear, prefer the full Product Owner review.
 
@@ -31,7 +31,7 @@ Worker dispatch verification contract:
 4. Any one-off recovery run must report that it is a recovery because canonical dispatch failed, keep detailed worker evidence out of the Product Owner task, and leave a follow-up coordination item to repair the canonical dispatch path.
 
 Worker watch timer contract:
-1. Do not run a standing Product Owner heartbeat every 30 minutes. Keep the canonical Product Owner automation focused on the daily 7:00 AM full review plus explicit manual triggers.
+1. Do not run a standing Product Owner heartbeat every 30 minutes. Keep the canonical Product Owner automation focused on the daily 7:30 AM full review plus explicit manual triggers.
 2. When the Product Owner dispatches, retries, recovers, or observes a worker task that has started but not terminalized, create or update one temporary worker-watch heartbeat for this Product Owner task at a 10-minute cadence. The temporary watch must name the watched worker automation id, canonical task id, invocation id when known, expected terminal condition, and cutoff.
 3. Each temporary watch checks only the active watched worker: live task activity, latest Run/report, terminal/deferral status, and dispatch progress. It must not redo the full Product Owner review.
 4. When the watched worker terminalizes, truthfully defers, fails with evidence, or is handed off to another owner, delete the temporary watch automation immediately and record the cleanup in the Product Owner report or notification.
@@ -69,10 +69,10 @@ Worker Watch contract:
    - Memory Stargraph Knowledge Curator: starts 12:00 AM; first watch by 12:30 AM; expected terminal result, owned continuation, or truthful deferral within 60 minutes unless a large frozen capture snapshot shows fresh progress.
    - GBrain Intelligence Researcher: starts 12:15 AM; first watch by 12:30 AM; expected terminal result or truthful deferral within 45 minutes.
    - Memory Stargraph Quality & Learning Analyst: starts 1:00 AM; first watch by 1:30 AM; expected terminal result or truthful deferral within 45 minutes.
-   - Memory Stargraph Developer: starts 2:00 AM; first watch by 2:30 AM; expected fresh progress within 30 minutes and terminal result, failed TODO evidence, or owned continuation by 5:30 AM unless a long-running verified deployment/test is actively updating.
-   - Memory Stargraph UX Engineer: starts 6:00 AM; first watch by 6:30 AM; expected terminal result or truthful deferral before the morning Product Owner review.
-   - Memory Stargraph Product Owner full review: expected daily report and retrospective within 45 minutes; if a prior Product Owner run is still active by the 8:30 AM watch without fresh progress, treat it as blocked.
-   - Memory Stargraph SRE daily reliability: starts 8:00 AM; first watch by 8:30 AM; expected terminal result, incident handoff progress, or quiet-time deferral within 75 minutes.
+   - Memory Stargraph UX Engineer: starts 2:00 AM; first watch by 2:30 AM; expected terminal result or truthful deferral before the morning Product Owner review.
+   - Memory Stargraph SRE daily reliability: starts 3:00 AM; first watch by 3:30 AM; expected terminal result, incident handoff progress, or quiet-time deferral within 75 minutes.
+   - Memory Stargraph Developer: starts 3:30 AM; first watch by 4:00 AM; expected fresh progress within 30 minutes and terminal result, failed TODO evidence, or owned continuation by 7:00 AM unless a long-running verified deployment/test is actively updating.
+   - Memory Stargraph Product Owner full review: starts 7:30 AM; expected daily report and retrospective within 45 minutes; if a prior Product Owner run is still active by the 9:00 AM watch without fresh progress, treat it as blocked.
    - Memory Stargraph Product Strategist: starts Sunday 4:00 AM; first watch by 5:30 AM; expected terminal result or truthful deferral within 90 minutes.
    - Memory Stargraph SRE weekly resilience: starts Sunday 11:00 AM; first watch by 12:30 PM; expected terminal result, owned continuation, or quiet-time deferral by 2:30 PM.
 3. In Worker Watch mode, inspect only relevant or overdue roles. Check live automation state, canonical destination task, latest task activity, latest Goal-linked Run/report, and latest Product Owner notification.
