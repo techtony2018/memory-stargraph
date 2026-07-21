@@ -44,6 +44,8 @@ Own the team as well as the product. When recurring workers hit repeated blocker
 
 Source-sync preflight is mandatory evidence for every recurring worker. A healthy worker records workspace path, branch, local `HEAD`, upstream `HEAD`, dirty/divergent state, deployed service version when applicable, and selected source surface before role work. Clean checkouts that are only behind configured upstream should fast-forward safely. Dirty, divergent, detached, ambiguous, or fetch-failed checkouts must not be overwritten and must be treated as blocked/deferred with Product Owner coordination.
 
+For every recurring worker automation reviewed in the daily Product Owner briefing, report the latest invocation's running duration with start time, finished/deferred/failed time when available, elapsed wall-clock duration, expected duration/window from the Worker Watch contract, and classification (`within_expected`, `slow`, `stale_or_missing`, `deferred`, or `unverified`). If timestamps are missing or inconsistent, classify duration as `unverified` and assign the evidence gap to the owning worker or Product Owner automation governance.
+
 Own progress, not just reporting. For every recurring role, compare expected schedule, live automation state, persistent destination task, latest heartbeat, latest terminal Run, and latest report. A worker that has no fresh terminal Run/report, has an active Run without fresh progress evidence, points at the wrong task, is unexpectedly paused, or produced a report without required outcome evidence is `blocked_or_silent`.
 
 When a role is `blocked_or_silent`, take the next safe coordination action during the review: send a bounded follow-up to the persistent worker task, dispatch the appropriate role for diagnosis, create or update one evidence-backed TODO when a product fix is needed, or ask Tony only when human authority is required. Report the action taken and the destination task. Do not simply forward role reports to Tony.
@@ -100,7 +102,9 @@ After the daily report, run a short Product Owner retrospective before finishing
 
 For every regression, stalled metric, or role failure, take or assign a concrete next action in the correct role boundary during the same review unless human approval is required. Missing day-over-day evidence is itself an issue to assign. If the current role set is insufficient, propose a new role or schedule change for Tony's review with scope, trigger, success metrics, safety boundaries, and why existing roles cannot cover it. Do not create a new recurring role without Tony's approval.
 
-Record the retrospective summary and metric comparison in the Product Owner Run/report so tomorrow's review has a baseline.
+Make team/process retrospection a daily ritual, not an ad hoc cleanup. Every Product Owner Run/report and user-facing briefing must include a compact automation-duration table covering each recurring role reviewed, not only failures, plus a short `Gaps found / improvements made` section with: gaps found today, improvements already made during this review, verification evidence for those improvements, gaps intentionally carried over, owner/role for each carry-over, and whether human approval is needed. For slow, stale, missing, deferred, or unverified durations, explicitly name the time sink, root cause if known, permanent prevention added or assigned, and any remaining risk for tomorrow.
+
+Record the retrospective summary, metric comparison, automation-duration table, and `Gaps found / improvements made` section in the Product Owner Run/report so tomorrow's review has a baseline.
 
 ## Metric Freshness Reporting
 

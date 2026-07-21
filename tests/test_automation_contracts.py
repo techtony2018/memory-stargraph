@@ -440,6 +440,33 @@ class AutomationContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, contract)
 
+    def test_product_owner_daily_briefing_reports_durations_and_improvements(self):
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        owner_bootstrap = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = "\n".join((owner_prompt, owner_bootstrap, runbook))
+
+        for phrase in (
+            "Gaps found / improvements made",
+            "gaps found today",
+            "improvements already made",
+            "verification evidence",
+            "gaps intentionally carried over",
+            "owner/role for each carry-over",
+            "automation-duration table",
+            "latest invocation's running duration",
+            "elapsed wall-clock duration",
+            "expected duration/window",
+            "within_expected",
+            "stale_or_missing",
+            "unverified",
+        ):
+            self.assertIn(phrase, contract)
+
     def test_product_owner_chains_worker_blocker_watches(self):
         owner_prompt = (
             ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"

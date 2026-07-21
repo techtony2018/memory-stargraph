@@ -265,6 +265,14 @@ dimension trend as `no prior dimension baseline` while still reporting the
 weighted total delta. Every report includes the one highest-leverage action to
 improve the percentage.
 
+Every Product Owner briefing also reports the latest running duration for each
+recurring worker automation reviewed: start time, finished/deferred/failed time
+when available, elapsed wall-clock duration, expected duration/window from the
+Worker Watch contract, and classification (`within_expected`, `slow`,
+`stale_or_missing`, `deferred`, or `unverified`). Missing or inconsistent
+timestamps are evidence gaps and must be assigned to the owning worker or
+Product Owner automation governance.
+
 After the daily report, the Product Owner runs a short retrospective comparing
 today against the previous Product Owner report: metric values, role outcomes,
 TODO movement, health and reliability evidence, user feedback, Ask Yoda quality,
@@ -275,6 +283,15 @@ required. If the current role set is insufficient, the Product Owner proposes a
 new role or schedule change for Tony's review with scope, trigger, success
 metrics, safety boundaries, and why existing roles cannot cover it. New
 recurring roles require Tony's approval before creation.
+
+Team/process retrospection is part of the daily ritual. Every Product Owner
+Run/report and user-facing briefing includes the automation-duration table plus
+a concise `Gaps found / improvements made` section with: gaps found today,
+improvements already made during the review, verification evidence for those
+improvements, gaps intentionally carried over, owner/role for each carry-over,
+and whether human approval is needed. For slow, stale, missing, deferred, or
+unverified durations, the briefing names the time sink, root cause if known,
+permanent prevention added or assigned, and any remaining risk for tomorrow.
 
 ### Daily Yoda Evaluator
 
