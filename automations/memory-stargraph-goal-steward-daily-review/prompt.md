@@ -48,7 +48,7 @@ Progress percentage contract:
    - Productization, adoption readiness, and packaging: 10%
    - Automation governance, role health, and human-control safety: 10%
 3. Base scores only on current evidence from Runs, TODO states, tests, deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture quality, and user feedback. If evidence is missing, score conservatively and name the evidence gap as an action.
-4. Include `delta since previous PO report` when a previous score is available. If no prior score exists, say `baseline established`.
+4. Read `automations/memory-stargraph-goal-steward-daily-review/goal-progress-ledger.json` before scoring. Use its latest prior entry to compute the exact delta, previous score, date, and source slug. After the daily report is saved, append/update today's entry in that ledger with the weighted score, dimension scores, source slug, and highest-leverage action. Use `baseline established` only when the ledger has no previous entry and a 7-day recovery search of prior Product Owner Run/report slugs also finds no previous score.
 5. Pair the percentage with the highest-leverage action that would move the score most.
 
 Worker notification and verification contract:

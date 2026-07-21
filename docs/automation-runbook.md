@@ -252,9 +252,13 @@ stable rubric is:
 Each dimension is scored from 0-100 using current Runs, TODO states, tests,
 deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture
 quality, and user feedback. Missing evidence lowers confidence and becomes a
-coordination action. Reports include the delta from the previous Product Owner
-report when available, or `baseline established` for the first scored report,
-plus the one highest-leverage action to improve the percentage.
+coordination action. The Product Owner records scores in
+`automations/memory-stargraph-goal-steward-daily-review/goal-progress-ledger.json`
+and reads that ledger before scoring. Reports include the delta from the latest
+prior ledger entry, including previous score, date, and source slug. Use
+`baseline established` only when the ledger has no previous entry and a recovery
+search of prior Product Owner Run/report slugs also finds no previous score.
+Every report includes the one highest-leverage action to improve the percentage.
 
 After the daily report, the Product Owner runs a short retrospective comparing
 today against the previous Product Owner report: metric values, role outcomes,

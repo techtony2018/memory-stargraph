@@ -1,0 +1,62 @@
+{
+  "_schema": "memory-stargraph-goal-progress-ledger-v1",
+  "goal": "goals/memory-stargraph-continuous-learning-local-knowledge-os",
+  "timezone": "America/Los_Angeles",
+  "rubric_weights": {
+    "usability_and_onboarding": 0.15,
+    "retrieval_and_ask_yoda_answer_quality": 0.2,
+    "continuous_learning_feedback_loop": 0.2,
+    "reliability_backup_restore_and_sre_readiness": 0.15,
+    "data_quality_relationships_backlinks_and_capture_coverage": 0.1,
+    "productization_adoption_readiness_and_packaging": 0.1,
+    "automation_governance_role_health_and_human_control_safety": 0.1
+  },
+  "entries": [
+    {
+      "date": "2026-07-18",
+      "observed_at": "2026-07-18T07:00:00-07:00",
+      "goal_progress_percent": 67,
+      "delta_from_previous": null,
+      "dimensions": {},
+      "source_slug": null,
+      "source_note": "Recovered from 2026-07-19 Product Owner report, which stated previous Product Owner report was 67% on 2026-07-18.",
+      "highest_leverage_action": null
+    },
+    {
+      "date": "2026-07-19",
+      "observed_at": "2026-07-19T07:00:37-07:00",
+      "goal_progress_percent": 73,
+      "delta_from_previous": 6,
+      "dimensions": {
+        "usability_and_onboarding": 73,
+        "retrieval_and_ask_yoda_answer_quality": 74,
+        "continuous_learning_feedback_loop": 78,
+        "reliability_backup_restore_and_sre_readiness": 70,
+        "data_quality_relationships_backlinks_and_capture_coverage": 69,
+        "productization_adoption_readiness_and_packaging": 66,
+        "automation_governance_role_health_and_human_control_safety": 72
+      },
+      "source_slug": "reports/memory-stargraph-goal-steward-daily-review-2026-07-19",
+      "source_note": "Verified from saved Product Owner report.",
+      "highest_leverage_action": "Implement SG-0153 first to restore trust in stale/deleted links, then SG-0151 to improve first-value onboarding."
+    },
+    {
+      "date": "2026-07-20",
+      "observed_at": "2026-07-20T07:10:00-07:00",
+      "goal_progress_percent": 72,
+      "delta_from_previous": -1,
+      "dimensions": {
+        "usability_and_onboarding": 72,
+        "retrieval_and_ask_yoda_answer_quality": 70,
+        "continuous_learning_feedback_loop": 78,
+        "reliability_backup_restore_and_sre_readiness": 74,
+        "data_quality_relationships_backlinks_and_capture_coverage": 68,
+        "productization_adoption_readiness_and_packaging": 68,
+        "automation_governance_role_health_and_human_control_safety": 73
+      },
+      "source_slug": "runs/memory-stargraph-product-owner-daily-review-2026-07-20",
+      "source_note": "Corrected after verifying 2026-07-19 score was available.",
+      "highest_leverage_action": "Have Developer prioritize SG-0156 first, then SG-0157; separately decide whether to provision a disposable/redundant safe-fault target for weekly SRE."
+    }
+  ]
+}

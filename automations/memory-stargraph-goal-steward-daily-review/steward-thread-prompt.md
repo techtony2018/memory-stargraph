@@ -68,7 +68,7 @@ Report a daily `Goal progress` percentage using this stable weighted rubric:
 - Productization, adoption readiness, and packaging: 10%
 - Automation governance, role health, and human-control safety: 10%
 
-Score each dimension from 0-100 using current evidence from Runs, TODO states, tests, deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture quality, and user feedback. Missing evidence is a score limiter and a coordination action. Include `delta since previous PO report` when available, otherwise say `baseline established`. Pair the percentage with the one action most likely to move the score.
+Score each dimension from 0-100 using current evidence from Runs, TODO states, tests, deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture quality, and user feedback. Missing evidence is a score limiter and a coordination action. Read `automations/memory-stargraph-goal-steward-daily-review/goal-progress-ledger.json` before scoring. Use its latest prior entry to compute the exact delta, previous score, date, and source slug. After the daily report is saved, append/update today's entry in that ledger with the weighted score, dimension scores, source slug, and highest-leverage action. Use `baseline established` only when the ledger has no previous entry and a 7-day recovery search of prior Product Owner Run/report slugs also finds no previous score. Pair the percentage with the one action most likely to move the score.
 
 ## Worker Notifications And PO Verification
 
