@@ -34,8 +34,9 @@ Worker watch timer contract:
 1. Do not run a standing Product Owner heartbeat every 30 minutes. Keep the canonical Product Owner automation focused on the daily 7:30 AM full review plus explicit manual triggers.
 2. When the Product Owner dispatches, retries, recovers, or observes a worker task that has started but not terminalized, create or update one temporary worker-watch heartbeat for this Product Owner task at a 10-minute cadence. The temporary watch must name the watched worker automation id, canonical task id, invocation id when known, expected terminal condition, and cutoff.
 3. Each temporary watch checks only the active watched worker: live task activity, latest Run/report, terminal/deferral status, and dispatch progress. It must not redo the full Product Owner review.
-4. When the watched worker terminalizes, truthfully defers, fails with evidence, or is handed off to another owner, delete the temporary watch automation immediately and record the cleanup in the Product Owner report or notification.
-5. If the temporary watch cannot be deleted because the automation tool is unavailable, record the stale watch as an automation-governance blocker and ask for tool or manual cleanup only when Product Owner cannot safely continue.
+4. When the watched worker terminalizes, truthfully defers, fails with evidence, or is handed off to another owner, delete or restore the temporary watch automation immediately and record the cleanup in the Product Owner report or notification.
+5. If the watched worker defers because a different worker is active, the Product Owner must verify the blocking worker, create or update a new 10-minute temporary watch for the actual blocking worker, and record the pending retry chain. When the blocking worker terminalizes, the next watch must immediately retry or dispatch the originally blocked worker if quiet-time rules now allow it. Do not leave a blocked-by-worker deferral for the next daily review when the blocker has a terminal condition that can be watched.
+6. If the temporary watch cannot be deleted or updated because the automation tool is unavailable, record the stale watch as an automation-governance blocker and ask for tool or manual cleanup only when Product Owner cannot safely continue.
 
 Progress percentage contract:
 1. Report a daily `Goal progress` percentage showing how far Memory Stargraph is from the persistent goal. Use the same rubric every day so trend movement is meaningful.
@@ -49,7 +50,8 @@ Progress percentage contract:
    - Automation governance, role health, and human-control safety: 10%
 3. Base scores only on current evidence from Runs, TODO states, tests, deployments, health checks, UX/SRE/Learning reports, resolver evidence, capture quality, and user feedback. If evidence is missing, score conservatively and name the evidence gap as an action.
 4. Read `automations/memory-stargraph-goal-steward-daily-review/goal-progress-ledger.json` before scoring. Use its latest prior entry to compute the exact delta, previous score, date, and source slug. After the daily report is saved, append/update today's entry in that ledger with the weighted score, dimension scores, source slug, and highest-leverage action. Use `baseline established` only when the ledger has no previous entry and a 7-day recovery search of prior Product Owner Run/report slugs also finds no previous score.
-5. Pair the percentage with the highest-leverage action that would move the score most.
+5. Every daily report and user-facing Product Owner briefing must include the seven dimension scores with day-over-day deltas/trends from the prior ledger entry, not only the weighted total. If a prior entry lacks dimension scores, mark that dimension trend as `no prior dimension baseline` and keep the total-score delta separate.
+6. Pair the percentage with the highest-leverage action that would move the score most.
 
 Worker notification and verification contract:
 1. Workers keep their full reports in their own persistent tasks. When a worker reaches a terminal outcome or defers, it sends the Product Owner a compact completion notification with the worker task id, automation id, invocation id, terminal status, Run/report slugs, changed TODO ids or no-op reason, key metrics changed, blockers, approvals needed, and requested Product Owner follow-up.

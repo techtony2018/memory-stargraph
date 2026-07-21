@@ -258,7 +258,12 @@ and reads that ledger before scoring. Reports include the delta from the latest
 prior ledger entry, including previous score, date, and source slug. Use
 `baseline established` only when the ledger has no previous entry and a recovery
 search of prior Product Owner Run/report slugs also finds no previous score.
-Every report includes the one highest-leverage action to improve the percentage.
+Every report and user-facing Product Owner briefing includes the seven dimension
+scores with day-over-day deltas/trends from the prior ledger entry, not only the
+weighted total. If a prior ledger entry lacks dimension scores, mark the
+dimension trend as `no prior dimension baseline` while still reporting the
+weighted total delta. Every report includes the one highest-leverage action to
+improve the percentage.
 
 After the daily report, the Product Owner runs a short retrospective comparing
 today against the previous Product Owner report: metric values, role outcomes,
@@ -380,6 +385,16 @@ window, record it as a Product Owner-visible blocker and request a bounded retry
 or reschedule instead of silently waiting for the next day. The watch reports
 only anomalies and actions taken, or a short quiet status when all relevant
 roles are inside their estimate.
+
+If a worker truthfully defers because another worker is active, the Product
+Owner owns the retry chain. The Product Owner must verify the blocking worker,
+create or update a temporary 10-minute watch for that blocking worker, and
+record which deferred worker must be retried after the blocker terminalizes.
+When the blocking worker terminalizes, fails with evidence, truthfully defers,
+or transfers ownership, the next watch immediately retries or dispatches the
+originally blocked worker if quiet-time rules allow it. Do not leave
+`deferred_due_to_worker_activity` for the next daily review when the blocking
+worker has a terminal condition that can be watched.
 
 ## TODO Backlog Compaction
 

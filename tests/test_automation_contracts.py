@@ -414,6 +414,48 @@ class AutomationContractTests(unittest.TestCase):
             "canonical worker task",
             "route confirmed infrastructure or health failures to the daily SRE task",
             "Do not duplicate worker-owned implementation",
+            "defers because another worker is active",
+            "temporary 10-minute watch",
+            "retry or dispatch the originally blocked worker",
+            "deferred_due_to_worker_activity",
+        ):
+            self.assertIn(phrase, contract)
+
+    def test_product_owner_reports_dimension_score_trends(self):
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        owner_bootstrap = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = "\n".join((owner_prompt, owner_bootstrap, runbook))
+
+        for phrase in (
+            "seven dimension scores",
+            "day-over-day deltas/trends",
+            "not only the weighted total",
+            "no prior dimension baseline",
+            "goal-progress-ledger.json",
+        ):
+            self.assertIn(phrase, contract)
+
+    def test_product_owner_chains_worker_blocker_watches(self):
+        owner_prompt = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md"
+        ).read_text()
+        owner_bootstrap = (
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/steward-thread-prompt.md"
+        ).read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = "\n".join((owner_prompt, owner_bootstrap, runbook))
+
+        for phrase in (
+            "defers because a different worker is active",
+            "verify the blocking worker",
+            "new 10-minute temporary watch for the actual blocking worker",
+            "pending retry chain",
+            "originally blocked worker",
         ):
             self.assertIn(phrase, contract)
 
