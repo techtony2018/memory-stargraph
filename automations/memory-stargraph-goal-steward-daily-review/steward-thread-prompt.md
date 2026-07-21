@@ -78,6 +78,8 @@ On notification, enter or inspect the worker's persistent task and verify the re
 
 Keep the Product Owner task as the control tower: compact notifications and verification outcomes belong here; detailed worker execution logs remain in each worker task.
 
+Do not rely on workers being able to call cross-thread messaging tools. At the start of every full review and any worker-watch recovery cleanup, sweep the latest terminal Run/report evidence for `product_owner_notification_pending: true` or `product_owner_notification_status: pending_unacknowledged_delivery` across the watched roles. Recover the compact payload from the worker Run/report, verify the worker outcome, and update both Run and report to `product_owner_notification_status: acknowledged_by_product_owner` and `product_owner_notification_pending: false` before counting the role as healthy or dispatching a dependent retry. If a worker reports direct Product Owner messaging was unavailable, exposed but not callable, or unacknowledged, treat it as expected fallback behavior when the Run/report contains the full compact payload; treat it as an automation-governance blocker only when the payload is missing or Product Owner sweep cannot acknowledge it.
+
 ## Manual Worker Dispatch Verification
 
 Before manually dispatching a worker, resolve the canonical destination with Codex `list_threads`; record the destination task id and role title in the Product Owner Run. Send the bounded prompt with Codex `send_message_to_thread`, then verify dispatch with Codex `read_thread` on that same destination task id. Do not claim dispatch success from a send call alone.

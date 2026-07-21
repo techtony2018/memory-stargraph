@@ -342,6 +342,17 @@ Run/report to `product_owner_notification_status: acknowledged_by_product_owner`
 and `product_owner_notification_pending: false` before coordinating any retry or
 blocker handoff.
 
+Product Owner reviews and worker-watch cleanup turns must not depend solely on
+inbound cross-thread notifications. At the start of each full review and after
+any watched worker terminalizes, the Product Owner sweeps the latest terminal
+Run/report evidence for `product_owner_notification_pending: true` or
+`product_owner_notification_status: pending_unacknowledged_delivery`, recovers
+the compact payload, verifies it against the worker task/Run/report, and
+acknowledges it in both Run and report. A worker statement that direct Product
+Owner messaging was unavailable is expected fallback behavior when the compact
+payload is present; it is a governance blocker only when the payload is missing,
+not verifiable, or cannot be acknowledged through Memory Stargraph.
+
 ### Manual worker dispatch verification
 
 When the Product Owner manually dispatches or retries any recurring worker,

@@ -635,6 +635,8 @@ class AutomationContractTests(unittest.TestCase):
             "approvals needed",
             "requested Product Owner follow-up",
             "product_owner_notification_pending",
+            "product_owner_notification_status: pending_unacknowledged_delivery",
+            "full compact payload",
         )
         for worker in workers:
             prompt = (ROOT / "automations" / worker / "prompt.md").read_text()
@@ -652,6 +654,9 @@ class AutomationContractTests(unittest.TestCase):
             "Workers keep their full reports in their own persistent tasks",
             "On notification, enter or inspect the worker's persistent task",
             "Do not accept a worker notification as completion by itself",
+            "Do not rely on workers being able to call cross-thread messaging tools",
+            "product_owner_notification_status: pending_unacknowledged_delivery",
+            "acknowledged_by_product_owner",
         ):
             self.assertIn(phrase, owner_prompt)
 
