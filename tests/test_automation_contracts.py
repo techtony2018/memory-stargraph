@@ -247,6 +247,55 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("mode=daily_reliability", heartbeats)
         self.assertIn("mode=weekly_resilience", heartbeats)
 
+    def test_recurring_workers_share_source_sync_evidence_schema(self):
+        worker_prompts = (
+            ROOT / "automations/gbrain-x-intelligence-capture/prompt.md",
+            ROOT / "automations/memory-stargraph-capture-link-drain/prompt.md",
+            ROOT / "automations/memory-stargraph-daily-learning-intake/prompt.md",
+            ROOT / "automations/memory-stargraph-divergent-product-discovery/prompt.md",
+            ROOT / "automations/memory-stargraph-goal-steward-daily-review/prompt.md",
+            ROOT / "automations/memory-stargraph-sre/prompt.md",
+            ROOT / "automations/memory-stargraph-ux-engineer-daily-dogfood/prompt.md",
+            ROOT / "automations/memory-stargraph-wish-to-reallity/prompt.md",
+        )
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        required_fields = (
+            "workspace_path",
+            "branch",
+            "local_head",
+            "upstream_ref",
+            "upstream_head",
+            "dirty_state",
+            "divergent_state",
+            "deployed_service_version",
+            "required_script_existence",
+            "selected_source_path",
+            "selected_source_surface",
+            "action_taken",
+        )
+
+        self.assertIn("Shared recurring-worker source-sync evidence schema", runbook)
+        for prompt_path in worker_prompts:
+            prompt = prompt_path.read_text()
+            self.assertIn("shared recurring-worker source-sync evidence schema", prompt)
+            for field in required_fields:
+                self.assertIn(field, prompt, f"{prompt_path} missing {field}")
+
+    def test_weekly_resilience_has_safe_noop_fault_target_until_owner_approval(self):
+        sre = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+        contract = sre + "\n" + runbook
+
+        for phrase in (
+            "synthetic-noop-fault-harness",
+            "report-only harness",
+            "without stopping, restarting, throttling, deleting, mutating, or redirecting production",
+            "Product Owner approval",
+            "chaos_skipped_no_safe_target",
+            "post-probe health verification",
+        ):
+            self.assertIn(phrase, contract)
+
     def test_sre_evidence_reaches_owner_learning_and_engineer(self):
         paths = (
             ROOT / "automations/README.md",

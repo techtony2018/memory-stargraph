@@ -1523,6 +1523,12 @@ h2 {
   color: #ff9ca8;
 }
 
+.modal-loading-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .modal-slug-inline {
   color: var(--muted);
   overflow-wrap: anywhere;

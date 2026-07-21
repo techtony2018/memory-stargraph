@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.153";
+const UI_VERSION = "V1.0.154";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -2638,7 +2638,7 @@ function rawEntityIsUnknown(rawResponse) {
 
 function showMissingSelectionState(slug, requested, summary = "") {
   detailTitle.textContent = requested?.label || slug;
-  detailType.textContent = `${requested?.category || requested?.type || "entity"} · missing page`;
+  detailType.textContent = `${requested?.category || requested?.type || "entity"} · not found`;
   detailSummary.textContent = summary || `No saved markdown page was found for ${requested?.label || slug}. The graph is still available, but this deep link does not resolve to a GBrain page.`;
   hoverLabel.textContent = `Missing page: ${slug}.`;
 }
@@ -3724,6 +3724,7 @@ async function openSampleBrainWindow() {
   modalTitle.textContent = "Privacy-safe first-value demo";
   modalMessage.textContent = "Demo mode uses bundled synthetic data only. It does not include private GBrain content.";
   modalPrimaryButton.textContent = "Close";
+  modalCloseButton.setAttribute("aria-label", "Close sample brain demo");
   modalPrimaryButton.hidden = false;
   modalCancelButton.hidden = true;
   modalEditor.hidden = true;
@@ -3760,6 +3761,7 @@ async function openMemoryDigestWindow() {
   modalTitle.textContent = "Goal progress digest";
   modalMessage.textContent = "Read-only digest from Runs, Learnings, TODO movement, health, and feedback evidence.";
   modalPrimaryButton.textContent = "Close";
+  modalCloseButton.setAttribute("aria-label", "Close memory value digest");
   modalPrimaryButton.hidden = false;
   modalCancelButton.hidden = true;
   modalEditor.hidden = true;
@@ -3767,6 +3769,10 @@ async function openMemoryDigestWindow() {
   modalForm.hidden = true;
   modalMarkdown.hidden = false;
   modalMarkdown.innerHTML = "";
+  const loading = document.createElement("p");
+  loading.className = "modal-loading-state";
+  loading.textContent = "Loading memory value digest...";
+  modalMarkdown.appendChild(loading);
   operationModal.hidden = false;
   state.modalAction = { action: "memory-digest", slug: "goals/memory-stargraph-continuous-learning-local-knowledge-os", label: "Memory value digest" };
   const response = await apiGet("/api/memory-value-digest?window=day");
@@ -3775,6 +3781,7 @@ async function openMemoryDigestWindow() {
   pre.textContent = response.ok
     ? JSON.stringify(response.data, null, 2)
     : `Memory value digest unavailable: ${response.data?.error || response.status}`;
+  modalMarkdown.innerHTML = "";
   modalMarkdown.appendChild(pre);
 }
 
@@ -5614,6 +5621,7 @@ function closeModal() {
   modalPrimaryButton.disabled = false;
   modalCancelButton.hidden = false;
   modalCancelButton.disabled = false;
+  modalCloseButton.setAttribute("aria-label", "Close window");
   modalCancelButton.textContent = "Cancel";
   setModalControlTooltips("Save", "Cancel");
 }
@@ -5627,6 +5635,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
   operationModal.classList.toggle("compact-modal", ["add-link", "remove-link", "tags"].includes(action));
   operationModal.classList.toggle("ask-yoda-modal", action === "ask-yoda");
   modalTitle.textContent = label;
+  modalCloseButton.setAttribute("aria-label", "Close window");
   modalConfirmInput.value = "";
   modalConfirmInput.hidden = true;
   modalConfirmInput.dataset.expected = "";
@@ -6492,7 +6501,6 @@ async function loadEntity(slug, options = {}) {
       updateAskYodaButtons();
       detailTitle.textContent = requested?.label || slug;
       if (selectionSlugAlways) selectionSlugAlways.textContent = slug || "No selection";
-      detailType.textContent = `${requested?.category || requested?.type || "entity"} · partial info`;
       const hydratedFromRaw = await hydratePartialSelectionFromRaw(slug, requested);
       if (!hydratedFromRaw) {
         const missingSummary = `Basic graph info is available, but no markdown page was found for ${requested?.label || slug}; no saved markdown page was found for this deep link.`;

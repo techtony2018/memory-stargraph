@@ -67,6 +67,30 @@ Product Owner/Developer coordination. A worker may use a deployed service copy
 only as an explicit fallback surface, and must record that choice instead of
 presenting the stale local checkout as authoritative.
 
+Shared recurring-worker source-sync evidence schema:
+
+- `workspace_path`
+- `branch`
+- `local_head`
+- `upstream_ref`
+- `upstream_head`
+- `dirty_state`
+- `divergent_state`
+- `deployed_service_version`
+- `required_script_existence`
+- `selected_source_path`
+- `selected_source_surface`
+- `action_taken`
+
+Every recurring worker must record this schema before script-dependent work,
+including Developer, UX, SRE daily, SRE weekly, Product Owner/Goal Steward,
+Daily Learning Intake, Capture Link Drain, Product Strategist, and X
+Intelligence Capture. Clean stale checkouts use fast-forward-only sync when
+allowed. Dirty, divergent, detached, ambiguous-upstream, or fetch-failed
+checkouts preserve unrelated local changes and record a blocker or explicit
+fallback surface. Product Owner verification should not require raw terminal
+logs to establish source identity.
+
 Use the maintained helper when available:
 
 ```bash
@@ -163,6 +187,18 @@ end-to-end resolver probe requires `environment=test`, `synthetic=true`,
 `test_run=true`, and `pair_id=sre:{mode}:{invocation_id}:{probe_slug}`; when
 isolation cannot be verified, record
 `resolver_probe_skipped_isolation_unverified` and skip the probe.
+
+Weekly resilience safe-fault target policy: until Product Owner approval is
+recorded in the weekly Run/report, the only permitted fault target strategy is a
+no-op synthetic harness that exercises SRE classification, abort gates,
+rollback-evidence capture, and post-probe health verification without stopping,
+restarting, throttling, deleting, mutating, or redirecting production Memory
+Stargraph, GBrain, resolver, dashboard, backup, or remote services. The target
+identity is `synthetic-noop-fault-harness`; its blast radius is report-only; its
+rollback path is to remove the in-memory harness state and preserve
+`chaos_skipped_no_safe_target` for any real fault. Any disposable service,
+redundant node, restart drill, failover drill, or resource fault requires an
+explicit Product Owner approval decision before provisioning or use.
 
 ### Product Owner incident handoff
 
