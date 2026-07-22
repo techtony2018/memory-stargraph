@@ -179,6 +179,24 @@ Bounded remediation uses only documented retry, dashboard-managed restart,
 cache/routing recovery, or documented last-known-good rollback with before and
 after verification.
 
+The local MacBook alert monitor is documented in
+`docs/memory-stargraph-alert-monitor-runbook.md`. It checks every configured
+Memory Stargraph instance plus the read-only GBrain `index` path and sends
+email only for persistent, deduplicated issues. Normal deployments and SRE
+operations must suppress alerts before service mutation and clear suppression
+after successful verification:
+
+```bash
+python3 scripts/automation/memory_stargraph_alert_monitor.py suppress --minutes 45 --reason "SRE documented remediation"
+python3 scripts/automation/memory_stargraph_alert_monitor.py clear-suppression
+```
+
+`scripts/automation/deploy_targets.sh` applies that suppression automatically.
+SRE incident response, daily reliability follow-up, and weekly resilience runs
+must use the same suppress/clear commands around documented restart, rollback,
+failover, or network-route remediation steps so Tony is alerted for unattended
+problems rather than expected maintenance.
+
 Weekly work adds gradual synthetic load, isolated temporary restore rehearsal,
 and one safe fault at a time on an explicitly synthetic, disposable, or
 redundant target. Without a safe target it records

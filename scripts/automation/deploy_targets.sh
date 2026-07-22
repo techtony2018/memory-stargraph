@@ -8,6 +8,7 @@ version="${1:?usage: deploy_targets.sh V1.0.xx [commit]}"
 commit="${2:-HEAD}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 config_file="${MEMORY_STARGRAPH_AUTOMATION_CONFIG:-${CODEX_HOME:-$HOME/.codex}/automations/memory-stargraph-wish-to-reallity/deployment-targets.env}"
+alert_monitor="$repo_root/scripts/automation/memory_stargraph_alert_monitor.py"
 
 if [[ ! -f "$config_file" ]]; then
   echo "missing local deployment config: $config_file" >&2
@@ -17,6 +18,10 @@ fi
 
 # shellcheck disable=SC1090
 . "$config_file"
+
+if [[ -f "$alert_monitor" ]]; then
+  python3 "$alert_monitor" suppress --minutes "${MEMORY_STARGRAPH_DEPLOY_ALERT_SUPPRESS_MINUTES:-45}" --reason "Memory Stargraph deployment $version $commit" >/dev/null || true
+fi
 
 : "${MEMORY_STARGRAPH_LOCAL_SERVICE_DIR:?missing MEMORY_STARGRAPH_LOCAL_SERVICE_DIR}"
 : "${MEMORY_STARGRAPH_DASHBOARD_RESTART_URL:?missing MEMORY_STARGRAPH_DASHBOARD_RESTART_URL}"
@@ -107,5 +112,9 @@ for target in $MEMORY_STARGRAPH_DEPLOY_TARGETS; do
     verify_url "$url" "$curl_flags"
   done
 done
+
+if [[ -f "$alert_monitor" ]]; then
+  python3 "$alert_monitor" clear-suppression >/dev/null || true
+fi
 
 echo "deploy complete: $version $commit"
