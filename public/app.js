@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.154";
+const UI_VERSION = "V1.0.155";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -18,6 +18,7 @@ const PLACEHOLDER_SUMMARY_TEXTS = new Set([
   "discovered by lazy search.",
   "discovered by graph traversal.",
 ]);
+const INTERNAL_GBRAIN_MARKER_PATTERN = /<!--\s*gbrain:[\s\S]*?-->/gi;
 
 const state = {
   graph: null,
@@ -2059,7 +2060,10 @@ function briefSummary(node) {
 }
 
 function displaySummary(text) {
-  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const value = String(text || "")
+    .replace(INTERNAL_GBRAIN_MARKER_PATTERN, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (isPlaceholderSummary(value)) {
     return "No meaningful summary is available for this node yet.";
   }
