@@ -99,7 +99,7 @@ Memory Stargraph works best when `gbrain` is already initialized and healthy on 
 - Media files referenced by gbrain pages are reachable from the web service. Use `gbrain_file_store_roots` only for the hosting service's durable backing root, `gbrain_file_base_urls` for trusted non-host recovery, and `media_roots` only as disposable caches. See the [GBrain Attachment Safety and Verification Runbook](docs/gbrain-attachment-runbook.md).
 - The root `index` page exists and is useful, because Memory Stargraph expands it eagerly to give the graph a meaningful starting structure.
 
-For multi-machine setups, run the service on each web host with its own `config/local.json`. Keep runtime state local, keep secrets out of the repo, and verify `/api/health` plus one known entity search after every deployment.
+For multi-machine setups, run the service on each web host with its own `config/local.json`. Keep runtime state local, keep secrets out of the repo, and verify `/api/health` plus one known entity search after every deployment. If the host uses Docker-backed GBrain Postgres and Tailscale HTTPS, follow the [Docker Postgres and HTTPS runbook](docs/memory-stargraph-docker-postgres-https-runbook.md).
 
 Upstream GBrain note: for remote-MCP installations with multiple clients, see the submitted GBrain PR [garrytan/gbrain#2501](https://github.com/garrytan/gbrain/pull/2501), which makes the OAuth token rate limit configurable. That helps avoid noisy refresh failures when several agents or web services share the same GBrain host.
 
@@ -186,7 +186,7 @@ Setup steps:
 7. Confirm `View` is the first node menu item and all node operations render.
 
 HTTPS options:
-- For Tailscale access, prefer keeping Memory Stargraph on local HTTP and putting Tailscale Serve in front of it:
+- For Tailscale access, Tailscale Serve provides the public tailnet HTTPS endpoint. The backend scheme must match how Memory Stargraph is launched:
 
 ```bash
 python3 server.py --host 127.0.0.1 --port 8788
@@ -195,13 +195,14 @@ tailscale serve --https=443 http://127.0.0.1:8788
 
 Then open `https://<machine>.<tailnet>.ts.net/`.
 
-- If you already have a certificate and key, Memory Stargraph can serve HTTPS directly:
+- If you already have a certificate and key, Memory Stargraph can serve HTTPS directly, and Tailscale Serve should proxy to `https+insecure://127.0.0.1:8788`:
 
 ```bash
 python3 server.py --host 0.0.0.0 --port 8788 --certfile /path/fullchain.pem --keyfile /path/privkey.pem
+tailscale serve --https=443 https+insecure://127.0.0.1:8788
 ```
 
-Direct TLS on port `8788` will use `https://<host>:8788/`; Tailscale Serve is usually cleaner because it manages the trusted tailnet certificate.
+If Tailscale Serve returns `502`, first check whether its backend route uses `http://` against an HTTPS Stargraph backend, or `https+insecure://` against a plain HTTP backend. See the [Docker Postgres and HTTPS runbook](docs/memory-stargraph-docker-postgres-https-runbook.md) for the complete recovery sequence.
 
 Verification commands:
 - export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"

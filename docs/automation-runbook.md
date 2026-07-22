@@ -508,6 +508,8 @@ scripts/automation/deploy_targets.sh V1.0.xx <commit>
 
 Do not mark TODOs completed until all configured required targets report the expected `ui_version`, served HTML asset query strings, and served `public/app.js` version, or a target has a concrete unreachable/deployment reason recorded in local memory/GBrain.
 
+For hosts where Memory Stargraph depends on Docker-backed GBrain Postgres and is exposed through Tailscale HTTPS, use [Memory Stargraph Docker Postgres and HTTPS Runbook](memory-stargraph-docker-postgres-https-runbook.md) before declaring the target down. In particular, check Docker Desktop startup, the existing Postgres container and volume, GBrain's HTTP LaunchAgent, Memory Stargraph's LaunchAgent, and the Tailscale Serve backend scheme in that order.
+
 ## Remote Shell Rule
 
 For remote host work, do not send complex inline SSH commands through the remote login shell. zsh/glob parsing has repeatedly broken commands that contain `[]`, `|`, `$()`, awk regexes, or nested quotes.
