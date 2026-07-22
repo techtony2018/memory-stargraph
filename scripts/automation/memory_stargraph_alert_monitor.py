@@ -315,7 +315,7 @@ def run_failover_hook(config: dict[str, str], *, dry_run: bool) -> dict[str, Any
     script = Path(__file__).with_name("memory_stargraph_failover.py")
     if not script.exists():
         return {"enabled": True, "ok": False, "status": "missing_failover_script", "script": str(script)}
-    cmd = [sys.executable, str(script), "promote-slave", "--json"]
+    cmd = [sys.executable, str(script), "promote-secondary", "--json"]
     if dry_run:
         cmd.append("--dry-run")
     result = subprocess.run(cmd, text=True, capture_output=True, check=False)

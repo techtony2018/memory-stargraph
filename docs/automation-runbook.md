@@ -198,9 +198,9 @@ failover, or network-route remediation steps so Tony is alerted for unattended
 problems rather than expected maintenance.
 
 Warm-standby GBrain authority is documented in
-`docs/memory-stargraph-gbrain-warm-standby-runbook.md`. A slave Mac mini may be
+`docs/memory-stargraph-gbrain-warm-standby-runbook.md`. A Secondary Mac mini may be
 restored daily from backup and promoted only through the configured failover
-helper after master failure, fresh slave restore/readiness, and post-switch
+helper after Primary failure, fresh Secondary restore/readiness, and post-switch
 fleet verification are proven. This is warm standby, not multi-primary
 replication; automatic failback is forbidden until a reconciliation path is
 tested.

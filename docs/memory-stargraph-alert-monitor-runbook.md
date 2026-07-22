@@ -110,7 +110,7 @@ to the repository checkout.
 Warm-standby setup is documented in
 `docs/memory-stargraph-gbrain-warm-standby-runbook.md`.
 
-Keep failover disabled until the private master/slave URLs, daily restore
+Keep failover disabled until the private Primary/Secondary URLs, daily restore
 command, switch command, and fleet verification URLs are configured and tested:
 
 ```bash
@@ -120,11 +120,11 @@ MEMORY_STARGRAPH_FAILOVER_ON_ALERT=0
 When set to `1`, a persistent alert invokes:
 
 ```bash
-python3 memory_stargraph_failover.py promote-slave --json
+python3 memory_stargraph_failover.py promote-secondary --json
 ```
 
-The promotion helper still refuses to switch if the master is healthy, the
-slave is unhealthy, the slave restore is stale, or post-switch fleet checks
+The promotion helper still refuses to switch if the Primary is healthy, the
+Secondary is unhealthy, the Secondary restore is stale, or post-switch fleet checks
 fail. The alert email includes the failover hook result.
 
 ## Suppressing expected maintenance windows

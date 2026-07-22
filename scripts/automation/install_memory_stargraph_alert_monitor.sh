@@ -38,12 +38,12 @@ if [[ ! -f "$env_file" ]]; then
 # If omitted, the monitor derives targets from deployment-targets.env.
 # MEMORY_STARGRAPH_MONITOR_TARGETS=local=http://127.0.0.1:8788 remote_a=https://example-a/memory-stargraph remote_b=https://example-b
 #
-# Optional warm-standby failover. Keep disabled until master/slave URLs,
+# Optional warm-standby failover. Keep disabled until Primary/Secondary URLs,
 # restore command, switch command, and fleet verification URLs are tested.
 # MEMORY_STARGRAPH_FAILOVER_ON_ALERT=0
-# MEMORY_STARGRAPH_MASTER_URL=
-# MEMORY_STARGRAPH_SLAVE_URL=
-# MEMORY_STARGRAPH_SLAVE_RESTORE_COMMAND=
+# MEMORY_STARGRAPH_PRIMARY_URL=
+# MEMORY_STARGRAPH_SECONDARY_URL=
+# MEMORY_STARGRAPH_SECONDARY_RESTORE_COMMAND=
 # MEMORY_STARGRAPH_FAILOVER_SWITCH_COMMAND=
 # MEMORY_STARGRAPH_FLEET_CHECK_URLS=
 #

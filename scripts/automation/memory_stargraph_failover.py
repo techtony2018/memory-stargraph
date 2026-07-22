@@ -5,9 +5,9 @@ This script intentionally keeps host coordinates, backup commands, restore
 commands, and traffic-switch commands in the private deployment env file. The
 git-tracked code only enforces the safety contract:
 
-- slave restore is explicit and verified after command completion;
-- promotion requires master failure unless --force is supplied;
-- promotion requires a healthy, recently restored slave;
+- Secondary restore is explicit and verified after command completion;
+- promotion requires Primary failure unless --force is supplied;
+- promotion requires a healthy, recently restored Secondary;
 - failback is not automatic.
 """
 
@@ -162,6 +162,29 @@ def run_private_command(command: str, *, dry_run: bool, timeout: int) -> dict[st
     }
 
 
+def refresh_secondary_readiness(config: dict[str, str], state: dict[str, Any], *, timeout: int) -> dict[str, Any] | None:
+    command = config.get("MEMORY_STARGRAPH_SECONDARY_READINESS_COMMAND", "").strip()
+    if not command:
+        return None
+    result = run_private_command(command, dry_run=False, timeout=timeout)
+    state["last_secondary_readiness_result"] = result
+    if not result.get("ok"):
+        return result
+    stdout = str(result.get("stdout_tail") or "").strip()
+    try:
+        readiness = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        result["ok"] = False
+        result["error"] = f"invalid readiness JSON: {exc}"
+        return result
+    restored_at = readiness.get("secondary_restored_at") or readiness.get("restored_at_pacific")
+    if restored_at:
+        state["secondary_restored_at"] = str(restored_at)
+    state["secondary_ready"] = bool(readiness.get("secondary_ready", True))
+    state["secondary_readiness"] = readiness
+    return result
+
+
 def require_config(config: dict[str, str], key: str) -> str:
     value = config.get(key, "").strip()
     if not value:
@@ -169,8 +192,25 @@ def require_config(config: dict[str, str], key: str) -> str:
     return value
 
 
+def config_value(config: dict[str, str], primary_key: str, legacy_key: str = "") -> str:
+    value = config.get(primary_key, "").strip()
+    if value:
+        return value
+    if legacy_key:
+        return config.get(legacy_key, "").strip()
+    return ""
+
+
+def require_config_value(config: dict[str, str], primary_key: str, legacy_key: str = "") -> str:
+    value = config_value(config, primary_key, legacy_key)
+    if not value:
+        suffix = f" or {legacy_key}" if legacy_key else ""
+        raise RuntimeError(f"missing {primary_key}{suffix}")
+    return value
+
+
 def readiness_age_hours(state: dict[str, Any], now: dt.datetime) -> float | None:
-    restored_at = state.get("slave_restored_at")
+    restored_at = state.get("secondary_restored_at") or state.get("slave_restored_at")
     if not restored_at:
         return None
     try:
@@ -185,82 +225,93 @@ def readiness_age_hours(state: dict[str, Any], now: dt.datetime) -> float | None
 def command_status(args: argparse.Namespace) -> int:
     config = load_config(os.environ)
     state_path = Path(args.state_file or config.get("MEMORY_STARGRAPH_FAILOVER_STATE_FILE", "") or default_state_path(config)).expanduser()
-    master_url = config.get("MEMORY_STARGRAPH_MASTER_URL", "")
-    slave_url = config.get("MEMORY_STARGRAPH_SLAVE_URL", "")
+    state = read_json(state_path)
+    readiness = refresh_secondary_readiness(config, state, timeout=args.timeout)
+    if readiness is not None:
+        write_json(state_path, state)
+    primary_url = config_value(config, "MEMORY_STARGRAPH_PRIMARY_URL", "MEMORY_STARGRAPH_MASTER_URL")
+    secondary_url = config_value(config, "MEMORY_STARGRAPH_SECONDARY_URL", "MEMORY_STARGRAPH_SLAVE_URL")
     timeout = args.timeout
     results = {
         "checked_at": now_pacific().isoformat(),
         "state_file": str(state_path),
-        "state": read_json(state_path),
-        "master": probe_instance("master", master_url, timeout, config.get("MEMORY_STARGRAPH_MASTER_CURL_FLAGS", "")) if master_url else None,
-        "slave": probe_instance("slave", slave_url, timeout, config.get("MEMORY_STARGRAPH_SLAVE_CURL_FLAGS", "")) if slave_url else None,
+        "state": state,
+        "secondary_readiness_result": readiness,
+        "primary": probe_instance("Primary", primary_url, timeout, config_value(config, "MEMORY_STARGRAPH_PRIMARY_CURL_FLAGS", "MEMORY_STARGRAPH_MASTER_CURL_FLAGS")) if primary_url else None,
+        "secondary": probe_instance("Secondary", secondary_url, timeout, config_value(config, "MEMORY_STARGRAPH_SECONDARY_CURL_FLAGS", "MEMORY_STARGRAPH_SLAVE_CURL_FLAGS")) if secondary_url else None,
     }
     print(json.dumps(results, indent=2, sort_keys=True))
-    return 0 if (results["master"] and results["slave"]) else 1
+    return 0 if (results["primary"] and results["secondary"]) else 1
 
 
-def command_restore_slave(args: argparse.Namespace) -> int:
+def command_restore_secondary(args: argparse.Namespace) -> int:
     config = load_config(os.environ)
     state_path = Path(args.state_file or config.get("MEMORY_STARGRAPH_FAILOVER_STATE_FILE", "") or default_state_path(config)).expanduser()
-    slave_url = require_config(config, "MEMORY_STARGRAPH_SLAVE_URL")
-    command = require_config(config, "MEMORY_STARGRAPH_SLAVE_RESTORE_COMMAND")
+    secondary_url = require_config_value(config, "MEMORY_STARGRAPH_SECONDARY_URL", "MEMORY_STARGRAPH_SLAVE_URL")
+    command = require_config_value(config, "MEMORY_STARGRAPH_SECONDARY_RESTORE_COMMAND", "MEMORY_STARGRAPH_SLAVE_RESTORE_COMMAND")
     now = now_pacific()
     restore_result = run_private_command(command, dry_run=args.dry_run, timeout=args.command_timeout)
-    slave = probe_instance("slave", slave_url, args.timeout, config.get("MEMORY_STARGRAPH_SLAVE_CURL_FLAGS", "")) if restore_result["ok"] else None
-    ok = bool(restore_result["ok"] and slave and slave.get("ok"))
+    secondary = probe_instance("Secondary", secondary_url, args.timeout, config_value(config, "MEMORY_STARGRAPH_SECONDARY_CURL_FLAGS", "MEMORY_STARGRAPH_SLAVE_CURL_FLAGS")) if restore_result["ok"] else None
+    ok = bool(restore_result["ok"] and secondary and secondary.get("ok"))
     state = read_json(state_path)
     state.update(
         {
             "last_restore_attempt_at": now.isoformat(),
             "last_restore_result": restore_result,
-            "last_restore_slave_probe": slave,
+            "last_restore_secondary_probe": secondary,
         }
     )
     if ok:
         state.update(
             {
-                "slave_restored_at": now.isoformat(),
-                "slave_ready": True,
-                "slave_url": slave_url,
+                "secondary_restored_at": now.isoformat(),
+                "secondary_ready": True,
+                "secondary_url": secondary_url,
                 "backup_label": config.get("MEMORY_STARGRAPH_BACKUP_LABEL", "latest-configured-backup"),
             }
         )
+        state.pop("slave_restored_at", None)
+        state.pop("slave_ready", None)
+        state.pop("slave_url", None)
     write_json(state_path, state)
-    print(json.dumps({"ok": ok, "state_file": str(state_path), "restore_result": restore_result, "slave": slave}, indent=2, sort_keys=True))
+    print(json.dumps({"ok": ok, "state_file": str(state_path), "restore_result": restore_result, "secondary": secondary}, indent=2, sort_keys=True))
     return 0 if ok else 2
 
 
-def command_promote_slave(args: argparse.Namespace) -> int:
+def command_promote_secondary(args: argparse.Namespace) -> int:
     config = load_config(os.environ)
     state_path = Path(args.state_file or config.get("MEMORY_STARGRAPH_FAILOVER_STATE_FILE", "") or default_state_path(config)).expanduser()
-    master_url = require_config(config, "MEMORY_STARGRAPH_MASTER_URL")
-    slave_url = require_config(config, "MEMORY_STARGRAPH_SLAVE_URL")
-    switch_command = require_config(config, "MEMORY_STARGRAPH_FAILOVER_SWITCH_COMMAND")
+    primary_url = require_config_value(config, "MEMORY_STARGRAPH_PRIMARY_URL", "MEMORY_STARGRAPH_MASTER_URL")
+    secondary_url = require_config_value(config, "MEMORY_STARGRAPH_SECONDARY_URL", "MEMORY_STARGRAPH_SLAVE_URL")
+    switch_command = config.get("MEMORY_STARGRAPH_FAILOVER_SWITCH_COMMAND", "").strip()
     now = now_pacific()
     state = read_json(state_path)
+    refresh_secondary_readiness(config, state, timeout=args.timeout)
     max_age = float(config.get("MEMORY_STARGRAPH_FAILOVER_MAX_BACKUP_AGE_HOURS", "30"))
     age = readiness_age_hours(state, now)
 
-    master = probe_instance("master", master_url, args.timeout, config.get("MEMORY_STARGRAPH_MASTER_CURL_FLAGS", ""))
-    slave = probe_instance("slave", slave_url, args.timeout, config.get("MEMORY_STARGRAPH_SLAVE_CURL_FLAGS", ""))
+    primary = probe_instance("Primary", primary_url, args.timeout, config_value(config, "MEMORY_STARGRAPH_PRIMARY_CURL_FLAGS", "MEMORY_STARGRAPH_MASTER_CURL_FLAGS"))
+    secondary = probe_instance("Secondary", secondary_url, args.timeout, config_value(config, "MEMORY_STARGRAPH_SECONDARY_CURL_FLAGS", "MEMORY_STARGRAPH_SLAVE_CURL_FLAGS"))
     blockers: list[str] = []
-    if master.get("ok") and not args.force:
-        blockers.append("master still healthy; refusing promotion without --force")
-    if not slave.get("ok"):
-        blockers.append("slave is not healthy")
-    if not state.get("slave_ready"):
-        blockers.append("slave is not marked ready from a verified restore")
+    if primary.get("ok") and not args.force:
+        blockers.append("Primary still healthy; refusing promotion without --force")
+    if not secondary.get("ok"):
+        blockers.append("Secondary is not healthy")
+    if not (state.get("secondary_ready") or state.get("slave_ready")):
+        blockers.append("Secondary is not marked ready from a verified restore")
     if age is None:
-        blockers.append("slave restore age unknown")
+        blockers.append("Secondary restore age unknown")
     elif age > max_age:
-        blockers.append(f"slave restore age {age:.2f}h exceeds max {max_age:.2f}h")
+        blockers.append(f"Secondary restore age {age:.2f}h exceeds max {max_age:.2f}h")
+    if not switch_command:
+        blockers.append("MEMORY_STARGRAPH_FAILOVER_SWITCH_COMMAND is not configured")
 
     switch_result: dict[str, Any] | None = None
     fleet_results: list[dict[str, Any]] = []
     if not blockers:
         switch_result = run_private_command(switch_command, dry_run=args.dry_run, timeout=args.command_timeout)
         if switch_result["ok"]:
-            urls = config.get("MEMORY_STARGRAPH_FLEET_CHECK_URLS", slave_url).split()
+            urls = config.get("MEMORY_STARGRAPH_FLEET_CHECK_URLS", secondary_url).split()
             flags = config.get("MEMORY_STARGRAPH_FLEET_CURL_FLAGS", "")
             fleet_results = [probe_instance(f"fleet_{index}", url, args.timeout, flags) for index, url in enumerate(urls, start=1)]
             if any(not item.get("ok") for item in fleet_results):
@@ -272,15 +323,15 @@ def command_promote_slave(args: argparse.Namespace) -> int:
     state.update(
         {
             "last_promotion_attempt_at": now.isoformat(),
-            "last_promotion_master_probe": master,
-            "last_promotion_slave_probe": slave,
+            "last_promotion_primary_probe": primary,
+            "last_promotion_secondary_probe": secondary,
             "last_promotion_switch_result": switch_result,
             "last_promotion_fleet_results": fleet_results,
             "last_promotion_blockers": blockers,
         }
     )
     if ok:
-        state.update({"active_authoritative_role": "slave", "promoted_at": now.isoformat(), "promoted_slave_url": slave_url})
+        state.update({"active_authoritative_role": "Secondary", "promoted_at": now.isoformat(), "promoted_secondary_url": secondary_url})
     write_json(state_path, state)
     print(
         json.dumps(
@@ -288,8 +339,8 @@ def command_promote_slave(args: argparse.Namespace) -> int:
                 "ok": ok,
                 "state_file": str(state_path),
                 "blockers": blockers,
-                "master": master,
-                "slave": slave,
+                "primary": primary,
+                "secondary": secondary,
                 "switch_result": switch_result,
                 "fleet_results": fleet_results,
             },
@@ -304,19 +355,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("status", "restore-slave", "promote-slave"):
+    for name in ("status", "restore-secondary", "promote-secondary", "restore-slave", "promote-slave"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--json", action="store_true")
         cmd.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
         cmd.add_argument("--state-file")
-        if name in {"restore-slave", "promote-slave"}:
+        if name in {"restore-secondary", "promote-secondary", "restore-slave", "promote-slave"}:
             cmd.add_argument("--dry-run", action="store_true")
             cmd.add_argument("--command-timeout", type=int, default=900)
-        if name == "promote-slave":
+        if name in {"promote-secondary", "promote-slave"}:
             cmd.add_argument("--force", action="store_true")
     sub.choices["status"].set_defaults(func=command_status)
-    sub.choices["restore-slave"].set_defaults(func=command_restore_slave)
-    sub.choices["promote-slave"].set_defaults(func=command_promote_slave)
+    sub.choices["restore-secondary"].set_defaults(func=command_restore_secondary)
+    sub.choices["promote-secondary"].set_defaults(func=command_promote_secondary)
+    sub.choices["restore-slave"].set_defaults(func=command_restore_secondary)
+    sub.choices["promote-slave"].set_defaults(func=command_promote_secondary)
 
     args = parser.parse_args(argv)
     try:
