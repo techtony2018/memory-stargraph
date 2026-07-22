@@ -6,6 +6,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import shutil
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,7 +45,7 @@ class MemoryStargraphAlertMonitorTests(unittest.TestCase):
         )
         curl.chmod(0o755)
 
-    def run_monitor(self, home: Path, *, dry_run=True, extra_env=None, extra_args=None):
+    def run_monitor(self, home: Path, *, dry_run=True, extra_env=None, extra_args=None, script: Path = SCRIPT):
         env = os.environ.copy()
         env.update(
             {
@@ -60,7 +61,7 @@ class MemoryStargraphAlertMonitorTests(unittest.TestCase):
             env.update(extra_env)
         args = [
             sys.executable,
-            str(SCRIPT),
+            str(script),
             "once",
             "--json",
             "--failure-threshold",
@@ -159,6 +160,36 @@ class MemoryStargraphAlertMonitorTests(unittest.TestCase):
                 payload["targets"][0]["health_source_details"],
                 "missing_but_index_readback_verified",
             )
+
+    def test_failover_hook_runs_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            bin_dir = home / "bin"
+            bin_dir.mkdir()
+            self.make_fake_curl(bin_dir, cached=True)
+            isolated_dir = home / "monitor"
+            isolated_dir.mkdir()
+            monitor_copy = isolated_dir / "memory_stargraph_alert_monitor.py"
+            failover_copy = isolated_dir / "memory_stargraph_failover.py"
+            shutil.copy2(SCRIPT, monitor_copy)
+            shutil.copy2(ROOT / "scripts/automation/memory_stargraph_failover.py", failover_copy)
+
+            result = self.run_monitor(
+                home,
+                script=monitor_copy,
+                extra_env={
+                    "MEMORY_STARGRAPH_FAILOVER_ON_ALERT": "1",
+                    "MEMORY_STARGRAPH_MASTER_URL": "http://master.test",
+                    "MEMORY_STARGRAPH_SLAVE_URL": "http://slave.test",
+                    "MEMORY_STARGRAPH_SLAVE_RESTORE_COMMAND": "true",
+                    "MEMORY_STARGRAPH_FAILOVER_SWITCH_COMMAND": "true",
+                    "MEMORY_STARGRAPH_FLEET_CHECK_URLS": "http://slave.test",
+                },
+            )
+            self.assertEqual(result.returncode, 2, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["failover_result"]["enabled"])
+            self.assertNotEqual(payload["failover_result"]["status"], "not_configured")
 
 
 if __name__ == "__main__":

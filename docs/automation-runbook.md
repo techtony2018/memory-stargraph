@@ -197,6 +197,14 @@ must use the same suppress/clear commands around documented restart, rollback,
 failover, or network-route remediation steps so Tony is alerted for unattended
 problems rather than expected maintenance.
 
+Warm-standby GBrain authority is documented in
+`docs/memory-stargraph-gbrain-warm-standby-runbook.md`. A slave Mac mini may be
+restored daily from backup and promoted only through the configured failover
+helper after master failure, fresh slave restore/readiness, and post-switch
+fleet verification are proven. This is warm standby, not multi-primary
+replication; automatic failback is forbidden until a reconciliation path is
+tested.
+
 Weekly work adds gradual synthetic load, isolated temporary restore rehearsal,
 and one safe fault at a time on an explicitly synthetic, disposable, or
 redundant target. Without a safe target it records

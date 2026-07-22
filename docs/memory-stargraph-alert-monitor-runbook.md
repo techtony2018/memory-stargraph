@@ -101,6 +101,32 @@ The installer copies the runnable monitor script into the same private
 launchd. This avoids macOS privacy restrictions that can prevent LaunchAgents
 from reading scripts directly from `~/Documents`.
 
+It also copies `memory_stargraph_failover.py` into that directory so the alert
+monitor can run the optional warm-standby promotion hook without needing access
+to the repository checkout.
+
+## Optional warm-standby failover
+
+Warm-standby setup is documented in
+`docs/memory-stargraph-gbrain-warm-standby-runbook.md`.
+
+Keep failover disabled until the private master/slave URLs, daily restore
+command, switch command, and fleet verification URLs are configured and tested:
+
+```bash
+MEMORY_STARGRAPH_FAILOVER_ON_ALERT=0
+```
+
+When set to `1`, a persistent alert invokes:
+
+```bash
+python3 memory_stargraph_failover.py promote-slave --json
+```
+
+The promotion helper still refuses to switch if the master is healthy, the
+slave is unhealthy, the slave restore is stale, or post-switch fleet checks
+fail. The alert email includes the failover hook result.
+
 ## Suppressing expected maintenance windows
 
 Normal deployments and SRE operations should suppress alerts before they mutate

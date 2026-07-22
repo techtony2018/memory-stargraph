@@ -309,6 +309,26 @@ def render_email(now: dt.datetime, failing: list[dict[str, Any]], all_results: l
     return subject, "\n".join(lines)
 
 
+def run_failover_hook(config: dict[str, str], *, dry_run: bool) -> dict[str, Any]:
+    if config.get("MEMORY_STARGRAPH_FAILOVER_ON_ALERT", "0") != "1":
+        return {"enabled": False, "status": "not_configured"}
+    script = Path(__file__).with_name("memory_stargraph_failover.py")
+    if not script.exists():
+        return {"enabled": True, "ok": False, "status": "missing_failover_script", "script": str(script)}
+    cmd = [sys.executable, str(script), "promote-slave", "--json"]
+    if dry_run:
+        cmd.append("--dry-run")
+    result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    return {
+        "enabled": True,
+        "ok": result.returncode == 0,
+        "status": "completed" if result.returncode == 0 else "failed_or_blocked",
+        "returncode": result.returncode,
+        "stdout_tail": result.stdout[-3000:],
+        "stderr_tail": result.stderr[-3000:],
+    }
+
+
 def send_email(config: dict[str, str], subject: str, body: str) -> str:
     recipient = config.get("MEMORY_STARGRAPH_ALERT_EMAIL_TO", "").strip()
     if not recipient:
@@ -375,10 +395,19 @@ def run_once(args: argparse.Namespace) -> int:
     if persistent:
         subject, body = render_email(now, persistent, results)
     if should_alert:
+        failover_result = run_failover_hook(config, dry_run=args.dry_run)
+        if failover_result.get("enabled"):
+            body = (
+                body
+                + "\n\nFailover hook result:\n"
+                + json.dumps(failover_result, indent=2, sort_keys=True)
+            )
         if args.dry_run:
             email_status = "dry_run"
         else:
             email_status = send_email(config, subject, body)
+    else:
+        failover_result = {"enabled": False, "status": "not_run"}
 
     state.update(
         {
@@ -388,6 +417,7 @@ def run_once(args: argparse.Namespace) -> int:
             "suppressed": suppressed,
             "suppress_reason": suppress_reason,
             "last_signature": signature,
+            "last_failover_result": failover_result,
         }
     )
     if should_alert:
@@ -407,6 +437,7 @@ def run_once(args: argparse.Namespace) -> int:
         "suppressed": suppressed,
         "suppress_reason": suppress_reason,
         "email_status": email_status,
+        "failover_result": failover_result,
         "state_file": str(state_path),
         "suppress_file": str(suppress_path),
         "targets": results,
