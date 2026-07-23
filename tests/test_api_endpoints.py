@@ -271,6 +271,59 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("history", call_names)
         self.assertIn("refresh_embedding", call_names)
 
+    def test_gbrain_backend_config_exposes_primary_and_persists_validated_selection(self):
+        fake_store = FakeStore()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "local.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "gbrain_path": "/tmp/gbrain-primary",
+                        "gbrain_backend_choices": [
+                            {
+                                "id": "primary",
+                                "label": "Primary",
+                                "role": "primary",
+                                "gbrain_path": "/tmp/gbrain-primary",
+                                "write_authority": "primary",
+                            }
+                        ],
+                    }
+                )
+            )
+            with (
+                mock.patch.dict("os.environ", {"MEMORY_STARGRAPH_CONFIG": str(config_path)}),
+                mock.patch("server.run_gbrain_binary", return_value="# Index\n"),
+                mock.patch("server.validate_memory_stargraph_service", return_value={"ok": True, "skipped": True}),
+                mock.patch("server.STORE", fake_store),
+            ):
+                status, data = self.dispatch_get("/api/gbrain-backend-config")
+                self.assertEqual(status, 200)
+                self.assertTrue(data["ok"])
+                self.assertEqual(data["current_backend"]["label"], "Primary")
+
+                status, data = self.dispatch_post("/api/gbrain-backend-config", {"backend_id": "primary"})
+
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            saved = json.loads(config_path.read_text())
+            self.assertEqual(saved["gbrain_backend_id"], "primary")
+            self.assertEqual(saved["gbrain_path"], "/tmp/gbrain-primary")
+            self.assertTrue(data["validation"]["gbrain_cli_readback"])
+
+    def test_gbrain_backend_config_requires_ack_for_non_primary_backend(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "local.json"
+            config_path.write_text(json.dumps({"gbrain_path": "/tmp/gbrain-primary"}))
+            with mock.patch.dict("os.environ", {"MEMORY_STARGRAPH_CONFIG": str(config_path)}):
+                status, data = self.dispatch_post(
+                    "/api/gbrain-backend-config",
+                    {"backend_id": "custom", "custom_label": "Secondary test", "custom_gbrain_path": "/tmp/gbrain-secondary"},
+                )
+
+        self.assertEqual(status, 400)
+        self.assertIn("split-brain", data["error"])
+
     def test_entity_create_does_not_create_relationships_from_ui_context(self):
         fake_store = FakeStore()
         payload = {

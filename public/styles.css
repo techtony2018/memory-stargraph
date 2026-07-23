@@ -1303,10 +1303,20 @@ h2 {
   min-width: 72px;
 }
 
-.yoda-model-status {
+.yoda-model-status,
+.gbrain-backend-status {
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.gbrain-authority-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .yoda-prompt-editor {

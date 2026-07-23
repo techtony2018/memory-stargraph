@@ -45,6 +45,8 @@ DEFAULT_CONFIG = {
     "gbrain_file_store_roots": [],
     "gbrain_files_bridge_ssh": "",
     "gbrain_files_bridge_path": "gbrain",
+    "gbrain_backend_id": "primary",
+    "gbrain_backend_choices": [],
     "media_fetch_timeout_seconds": 8,
     "max_upload_bytes": 25 * 1024 * 1024,
     "yoda_backend": "openclaw",
@@ -96,6 +98,18 @@ def write_local_config_file(config):
     with path.open("w") as handle:
         json.dump(config, handle, indent=2)
         handle.write("\n")
+
+
+def apply_runtime_config(config):
+    global CONFIG, GBRAIN, MAX_LIST_PAGES, GRAPH_DEPTH, GRAPH_STALE_SECONDS, GRAPH_COMMAND_LIMIT, GRAPH_COMMAND_PAUSE_SECONDS
+    CONFIG = dict(DEFAULT_CONFIG)
+    CONFIG.update({key: value for key, value in dict(config or {}).items() if value is not None})
+    GBRAIN = Path(str(CONFIG["gbrain_path"])).expanduser()
+    MAX_LIST_PAGES = int(CONFIG["max_list_pages"])
+    GRAPH_DEPTH = int(CONFIG["graph_depth"])
+    GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
+    GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
+    GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
 
 
 CONFIG = load_config()
@@ -156,7 +170,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.155"
+UI_VERSION = "V1.0.156"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -1087,6 +1101,189 @@ def run_gbrain(*args, input_text=None, timeout=20):
         message = stderr or stdout or f"gbrain exited with status {result.returncode}"
         raise RuntimeError(message)
     return decode_process_output(result.stdout)
+
+
+def run_gbrain_binary(gbrain_path, *args, timeout=20):
+    binary = Path(str(gbrain_path or "")).expanduser()
+    if not binary.exists():
+        raise FileNotFoundError(f"gbrain not found at {binary}")
+    env = os.environ.copy()
+    bun_bin = Path.home() / ".bun" / "bin"
+    env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
+    result = subprocess.run(
+        [str(binary), *args],
+        cwd=ROOT,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env=env,
+    )
+    if result.returncode != 0:
+        stderr = decode_process_output(result.stderr).strip()
+        stdout = decode_process_output(result.stdout).strip()
+        raise RuntimeError(stderr or stdout or f"gbrain exited with status {result.returncode}")
+    return decode_process_output(result.stdout)
+
+
+def safe_public_backend_record(record, *, fallback_path=None):
+    item = dict(record or {})
+    backend_id = normalize_slug(item.get("id") or item.get("label") or "primary")
+    label = str(item.get("label") or backend_id.replace("-", " ").title()).strip()
+    role = str(item.get("role") or ("primary" if backend_id == "primary" else "custom")).strip().lower()
+    gbrain_path = str(item.get("gbrain_path") or fallback_path or "").strip()
+    service_url = str(item.get("service_url") or "").strip().rstrip("/")
+    write_authority = str(item.get("write_authority") or ("primary" if role == "primary" else "non_primary")).strip()
+    return {
+        "id": backend_id,
+        "label": label,
+        "role": role,
+        "gbrain_path": gbrain_path,
+        "service_url": service_url,
+        "write_authority": write_authority,
+        "requires_split_brain_ack": role != "primary" or write_authority != "primary",
+    }
+
+
+def configured_gbrain_backends(config=None):
+    config = config or load_config()
+    choices = config.get("gbrain_backend_choices") or []
+    if not isinstance(choices, list):
+        choices = []
+    backends = [safe_public_backend_record(item) for item in choices if isinstance(item, dict)]
+    if not any(item["id"] == "primary" for item in backends):
+        backends.insert(
+            0,
+            safe_public_backend_record(
+                {
+                    "id": "primary",
+                    "label": "Primary",
+                    "role": "primary",
+                    "gbrain_path": config.get("gbrain_path"),
+                    "service_url": config.get("primary_service_url", ""),
+                    "write_authority": "primary",
+                }
+            ),
+        )
+    current_path = str(config.get("gbrain_path") or DEFAULT_CONFIG["gbrain_path"])
+    for item in backends:
+        if not item.get("gbrain_path"):
+            item["gbrain_path"] = current_path
+    return backends
+
+
+def current_gbrain_backend(config=None):
+    config = config or load_config()
+    backends = configured_gbrain_backends(config)
+    selected_id = str(config.get("gbrain_backend_id") or "primary").strip()
+    selected = next((item for item in backends if item["id"] == selected_id), None)
+    if selected is None:
+        selected = safe_public_backend_record(
+            {
+                "id": "custom",
+                "label": "Custom",
+                "role": "custom",
+                "gbrain_path": config.get("gbrain_path"),
+                "service_url": config.get("gbrain_backend_service_url", ""),
+                "write_authority": config.get("gbrain_backend_write_authority", "custom"),
+            }
+        )
+    return selected
+
+
+def validate_memory_stargraph_service(service_url, timeout=8):
+    if not service_url:
+        return {"ok": True, "skipped": True}
+    base_url = service_url.rstrip("/")
+    health_request = Request(f"{base_url}/api/health", headers={"Accept": "application/json"})
+    with urlopen(health_request, timeout=timeout) as response:
+        health = json.loads(response.read().decode("utf-8") or "{}")
+    if not health.get("ok"):
+        raise RuntimeError("service /api/health returned ok=false")
+    raw_request = Request(f"{base_url}/api/entity-raw/{quote(ROOT_INDEX_SLUG, safe='')}", headers={"Accept": "application/json"})
+    with urlopen(raw_request, timeout=timeout) as response:
+        raw = json.loads(response.read().decode("utf-8") or "{}")
+    if raw.get("slug") != ROOT_INDEX_SLUG:
+        raise RuntimeError("service index readback did not return index")
+    source = health.get("source") or {}
+    return {
+        "ok": True,
+        "health_ok": health.get("ok"),
+        "ui_version": health.get("ui_version"),
+        "source_mode": source.get("mode"),
+        "source_status": source.get("status"),
+        "index_readback": True,
+    }
+
+
+def validate_gbrain_backend_record(record):
+    backend = safe_public_backend_record(record)
+    validation = {"backend_id": backend["id"], "validated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    output = run_gbrain_binary(backend["gbrain_path"], "get", ROOT_INDEX_SLUG, timeout=20)
+    if ROOT_INDEX_SLUG not in output and "# " not in output:
+        raise RuntimeError("gbrain index readback returned unexpected content")
+    validation["gbrain_cli_readback"] = True
+    validation["service"] = validate_memory_stargraph_service(backend.get("service_url", ""))
+    validation["requires_split_brain_ack"] = backend["requires_split_brain_ack"]
+    return validation
+
+
+def public_gbrain_backend_config():
+    config = load_config()
+    backends = configured_gbrain_backends(config)
+    current = current_gbrain_backend(config)
+    return {
+        "current_backend_id": current["id"],
+        "current_backend": current,
+        "backends": backends,
+        "custom_supported": True,
+        "config_path": str(config_path()),
+        "split_brain_warning": "Only Primary is the normal write authority. Use Secondary/test or custom backends only for verified testing or approved failover.",
+    }
+
+
+def save_gbrain_backend_config(payload):
+    payload = payload or {}
+    config = read_local_config_file()
+    merged = load_config()
+    selected_id = normalize_slug(payload.get("backend_id") or "primary")
+    backends = configured_gbrain_backends(merged)
+    selected = next((item for item in backends if item["id"] == selected_id), None)
+    if selected_id == "custom":
+        selected = safe_public_backend_record(
+            {
+                "id": "custom",
+                "label": payload.get("custom_label") or "Custom",
+                "role": "custom",
+                "gbrain_path": payload.get("custom_gbrain_path") or payload.get("gbrain_path"),
+                "service_url": payload.get("custom_service_url") or payload.get("service_url") or "",
+                "write_authority": payload.get("write_authority") or "custom",
+            }
+        )
+    if selected is None:
+        raise ValueError("Choose a configured GBrain backend or Custom.")
+    if selected["requires_split_brain_ack"] and not payload.get("acknowledge_split_brain_risk"):
+        raise ValueError("Acknowledge split-brain/write-authority risk before using a non-Primary backend.")
+    validation = validate_gbrain_backend_record(selected)
+    config.update(
+        {
+            "gbrain_backend_id": selected["id"],
+            "gbrain_path": selected["gbrain_path"],
+            "gbrain_backend_label": selected["label"],
+            "gbrain_backend_role": selected["role"],
+            "gbrain_backend_service_url": selected.get("service_url", ""),
+            "gbrain_backend_write_authority": selected.get("write_authority", ""),
+            "gbrain_backend_validated_at": validation["validated_at"],
+        }
+    )
+    if selected["id"] == "custom":
+        config["gbrain_backend_custom"] = selected
+    write_local_config_file(config)
+    apply_runtime_config(load_config())
+    try:
+        STORE.graph = STORE.get_seed_graph(force=True)
+    except Exception:
+        STORE.graph = {}
+    return {**public_gbrain_backend_config(), "validation": validation}
 
 
 def extract_json_object(text):
@@ -4956,6 +5153,11 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 return self.end_json({"ok": True, **public_yoda_model_config()})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/gbrain-backend-config":
+            try:
+                return self.end_json({"ok": True, **public_gbrain_backend_config()})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path == "/api/yoda-system-prompt":
             try:
                 return self.end_json({"ok": True, **yoda_system_prompt_state()})
@@ -5109,6 +5311,14 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             try:
                 payload = self.read_json_body()
                 return self.end_json({"ok": True, **save_yoda_model_config(payload)})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path == "/api/gbrain-backend-config":
+            try:
+                payload = self.read_json_body()
+                return self.end_json({"ok": True, **save_gbrain_backend_config(payload)})
             except ValueError as exc:
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001

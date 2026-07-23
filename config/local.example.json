@@ -16,6 +16,25 @@
   "gbrain_file_store_roots": [],
   "gbrain_files_bridge_ssh": "",
   "gbrain_files_bridge_path": "gbrain",
+  "gbrain_backend_id": "primary",
+  "gbrain_backend_choices": [
+    {
+      "id": "primary",
+      "label": "Primary",
+      "role": "primary",
+      "gbrain_path": "/opt/homebrew/bin/gbrain",
+      "service_url": "",
+      "write_authority": "primary"
+    },
+    {
+      "id": "secondary-test",
+      "label": "Secondary/test",
+      "role": "secondary",
+      "gbrain_path": "/opt/homebrew/bin/gbrain",
+      "service_url": "",
+      "write_authority": "non_primary"
+    }
+  ],
   "media_fetch_timeout_seconds": 8,
   "max_upload_bytes": 26214400,
   "yoda_backend": "openclaw",

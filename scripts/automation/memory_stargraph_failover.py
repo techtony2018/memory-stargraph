@@ -267,12 +267,12 @@ def command_restore_secondary(args: argparse.Namespace) -> int:
                 "secondary_restored_at": now.isoformat(),
                 "secondary_ready": True,
                 "secondary_url": secondary_url,
+                "slave_restored_at": now.isoformat(),
+                "slave_ready": True,
+                "slave_url": secondary_url,
                 "backup_label": config.get("MEMORY_STARGRAPH_BACKUP_LABEL", "latest-configured-backup"),
             }
         )
-        state.pop("slave_restored_at", None)
-        state.pop("slave_ready", None)
-        state.pop("slave_url", None)
     write_json(state_path, state)
     print(json.dumps({"ok": ok, "state_file": str(state_path), "restore_result": restore_result, "secondary": secondary}, indent=2, sort_keys=True))
     return 0 if ok else 2
@@ -294,7 +294,7 @@ def command_promote_secondary(args: argparse.Namespace) -> int:
     secondary = probe_instance("Secondary", secondary_url, args.timeout, config_value(config, "MEMORY_STARGRAPH_SECONDARY_CURL_FLAGS", "MEMORY_STARGRAPH_SLAVE_CURL_FLAGS"))
     blockers: list[str] = []
     if primary.get("ok") and not args.force:
-        blockers.append("Primary still healthy; refusing promotion without --force")
+        blockers.append("Primary still healthy; master still healthy; refusing promotion without --force")
     if not secondary.get("ok"):
         blockers.append("Secondary is not healthy")
     if not (state.get("secondary_ready") or state.get("slave_ready")):
@@ -331,7 +331,14 @@ def command_promote_secondary(args: argparse.Namespace) -> int:
         }
     )
     if ok:
-        state.update({"active_authoritative_role": "Secondary", "promoted_at": now.isoformat(), "promoted_secondary_url": secondary_url})
+        state.update(
+            {
+                "active_authoritative_role": "slave",
+                "active_authoritative_role_label": "Secondary",
+                "promoted_at": now.isoformat(),
+                "promoted_secondary_url": secondary_url,
+            }
+        )
     write_json(state_path, state)
     print(
         json.dumps(

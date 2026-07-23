@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.155";
+const UI_VERSION = "V1.0.156";
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -221,6 +221,7 @@ const modalYodaClearHistoryButton = document.getElementById("modalYodaClearHisto
 const settingsYodaLogButton = document.getElementById("settingsYodaLogButton");
 const settingsYodaModelButton = document.getElementById("settingsYodaModelButton");
 const settingsYodaPromptButton = document.getElementById("settingsYodaPromptButton");
+const settingsGbrainBackendButton = document.getElementById("settingsGbrainBackendButton");
 const settingsDiagnosticsButton = document.getElementById("settingsDiagnosticsButton");
 const sampleBrainButton = document.getElementById("sampleBrainButton");
 const memoryDigestButton = document.getElementById("memoryDigestButton");
@@ -4181,6 +4182,84 @@ function renderYodaModelForm(config = {}) {
   updateStatus();
 }
 
+function renderGbrainBackendForm(config = {}) {
+  modalForm.innerHTML = "";
+  const backends = Array.isArray(config.backends) ? config.backends : [];
+  const current = config.current_backend || {};
+
+  const backendSelect = document.createElement("select");
+  backendSelect.id = "operationGbrainBackend";
+  backends.forEach((backend) => {
+    const option = document.createElement("option");
+    option.value = backend.id;
+    option.textContent = `${backend.label || backend.id} · ${backend.role || "backend"}`;
+    backendSelect.appendChild(option);
+  });
+  const customOption = document.createElement("option");
+  customOption.value = "custom";
+  customOption.textContent = "Custom explicit backend";
+  backendSelect.appendChild(customOption);
+  backendSelect.value = config.current_backend_id || current.id || "primary";
+
+  const customLabelInput = document.createElement("input");
+  customLabelInput.id = "operationGbrainCustomLabel";
+  customLabelInput.placeholder = "Custom label";
+  customLabelInput.value = current.id === "custom" ? current.label || "" : "";
+
+  const customPathInput = document.createElement("input");
+  customPathInput.id = "operationGbrainCustomPath";
+  customPathInput.placeholder = "/opt/homebrew/bin/gbrain";
+  customPathInput.value = current.id === "custom" ? current.gbrain_path || "" : "";
+
+  const serviceUrlInput = document.createElement("input");
+  serviceUrlInput.id = "operationGbrainServiceUrl";
+  serviceUrlInput.placeholder = "Optional Memory Stargraph service URL";
+  serviceUrlInput.value = current.service_url || "";
+
+  const acknowledgeWrap = document.createElement("label");
+  acknowledgeWrap.className = "operation-checkbox gbrain-authority-ack";
+  const acknowledgeInput = document.createElement("input");
+  acknowledgeInput.id = "operationGbrainSplitBrainAck";
+  acknowledgeInput.type = "checkbox";
+  const acknowledgeText = document.createElement("span");
+  acknowledgeText.textContent = "I understand this may use a non-Primary write authority and can create split-brain state.";
+  acknowledgeWrap.append(acknowledgeInput, acknowledgeText);
+
+  const status = document.createElement("p");
+  status.className = "operation-summary gbrain-backend-status";
+
+  appendField(modalForm, "Backend", backendSelect);
+  appendField(modalForm, "Custom label", customLabelInput);
+  appendField(modalForm, "Custom gbrain path", customPathInput);
+  appendField(modalForm, "Service URL", serviceUrlInput);
+  modalForm.appendChild(acknowledgeWrap);
+  modalForm.appendChild(status);
+
+  const backendById = new Map(backends.map((backend) => [backend.id, backend]));
+  const updateStatus = () => {
+    const selected = backendById.get(backendSelect.value) || (backendSelect.value === "custom" ? {
+      id: "custom",
+      label: customLabelInput.value || "Custom",
+      role: "custom",
+      gbrain_path: customPathInput.value,
+      service_url: serviceUrlInput.value,
+      requires_split_brain_ack: true,
+    } : {});
+    const custom = backendSelect.value === "custom";
+    customLabelInput.closest("label").hidden = !custom;
+    customPathInput.closest("label").hidden = !custom;
+    serviceUrlInput.closest("label").hidden = !custom && !selected.service_url;
+    serviceUrlInput.value = custom ? serviceUrlInput.value : selected.service_url || "";
+    acknowledgeWrap.hidden = !selected.requires_split_brain_ack;
+    status.textContent = selected.requires_split_brain_ack
+      ? `${selected.label || "Selected backend"} is not the normal Primary write authority. Validation must pass and the split-brain warning must be acknowledged before saving.`
+      : `${selected.label || "Primary"} is the normal Primary backend. Save validates GBrain CLI readback and service readback when configured.`;
+  };
+  [backendSelect, customLabelInput, customPathInput, serviceUrlInput].forEach((input) => input.addEventListener("input", updateStatus));
+  backendSelect.addEventListener("change", updateStatus);
+  updateStatus();
+}
+
 function relationshipTypeSelectorState(selectorId) {
   return slugSelectorState(selectorId);
 }
@@ -5632,7 +5711,7 @@ function closeModal() {
 
 async function openNodeModal(action, slug = state.focusSlug) {
   hideContextMenu();
-  if (!["new-node", "tour-plan", "yoda-model"].includes(action) && !slug) return;
+  if (!["new-node", "tour-plan", "yoda-model", "gbrain-backend"].includes(action) && !slug) return;
   const node = state.nodeMap.get(slug);
   const label = node?.label || slug;
   state.modalAction = { action, slug, label };
@@ -5740,6 +5819,34 @@ async function openNodeModal(action, slug = state.focusSlug) {
       if (!response.ok) throw new Error(response.data?.error || `Config load failed with ${response.status}`);
       renderYodaModelForm(response.data);
       modalForm.querySelector("#operationYodaBackend")?.focus();
+    } catch (error) {
+      modalMessage.textContent = error.message || String(error);
+    }
+    return;
+  }
+
+  if (action === "gbrain-backend") {
+    state.modalAction = { action, slug: state.focusSlug || "", label: "GBrain Backend" };
+    modalTitle.textContent = "GBrain Backend";
+    modalKicker.textContent = "Settings";
+    modalPrimaryButton.hidden = false;
+    modalPrimaryButton.disabled = false;
+    modalCancelButton.hidden = false;
+    modalCancelButton.disabled = false;
+    modalPrimaryButton.textContent = "Validate & Save";
+    modalCancelButton.textContent = "Cancel";
+    modalMessage.textContent = "Choose the Memory Stargraph GBrain authority. Non-Primary backends require explicit split-brain acknowledgement.";
+    modalEditor.hidden = true;
+    modalForm.hidden = false;
+    operationModal.classList.add("compact-modal");
+    setModalControlTooltips("Validate and save GBrain backend", "Cancel");
+    operationModal.hidden = false;
+    renderGbrainBackendForm({});
+    try {
+      const response = await apiGet("/api/gbrain-backend-config");
+      if (!response.ok) throw new Error(response.data?.error || `Backend config load failed with ${response.status}`);
+      renderGbrainBackendForm(response.data);
+      modalForm.querySelector("#operationGbrainBackend")?.focus();
     } catch (error) {
       modalMessage.textContent = error.message || String(error);
     }
@@ -6188,6 +6295,7 @@ async function runModalPrimaryAction() {
     "attach-file": "Attaching file",
     embed: "Refreshing embedding",
     "yoda-model": "Saving Yoda model",
+    "gbrain-backend": "Validating GBrain backend",
   };
   const busyToken = beginBusyOperation(busyLabels[action] || "Working");
   if (action === "attach-file") {
@@ -6234,6 +6342,21 @@ async function runModalPrimaryAction() {
       if (!response.ok) throw new Error(response.data?.error || `Yoda model save failed with ${response.status}`);
       modalMessage.textContent = `Ask Yoda model saved: ${response.data.backend}${response.data.model ? ` · ${response.data.model}` : ""}`;
       await returnFromYodaModel();
+      return;
+    }
+    if (action === "gbrain-backend") {
+      const payload = {
+        backend_id: modalForm.querySelector("#operationGbrainBackend")?.value || "primary",
+        custom_label: modalForm.querySelector("#operationGbrainCustomLabel")?.value.trim() || "",
+        custom_gbrain_path: modalForm.querySelector("#operationGbrainCustomPath")?.value.trim() || "",
+        custom_service_url: modalForm.querySelector("#operationGbrainServiceUrl")?.value.trim() || "",
+        acknowledge_split_brain_risk: Boolean(modalForm.querySelector("#operationGbrainSplitBrainAck")?.checked),
+      };
+      const response = await apiPost("/api/gbrain-backend-config", payload);
+      if (!response.ok) throw new Error(response.data?.error || `GBrain backend save failed with ${response.status}`);
+      modalMessage.textContent = `GBrain backend saved: ${response.data.current_backend?.label || response.data.current_backend_id}`;
+      closeModal();
+      await fetchGraph("/api/refresh", { preserveFocus: true, preferredFocus: state.focusSlug });
       return;
     }
     if (action === "yoda-prompt") {
@@ -6807,6 +6930,9 @@ function bindEvents() {
   });
   settingsYodaModelButton?.addEventListener("click", () => {
     void openYodaModelWindow();
+  });
+  settingsGbrainBackendButton?.addEventListener("click", () => {
+    void openNodeModal("gbrain-backend", state.focusSlug || "");
   });
   settingsYodaPromptButton?.addEventListener("click", () => {
     void openYodaPromptWindow();
