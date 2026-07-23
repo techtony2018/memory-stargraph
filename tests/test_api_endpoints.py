@@ -324,6 +324,19 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("split-brain", data["error"])
 
+    def test_gbrain_backend_config_infers_secondary_authority_from_secondary_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "local.json"
+            config_path.write_text(json.dumps({"gbrain_path": "/Users/toddy/.gbrain-secondary-home/bin/gbrain-secondary"}))
+            with mock.patch.dict("os.environ", {"MEMORY_STARGRAPH_CONFIG": str(config_path)}):
+                status, data = self.dispatch_get("/api/gbrain-backend-config")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["current_backend"]["label"], "Secondary/test")
+        self.assertEqual(data["current_backend"]["role"], "secondary")
+        self.assertEqual(data["current_backend"]["write_authority"], "non_primary")
+        self.assertTrue(data["current_backend"]["requires_split_brain_ack"])
+
     def test_entity_create_does_not_create_relationships_from_ui_context(self):
         fake_store = FakeStore()
         payload = {

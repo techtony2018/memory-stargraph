@@ -1144,23 +1144,31 @@ def safe_public_backend_record(record, *, fallback_path=None):
     }
 
 
+def infer_gbrain_backend_defaults(gbrain_path):
+    lower_path = str(gbrain_path or "").lower()
+    if any(token in lower_path for token in ("secondary", "slave", "test")):
+        return {"id": "secondary-test", "label": "Secondary/test", "role": "secondary", "write_authority": "non_primary"}
+    return {"id": "primary", "label": "Primary", "role": "primary", "write_authority": "primary"}
+
+
 def configured_gbrain_backends(config=None):
     config = config or load_config()
     choices = config.get("gbrain_backend_choices") or []
     if not isinstance(choices, list):
         choices = []
     backends = [safe_public_backend_record(item) for item in choices if isinstance(item, dict)]
-    if not any(item["id"] == "primary" for item in backends):
+    if not backends:
+        inferred = infer_gbrain_backend_defaults(config.get("gbrain_path"))
         backends.insert(
             0,
             safe_public_backend_record(
                 {
-                    "id": "primary",
-                    "label": "Primary",
-                    "role": "primary",
+                    "id": config.get("gbrain_backend_id") or inferred["id"],
+                    "label": config.get("gbrain_backend_label") or inferred["label"],
+                    "role": config.get("gbrain_backend_role") or inferred["role"],
                     "gbrain_path": config.get("gbrain_path"),
                     "service_url": config.get("primary_service_url", ""),
-                    "write_authority": "primary",
+                    "write_authority": config.get("gbrain_backend_write_authority") or inferred["write_authority"],
                 }
             ),
         )
@@ -1177,16 +1185,22 @@ def current_gbrain_backend(config=None):
     selected_id = str(config.get("gbrain_backend_id") or "primary").strip()
     selected = next((item for item in backends if item["id"] == selected_id), None)
     if selected is None:
-        selected = safe_public_backend_record(
-            {
-                "id": "custom",
-                "label": "Custom",
-                "role": "custom",
-                "gbrain_path": config.get("gbrain_path"),
-                "service_url": config.get("gbrain_backend_service_url", ""),
-                "write_authority": config.get("gbrain_backend_write_authority", "custom"),
-            }
-        )
+        custom = config.get("gbrain_backend_custom")
+        if isinstance(custom, dict):
+            selected = safe_public_backend_record(custom, fallback_path=config.get("gbrain_path"))
+        elif backends:
+            selected = backends[0]
+        else:
+            selected = safe_public_backend_record(
+                {
+                    "id": "custom",
+                    "label": "Custom",
+                    "role": "custom",
+                    "gbrain_path": config.get("gbrain_path"),
+                    "service_url": config.get("gbrain_backend_service_url", ""),
+                    "write_authority": config.get("gbrain_backend_write_authority", "custom"),
+                }
+            )
     return selected
 
 
