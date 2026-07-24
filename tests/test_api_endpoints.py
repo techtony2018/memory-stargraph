@@ -490,6 +490,8 @@ class ApiEndpointTests(unittest.TestCase):
                 },
                 "context_degraded": True,
                 "context_degraded_reason": "broad_graph_timeout",
+                "broad_graph_status": "optional_timeout",
+                "broad_graph_unavailable_reason": "broad_graph_timeout",
                 "broad_graph_budget_ms": 8000,
                 "prompt": "private prompt body",
                 "context_source_slugs": ["private/node"],
@@ -501,6 +503,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(safe["context_counts"]["prompt_chars"], 1200)
         self.assertTrue(safe["context_degraded"])
         self.assertEqual(safe["context_degraded_reason"], "broad_graph_timeout")
+        self.assertEqual(safe["broad_graph_status"], "optional_timeout")
+        self.assertEqual(safe["broad_graph_unavailable_reason"], "broad_graph_timeout")
         self.assertEqual(safe["broad_graph_budget_ms"], 8000)
         self.assertNotIn("prompt", safe)
         self.assertNotIn("context_source_slugs", safe)
@@ -1013,6 +1017,10 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(logs_status, 200)
         self.assertEqual(logs["entries"][0]["request_id"], data["request_id"])
+        self.assertEqual(logs["entries"][0]["environment"], "test")
+        self.assertTrue(logs["entries"][0]["synthetic"])
+        self.assertTrue(logs["entries"][0]["test_run"])
+        self.assertEqual(logs["entries"][0]["pair_id"], "api-probe-1")
         fake_gbrain_call.assert_called_with(
             "resolver_events_submit",
             mock.ANY,
@@ -1032,7 +1040,23 @@ class ApiEndpointTests(unittest.TestCase):
         with mock.patch("server.gbrain_call_tool") as fake_gbrain_call:
             fake_gbrain_call.side_effect = [
                 {"event": {"event_id": "stargraph-1"}, "idempotent": False},
-                {"events": [{"event_id": "stargraph-1", "producer": "stargraph"}], "limit": 2},
+                {
+                    "events": [
+                        {
+                            "event_id": "stargraph-1",
+                            "producer": "stargraph",
+                            "metadata": json.dumps(
+                                {
+                                    "environment": "test",
+                                    "synthetic": True,
+                                    "test_run": True,
+                                    "pair_id": "resolver-probe-1",
+                                }
+                            ),
+                        }
+                    ],
+                    "limit": 2,
+                },
             ]
             status, data = self.dispatch_post(
                 "/api/resolver/events",
@@ -1052,6 +1076,10 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(data["events"][0]["event_id"], "stargraph-1")
+        self.assertEqual(data["events"][0]["environment"], "test")
+        self.assertTrue(data["events"][0]["synthetic"])
+        self.assertTrue(data["events"][0]["test_run"])
+        self.assertEqual(data["events"][0]["pair_id"], "resolver-probe-1")
         self.assertEqual(fake_gbrain_call.call_args_list[0].args[0], "resolver_events_submit")
         submitted = fake_gbrain_call.call_args_list[0].args[1]
         self.assertEqual(submitted["environment"], "production")

@@ -170,7 +170,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.156"
+UI_VERSION = "V1.0.157"
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -552,6 +552,10 @@ def append_yoda_log(slug, entry):
         "captured_at": entry.get("captured_at") or iso_now(),
         "request_id": str(entry.get("request_id") or ""),
         "source": sanitize_text_summary(entry.get("source"), 80),
+        "environment": sanitize_text_summary(entry.get("environment"), 40) or "production",
+        "synthetic": entry.get("synthetic") is True,
+        "test_run": entry.get("test_run") is True,
+        "pair_id": sanitize_text_summary(entry.get("pair_id"), 200),
         "timings": entry.get("timings") if isinstance(entry.get("timings"), dict) else {},
         "diagnostics": sanitize_diagnostics(entry.get("diagnostics") if isinstance(entry.get("diagnostics"), dict) else {}),
     }
@@ -807,6 +811,8 @@ def sanitize_diagnostics(diagnostics):
         "context_counts",
         "context_degraded",
         "context_degraded_reason",
+        "broad_graph_status",
+        "broad_graph_unavailable_reason",
         "broad_graph_budget_ms",
     }
     safe = {}
@@ -1383,7 +1389,26 @@ def resolver_list_events(limit=50, producer=None, outcome=None):
         payload["producer"] = producer
     if outcome:
         payload["outcome"] = outcome
-    return gbrain_call_tool("resolver_events_list", payload, timeout=20)
+    data = gbrain_call_tool("resolver_events_list", payload, timeout=20)
+    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+        return data
+    normalized = dict(data)
+    normalized_events = []
+    for row in data["events"]:
+        event = dict(row) if isinstance(row, dict) else {}
+        metadata = event.get("metadata")
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        if isinstance(metadata, dict):
+            for key in ("environment", "synthetic", "test_run", "pair_id", "operation_path", "client_timestamp"):
+                if key not in event and key in metadata:
+                    event[key] = metadata[key]
+        normalized_events.append(event)
+    normalized["events"] = normalized_events
+    return normalized
 
 
 def normalize_resolver_proposal(row):
@@ -4154,6 +4179,8 @@ class GraphStore:
             started = time.perf_counter()
             degraded = False
             degraded_reason = ""
+            broad_graph_status = "available"
+            broad_graph_unavailable_reason = ""
             try:
                 output = run_gbrain(
                     "graph-query",
@@ -4165,13 +4192,22 @@ class GraphStore:
                     timeout=broad_graph_budget,
                 )
             except Exception as exc:  # noqa: BLE001
-                degraded = True
-                degraded_reason = "broad_graph_timeout" if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else "broad_graph_unavailable"
+                broad_graph_unavailable_reason = "broad_graph_timeout" if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else "broad_graph_unavailable"
+                broad_graph_status = "optional_timeout" if broad_graph_unavailable_reason == "broad_graph_timeout" else "unavailable"
+                degraded = broad_graph_status != "optional_timeout"
+                degraded_reason = "" if broad_graph_status == "optional_timeout" else broad_graph_unavailable_reason
                 output = (
                     "Broad graph context unavailable within retrieval budget. "
                     "Use selected-node, backlink, search, and targeted relationship evidence below."
                 )
-            return output, int((time.perf_counter() - started) * 1000), degraded, degraded_reason
+            return (
+                output,
+                int((time.perf_counter() - started) * 1000),
+                degraded,
+                degraded_reason,
+                broad_graph_status,
+                broad_graph_unavailable_reason,
+            )
 
         def timed_backlinks():
             started = time.perf_counter()
@@ -4186,7 +4222,14 @@ class GraphStore:
             graph_future = executor.submit(timed_graph)
             backlinks_future = executor.submit(timed_backlinks)
             selected_node, selected_ms = selected_future.result()
-            graph_output, graph_ms, degraded, degraded_reason = graph_future.result()
+            (
+                graph_output,
+                graph_ms,
+                degraded,
+                degraded_reason,
+                broad_graph_status,
+                broad_graph_unavailable_reason,
+            ) = graph_future.result()
             backlink_output, backlinks_ms = backlinks_future.result()
         return {
             "selected_node": selected_node,
@@ -4194,6 +4237,8 @@ class GraphStore:
             "backlinks": backlink_output,
             "degraded": degraded,
             "degraded_reason": degraded_reason,
+            "broad_graph_status": broad_graph_status,
+            "broad_graph_unavailable_reason": broad_graph_unavailable_reason,
             "broad_graph_budget_ms": broad_graph_budget * 1000,
             "timings": {
                 "selected_node": selected_ms,
@@ -4501,6 +4546,8 @@ class GraphStore:
             lines.extend(["", "Selected node content:", raw[:6000]])
         graph_text = str(stable_context.get("graph") or "")
         graph_preview = graph_text[:6000]
+        broad_graph_status = str(stable_context.get("broad_graph_status") or "available")
+        broad_graph_unavailable_reason = str(stable_context.get("broad_graph_unavailable_reason") or "")
         lines.extend(
             [
                 "",
@@ -4508,6 +4555,16 @@ class GraphStore:
                 graph_preview,
             ]
         )
+        if broad_graph_status != "available":
+            lines.extend(
+                [
+                    "",
+                    "Broad graph retrieval diagnostics:",
+                    f"- broad_graph_status: {broad_graph_status}",
+                    f"- broad_graph_unavailable_reason: {broad_graph_unavailable_reason or 'none'}",
+                    "- selected-node, backlink, search, direct-read, and targeted relationship evidence remain available when present.",
+                ]
+            )
         backlink_text = str(stable_context.get("backlinks") or "")
         backlink_preview = backlink_text[:4000]
         lines.extend(
@@ -4687,6 +4744,8 @@ class GraphStore:
             },
             "context_degraded": bool(stable_context.get("degraded")),
             "context_degraded_reason": str(stable_context.get("degraded_reason") or ""),
+            "broad_graph_status": str(stable_context.get("broad_graph_status") or "available"),
+            "broad_graph_unavailable_reason": str(stable_context.get("broad_graph_unavailable_reason") or ""),
             "broad_graph_budget_ms": int(stable_context.get("broad_graph_budget_ms") or 0),
             "source": agent_result.get("backend", "model") if isinstance(agent_result, dict) and agent_output else ("openclaw-agent" if agent_output else "fallback"),
             "fallback_used": not bool(agent_output),
@@ -5545,6 +5604,10 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 append_yoda_log(slug, {
                     "request_id": result.get("request_id"),
                     "source": result.get("source"),
+                    "environment": payload.get("environment"),
+                    "synthetic": payload.get("synthetic") is True,
+                    "test_run": payload.get("test_run") is True,
+                    "pair_id": payload.get("pair_id"),
                     "timings": result.get("timings"),
                     "diagnostics": result.get("diagnostics"),
                 })

@@ -140,6 +140,9 @@ def summarize_results(
         "degraded_cold_cases": sum(
             1 for result in results if result.get("cold_context_degraded") is True
         ),
+        "optional_broad_graph_timeouts": sum(
+            1 for result in results if result.get("cold_broad_graph_status") == "optional_timeout"
+        ),
         "max_cache_entries": max(
             (int(result.get("cache_entries_after_warm") or 0) for result in results),
             default=0,
@@ -224,6 +227,8 @@ def run_case(
         "warm_counts": warm_diagnostics["context_counts"],
         "cold_context_degraded": cold_diagnostics["context_degraded"],
         "cold_degraded_reason": cold_diagnostics["context_degraded_reason"],
+        "cold_broad_graph_status": cold_diagnostics.get("broad_graph_status", ""),
+        "cold_broad_graph_unavailable_reason": cold_diagnostics.get("broad_graph_unavailable_reason", ""),
         "broad_graph_budget_ms": cold_diagnostics["broad_graph_budget_ms"],
         "cache_entries_after_warm": len(store.yoda_context_cache),
         "grounding": grounding_result(
@@ -253,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         "median_cold_pass": summary["median_cold_prompt_ms"] <= args.max_median_cold_ms,
         "p95_cold_pass": summary["p95_cold_prompt_ms"] <= args.max_p95_cold_ms,
         "grounding_pass": summary["mean_grounding_recall"] == 1.0,
-        "slow_graph_degraded_pass": summary["degraded_cold_cases"] >= 1,
+        "slow_graph_optional_timeout_pass": summary["optional_broad_graph_timeouts"] >= 1,
         "multi_key_cache_pass": summary["max_cache_entries"] >= 2,
     }
     payload = {

@@ -1339,7 +1339,7 @@ cover_image: companies/example-inc/logo.jpg
             {"selected_node", "graph", "backlinks"},
         )
 
-    def test_yoda_stable_context_bounds_slow_broad_graph_and_marks_degraded(self):
+    def test_yoda_stable_context_bounds_slow_broad_graph_as_optional_timeout(self):
         store = GraphStore()
 
         def gbrain_result(*args, **kwargs):
@@ -1362,8 +1362,10 @@ cover_image: companies/example-inc/logo.jpg
 
         graph_call = next(call for call in run.call_args_list if call.args[0] == "graph-query")
         self.assertEqual(graph_call.kwargs["timeout"], 8)
-        self.assertTrue(context["degraded"])
-        self.assertEqual(context["degraded_reason"], "broad_graph_timeout")
+        self.assertFalse(context["degraded"])
+        self.assertEqual(context["degraded_reason"], "")
+        self.assertEqual(context["broad_graph_status"], "optional_timeout")
+        self.assertEqual(context["broad_graph_unavailable_reason"], "broad_graph_timeout")
         self.assertEqual(context["broad_graph_budget_ms"], 8000)
         self.assertIn("Broad graph context unavailable within retrieval budget", context["graph"])
         self.assertNotIn("forced slow graph traversal", context["graph"])
@@ -1381,6 +1383,8 @@ cover_image: companies/example-inc/logo.jpg
             "timings": {"selected_node": 1, "graph": 1, "backlinks": 1},
             "degraded": False,
             "degraded_reason": "",
+            "broad_graph_status": "available",
+            "broad_graph_unavailable_reason": "",
             "broad_graph_budget_ms": 8000,
         }
         model_result = {

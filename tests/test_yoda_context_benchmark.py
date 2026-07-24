@@ -44,7 +44,7 @@ class YodaContextBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["warm_cache_hits"], 2)
         self.assertAlmostEqual(summary["mean_grounding_recall"], 0.8333, places=4)
 
-    def test_forced_slow_graph_case_is_degraded_but_grounded(self):
+    def test_forced_slow_graph_case_is_optional_timeout_but_grounded(self):
         case = {
             "id": "forced-slow",
             "slug": "people/tony-guan",
@@ -68,8 +68,10 @@ class YodaContextBenchmarkTests(unittest.TestCase):
         with mock.patch.object(benchmark.server, "run_gbrain", side_effect=gbrain_result):
             result = benchmark.run_case(case, store=benchmark.server.GraphStore())
 
-        self.assertTrue(result["cold_context_degraded"])
-        self.assertEqual(result["cold_degraded_reason"], "broad_graph_timeout")
+        self.assertFalse(result["cold_context_degraded"])
+        self.assertEqual(result["cold_degraded_reason"], "")
+        self.assertEqual(result["cold_broad_graph_status"], "optional_timeout")
+        self.assertEqual(result["cold_broad_graph_unavailable_reason"], "broad_graph_timeout")
         self.assertEqual(result["grounding"]["recall"], 1.0)
 
 
