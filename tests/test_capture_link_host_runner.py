@@ -304,6 +304,66 @@ tags:
         self.assertEqual(evidence["metrics"]["successful_enrichments"], 1)
         self.assertIn("people/solo", pages)
 
+    def test_already_sufficient_enrichment_records_exclusion_receipt(self):
+        values = runner.validate_request(self.make_request())
+        pages, get_patch, put_patch = self.gbrain_entity_mocks({
+            "organizations/repeated": (
+                "---\n"
+                "type: organization\n"
+                "public: true\n"
+                "---\n"
+                "# Repeated\n\n"
+                "https://example.com/repeated\n\n"
+                "## Capture Link Enrichment Review\n\n"
+                "<!-- capture-link-enrichment-reviewed-at: 2026-07-01T00:00:00-07:00 -->\n\n"
+                "## Description\n\nAlready reviewed.\n"
+            ),
+        })
+        candidate = {
+            "slug": "organizations/repeated",
+            "type": "organization",
+            "deficiencies": ["missing_roles_or_projects"],
+        }
+        with get_patch, put_patch as put_entity:
+            outcome = runner.apply_entity_enrichment(values, candidate)
+
+        self.assertEqual(outcome["result"], "already_sufficient")
+        self.assertTrue(outcome["receipt_recorded"])
+        self.assertFalse(outcome["content_mutation"])
+        self.assertTrue(outcome["verification"]["body_changed"])
+        self.assertTrue(outcome["verification"]["review_marker_present"])
+        self.assertIn("Capture Link Already-Sufficient Review Receipt", pages["organizations/repeated"])
+        self.assertIn("already_sufficient_existing_enrichment_review", pages["organizations/repeated"])
+        self.assertIsNotNone(runner.recent_enrichment_review(pages["organizations/repeated"]))
+        self.assertEqual(put_entity.call_count, 1)
+
+    def test_recent_already_sufficient_receipt_excludes_repeat_selection(self):
+        page = (
+            "---\n"
+            "type: organization\n"
+            "public: true\n"
+            "---\n"
+            "# Reviewed\n\n"
+            "https://example.com/reviewed\n\n"
+            "## Capture Link Enrichment Review\n\n"
+            "<!-- capture-link-enrichment-reviewed-at: 2026-07-01T00:00:00-07:00 -->\n\n"
+            "## Capture Link Already-Sufficient Review Receipt\n\n"
+            "<!-- capture-link-enrichment-reviewed-at: 2026-08-17T08:00:00-07:00 -->\n"
+        )
+
+        def fake_list(entity_type, limit=runner.MAX_ENRICHMENT_CANDIDATES):
+            return [{"slug": "organizations/reviewed", "type": "organization", "updated": "", "title": "Reviewed"}] if entity_type == "organization" else []
+
+        with (
+            mock.patch.object(runner, "list_entities", side_effect=fake_list),
+            mock.patch.object(runner, "get_entity", return_value=page),
+        ):
+            selection = runner.inspect_enrichment_candidates(now=dt.datetime.fromisoformat("2026-08-18T08:00:00-07:00"))
+
+        self.assertEqual(selection["candidate_count"], 0)
+        self.assertEqual(selection["exclusion_counts"]["reviewed_within_30_days"], 1)
+        self.assertTrue(selection["no_eligible_candidate"])
+
     def test_zero_candidate_selection_records_deterministic_exclusions(self):
         with (
             mock.patch.object(runner, "list_entities", return_value=[{"slug": "people/private", "type": "person", "updated": "", "title": "Private"}]),

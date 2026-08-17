@@ -875,18 +875,22 @@ def source_urls(markdown: str) -> list[str]:
 
 
 def recent_enrichment_review(markdown: str, now: dt.datetime | None = None) -> str | None:
-    match = re.search(r"(?m)^capture_link_enrichment_reviewed_at:\\s*['\"]?([^'\"\\n]+)['\"]?\\s*$", markdown)
-    if not match:
-        match = re.search(r"<!-- capture-link-enrichment-reviewed-at:\\s*([^>]+) -->", markdown)
-    if not match:
+    values = re.findall(r"(?m)^capture_link_enrichment_reviewed_at:\s*['\"]?([^'\"\n]+)['\"]?\s*$", markdown)
+    values.extend(re.findall(r"<!-- capture-link-enrichment-reviewed-at:\s*([^>]+) -->", markdown))
+    current = (now or pacific_now()).astimezone(dt.timezone.utc)
+    newest: tuple[dt.datetime, str] | None = None
+    for raw in values:
+        value = raw.strip()
+        try:
+            reviewed = parse_time(value).astimezone(dt.timezone.utc)
+        except RunnerError:
+            continue
+        if newest is None or reviewed > newest[0]:
+            newest = (reviewed, value)
+    if newest is None:
         return None
-    value = match.group(1).strip()
-    try:
-        reviewed = parse_time(value)
-    except RunnerError:
-        return None
-    age_days = ((now or pacific_now()).astimezone(dt.timezone.utc) - reviewed.astimezone(dt.timezone.utc)).days
-    return value if age_days < 30 else None
+    age_days = (current - newest[0]).days
+    return newest[1] if age_days < 30 else None
 
 
 def candidate_deficiencies(markdown: str) -> list[str]:
@@ -1069,19 +1073,33 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
     )
     if "## Capture Link Enrichment Review" in before:
         outcome = "already_sufficient"
-        after = before
+        receipt_section = (
+            f"\n\n## Capture Link Already-Sufficient Review Receipt\n\n"
+            f"{review_marker}\n\n"
+            f"- Reviewed at: {stamp}\n"
+            f"- Invocation: {values['invocation_id']}\n"
+            f"- Selection version: {ENRICHMENT_SELECTION_VERSION}\n"
+            f"- Reason: already_sufficient_existing_enrichment_review\n"
+            f"- Source URLs checked: {len(urls)}\n"
+            f"- Deficiencies: {', '.join(deficiencies) if deficiencies else 'none'}\n"
+            f"- Expires when: source entity content changes materially, new authoritative public sources appear, or the review window lapses\n"
+        )
+        after = before.rstrip() + receipt_section + "\n"
+        put_entity(slug, after)
     else:
         outcome = "enriched_review_metadata"
         after = before.rstrip() + review_section + "\n"
         put_entity(slug, after)
     readback = get_entity(slug)
-    if outcome == "enriched_review_metadata" and review_marker not in readback:
+    if review_marker not in readback:
         raise RunnerError(f"enrichment readback failed for {slug}")
     return {
         "slug": slug,
         "result": outcome,
         "source_count": len(urls),
         "deficiencies": deficiencies,
+        "receipt_recorded": True,
+        "content_mutation": outcome != "already_sufficient",
         "verification": {
             "readback_verified": True,
             "review_marker_present": review_marker in readback,

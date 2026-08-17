@@ -194,7 +194,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.197"
+UI_VERSION = "V1.0.198"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -6832,8 +6832,11 @@ def backup_latest_freshness(markdown, observed_at=None):
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     observed = observed.astimezone(timezone.utc)
-    timestamps = extract_evidence_timestamps(markdown)
-    latest = max(timestamps) if timestamps else None
+    timestamp_match = re.search(r"(?im)^\s*-\s*Run timestamp UTC:\s*([^\n]+?)\s*$", str(markdown or ""))
+    latest = parse_iso_timestamp(timestamp_match.group(1).strip()) if timestamp_match else None
+    if latest is None:
+        timestamps = extract_evidence_timestamps(markdown)
+        latest = max(timestamps) if timestamps else None
     if latest is None:
         return {
             "status": "missing",

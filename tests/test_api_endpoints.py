@@ -1980,6 +1980,18 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertFalse(critical["passed"])
         self.assertEqual(critical["counts"]["backup_freshness_critical"], 1)
 
+    def test_backup_freshness_uses_explicit_run_timestamp_before_body_dates(self):
+        result = server.backup_latest_freshness(
+            "# Backup\n\n"
+            "- Run timestamp UTC: 2026-08-12T10:00:01Z\n\n"
+            "## Staged Changes\n\n"
+            "- Added bahn-webinar-2026-08-27.md\n",
+            observed_at=dt.datetime(2026, 8, 17, 10, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["latest_backup_at"], "2026-08-12T10:00:01Z")
+        self.assertEqual(result["status"], "critical")
+
     def test_latest_sre_numeric_evidence_requires_current_daily_evidence_for_recovery(self):
         class FixedDateTime(dt.datetime):
             @classmethod
