@@ -433,8 +433,8 @@
         "automation_governance_role_health_and_human_control_safety": 71
       },
       "source_slug": "reports/memory-stargraph-goal-steward-daily-review-2026-08-20",
-      "source_note": "Full Product Owner review verified clean V1.0.198 service, a current scheduled backup, terminal Curator/X/Learning/Developer evidence, and reconciled fallback deliveries. The Daily SRE automation remained active but produced no August 20 terminal artifact; direct canonical task readback timed out, so a post-turn quiet-time recovery watch was installed. UX remains 7/9 weekly and 6/8 readiness due the accepted SG-0166 supersession regression and allocator evidence hold.",
-      "highest_leverage_action": "Terminalize exactly one quiet-time Daily SRE recovery with durable current health, backup, restore, capacity, resolver, and queue evidence, then route the allocator-backed UX readiness regression through normal ownership."
+      "source_note": "Full Product Owner review verified clean V1.0.198 service, a current scheduled backup, terminal Curator/X/Learning/Developer evidence, and reconciled fallback deliveries. The Daily SRE automation remained active but produced no August 20 terminal artifact; direct canonical task readback timed out. A temporary post-turn watch update was attempted but the Codex automation API did not return, so no watcher was claimed. UX remains 7/9 weekly and 6/8 readiness due the accepted SG-0166 supersession regression and allocator evidence hold.",
+      "highest_leverage_action": "Restore Codex automation/task coordination, then terminalize exactly one quiet-time Daily SRE recovery with durable current health, backup, restore, capacity, resolver, and queue evidence before routing the allocator-backed UX readiness regression."
     }
   ]
 }
