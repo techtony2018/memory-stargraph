@@ -194,7 +194,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.198"
+UI_VERSION = "V1.0.199"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -6028,10 +6028,15 @@ class GraphStore:
             result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
         except RuntimeError as exc:
             message = str(exc)
-            if (
-                "GBrain backend does not expose autopilot_findings_list" not in message
-                and "Unknown tool: autopilot_findings_list" not in message
-            ):
+            missing_operation = (
+                "GBrain backend does not expose autopilot_findings_list" in message
+                or "Unknown tool: autopilot_findings_list" in message
+                or (
+                    "unknown_operation" in message
+                    and "autopilot_findings_list" in message
+                )
+            )
+            if not missing_operation:
                 raise
             result = list_autopilot_findings_from_gbrain_pages(payload)
         if not isinstance(result, dict):

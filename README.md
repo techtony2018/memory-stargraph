@@ -40,6 +40,21 @@ Optional:
 python3 server.py --host 127.0.0.1 --port 8788
 ```
 
+The dashboard-managed local service uses the version-controlled launcher
+`scripts/automation/start_memory_stargraph_dashboard.zsh`. The launcher sets a
+dedicated `GBRAIN_HOME` under the All Things Codex Dashboard state directory,
+validates an owner-only `remote_mcp` config and OAuth client secret, and fails
+closed when either is missing or unsafe. OAuth values are installed runtime
+state only; they are never stored in this repository or Dashboard source.
+
+Verify the thin-client identity before or after a managed restart:
+
+```bash
+GBRAIN_HOME="$HOME/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote" \
+GBRAIN_REMOTE_CLIENT_SECRET="$(sed -n 's/^GBRAIN_REMOTE_CLIENT_SECRET=//p' "$HOME/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote/credentials.env")" \
+gbrain remote doctor
+```
+
 Open:
 
 ```text
@@ -272,7 +287,8 @@ Safety:
 - `docs/automation-runbook.md` - daily automation runbook with host routes, deploy checks, and the five-minute retrospective hook
 - `docs/resolver-feedback-loop-runbook.md` - Codex/OpenClaw resolver telemetry, human approval, release distribution, nightly learning, backup, and rollback
 - `docs/openclaw-profile-activation-runbook.md` - private configuration and CAS activation protocol for staged OpenClaw Agent profiles
-- `dashboard-integration.json` - All Things Codex Dashboard launcher metadata
+- `dashboard-integration.json` - All Things Codex Dashboard launcher and isolated remote-MCP runtime contract
+- `scripts/automation/start_memory_stargraph_dashboard.zsh` - fail-closed dashboard launcher for the dedicated OAuth thin-client identity
 
 ## Verification
 

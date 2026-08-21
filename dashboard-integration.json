@@ -4,6 +4,21 @@
   "title": "Memory Stargraph",
   "kind": "external-service",
   "service_url": "http://127.0.0.1:8788",
+  "working_directory": "/Users/tony/.codex/services/all-things-codex-dashboard/services/memory-stargraph",
+  "command": [
+    "/Users/tony/Documents/Collective Knowledge System/scripts/automation/start_memory_stargraph_dashboard.zsh",
+    "server.py",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8788"
+  ],
+  "remote_mcp": {
+    "runtime_home": "/Users/tony/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote",
+    "credentials_file": "/Users/tony/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote/credentials.env",
+    "grant_type": "client_credentials",
+    "config_secret_policy": "owner-only files; no secrets in repository or dashboard config"
+  },
   "launch_path": "/",
   "health_path": "/api/health",
   "graph_path": "/api/graph",
@@ -11,6 +26,7 @@
   "notes": [
     "Use this artifact when the dashboard repo is not present in the current workspace.",
     "Service is local-only and expected to bind to 127.0.0.1.",
+    "The version-controlled launcher provides an isolated remote_mcp identity and fails closed instead of falling back to local PGlite data.",
     "If live gbrain access fails, the UI will show cache or demo mode explicitly."
   ]
 }

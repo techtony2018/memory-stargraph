@@ -1601,6 +1601,28 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("Unknown tool", json.dumps(data))
         self.assertIn(mock.call("list", "--tag", "autopilot-finding", "-n", "20", timeout=8), fake_gbrain.mock_calls)
 
+    def test_autopilot_findings_falls_back_when_remote_mcp_reports_unknown_operation(self):
+        store = server.GraphStore()
+        missing_operation = RuntimeError(
+            "UPGRADE_AVAILABLE 0.42.59.0 0.46.24.0\n"
+            "Remote tool autopilot_findings_list failed: "
+            '{"error":"unknown_operation","message":"Unknown: autopilot_findings_list"}'
+        )
+        with (
+            mock.patch("server.gbrain_call_tool", side_effect=missing_operation),
+            mock.patch("server.run_gbrain", return_value="No pages found.\n") as fake_gbrain,
+        ):
+            data = store.list_autopilot_findings({"limit": 1, "offset": 0})
+
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["backend_status"], "gbrain_tag_fallback")
+        self.assertNotIn("unknown_operation", json.dumps(data))
+        self.assertIn(
+            mock.call("list", "--tag", "autopilot-finding", "-n", "20", timeout=8),
+            fake_gbrain.mock_calls,
+        )
+
     def test_autopilot_findings_tag_fallback_lists_bounded_pages(self):
         store = server.GraphStore()
         missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")

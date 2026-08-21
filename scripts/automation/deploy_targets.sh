@@ -38,6 +38,7 @@ fi
 
 tracked_files=(
   README.md
+  dashboard-integration.json
   openclaw_profile_activation.py
   requirements-dashboard.txt
   server.py
@@ -46,6 +47,7 @@ tracked_files=(
   public/styles.css
   public/assets/brand/yoda-selection-avatar.png
   scripts/automation/gbrain_worker_api.py
+  scripts/automation/start_memory_stargraph_dashboard.zsh
   scripts/automation/capture_link_host_runner.py
   scripts/automation/recurring_worker_bridge.py
   scripts/automation/retrieval_quality_benchmark.py

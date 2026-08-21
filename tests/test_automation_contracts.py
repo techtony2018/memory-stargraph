@@ -8,6 +8,68 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AutomationContractTests(unittest.TestCase):
+    def test_dashboard_launcher_uses_isolated_remote_mcp_identity(self):
+        launcher = ROOT / "scripts/automation/start_memory_stargraph_dashboard.zsh"
+        self.assertTrue(launcher.exists())
+        source = launcher.read_text()
+
+        for phrase in (
+            "#!/bin/zsh",
+            "set -euo pipefail",
+            "state/memory-stargraph-remote",
+            "GBRAIN_HOME",
+            "credentials.env",
+            "GBRAIN_REMOTE_CLIENT_SECRET",
+            "remote_mcp",
+            "issuer_url",
+            "mcp_url",
+            "oauth_client_id",
+            "/usr/bin/stat",
+            "600",
+            "exec /opt/homebrew/bin/python3",
+        ):
+            self.assertIn(phrase, source)
+
+        self.assertNotRegex(source, r"gbrain_cl_[A-Za-z0-9_-]+")
+        self.assertNotRegex(
+            source,
+            r"GBRAIN_REMOTE_CLIENT_SECRET=['\"]?[A-Za-z0-9_-]{32,}['\"]?",
+        )
+
+    def test_dashboard_integration_declares_versioned_remote_mcp_launcher(self):
+        import json
+
+        integration = json.loads((ROOT / "dashboard-integration.json").read_text())
+        self.assertEqual(
+            integration["working_directory"],
+            "/Users/tony/.codex/services/all-things-codex-dashboard/services/memory-stargraph",
+        )
+        self.assertEqual(
+            integration["command"],
+            [
+                "/Users/tony/Documents/Collective Knowledge System/scripts/automation/start_memory_stargraph_dashboard.zsh",
+                "server.py",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8788",
+            ],
+        )
+        self.assertEqual(
+            integration["remote_mcp"],
+            {
+                "runtime_home": "/Users/tony/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote",
+                "credentials_file": "/Users/tony/.codex/services/all-things-codex-dashboard/state/memory-stargraph-remote/credentials.env",
+                "grant_type": "client_credentials",
+                "config_secret_policy": "owner-only files; no secrets in repository or dashboard config",
+            },
+        )
+
+    def test_deployment_packages_dashboard_launcher_contract(self):
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+        self.assertIn("dashboard-integration.json", deploy)
+        self.assertIn("scripts/automation/start_memory_stargraph_dashboard.zsh", deploy)
+
     def test_worker_role_titles_are_user_facing_only(self):
         expected = {
             "gbrain-x-intelligence-capture": {
