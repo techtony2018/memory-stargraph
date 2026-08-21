@@ -36,6 +36,16 @@ class AutomationContractTests(unittest.TestCase):
             r"GBRAIN_REMOTE_CLIENT_SECRET=['\"]?[A-Za-z0-9_-]{32,}['\"]?",
         )
 
+    def test_remote_mcp_launcher_preserves_private_openclaw_activation_identity(self):
+        source = (
+            ROOT / "scripts/automation/start_memory_stargraph_dashboard.zsh"
+        ).read_text()
+
+        self.assertIn("openclaw-profile-activation/memory-stargraph.env", source)
+        self.assertIn('require_owner_file "$OPENCLAW_ACTIVATION_ENV_FILE"', source)
+        self.assertIn('source "$OPENCLAW_ACTIVATION_ENV_FILE"', source)
+        self.assertNotIn("MEMORY_STARGRAPH_OC_PROVISION_TOKEN=", source)
+
     def test_dashboard_integration_declares_versioned_remote_mcp_launcher(self):
         import json
 

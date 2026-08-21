@@ -9,6 +9,7 @@ export GBRAIN_HOME="${MEMORY_STARGRAPH_GBRAIN_HOME:-$HOME/.codex/services/all-th
 
 GBRAIN_CONFIG_FILE="$GBRAIN_HOME/.gbrain/config.json"
 GBRAIN_CREDENTIALS_FILE="$GBRAIN_HOME/credentials.env"
+OPENCLAW_ACTIVATION_ENV_FILE="$HOME/.codex/services/all-things-codex-dashboard/state/openclaw-profile-activation/memory-stargraph.env"
 
 require_owner_file() {
   local file_path="$1"
@@ -28,6 +29,7 @@ require_owner_file() {
 
 require_owner_file "$GBRAIN_CONFIG_FILE"
 require_owner_file "$GBRAIN_CREDENTIALS_FILE"
+require_owner_file "$OPENCLAW_ACTIVATION_ENV_FILE"
 
 /opt/homebrew/bin/python3 - "$GBRAIN_CONFIG_FILE" <<'PY'
 import json
@@ -61,5 +63,10 @@ export GBRAIN_REMOTE_CLIENT_SECRET="${credential_lines#GBRAIN_REMOTE_CLIENT_SECR
   print -u2 "Memory Stargraph remote_mcp client secret is unavailable"
   exit 1
 }
+
+# The provisioning token and NATS credentials remain owner-only runtime state.
+# Loading this existing environment restores OpenClaw activation visibility
+# while the graph itself continues to use the dedicated remote_mcp identity.
+source "$OPENCLAW_ACTIVATION_ENV_FILE"
 
 exec /opt/homebrew/bin/python3 "$@"
