@@ -58,3 +58,5 @@ scripts/verify_linkedin_import.mjs
 scripts/verify_tony_publication_normalization.mjs
 scripts/verify_tony_resume_new_slug.mjs
 scripts/verify_wechat_public_account_articles.mjs
+.gstack/
+artifacts/
