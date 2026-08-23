@@ -115,13 +115,15 @@ The host already has a managed persistent service:
 
 Recommended sequence:
 
-1. Add a benchmark-only persistent client through the existing dashboard launcher and validated `remote_mcp` identity; do not replace production behavior first.
+1. Add a benchmark-only persistent stdio client that inherits the existing dashboard launcher's validated `remote_mcp` identity; do not replace production behavior first.
 2. Compare cold and repeated Search latency, output parity, timeout behavior, and process recovery across at least 20 queries.
 3. Require exact slug/result-order parity and fail-closed fallback to the current subprocess path.
 4. Only integrate if the median and p95 gains are stable and lifecycle management does not require unauthorized service changes.
 5. Run the full Python and browser/static suites before committing and pushing.
 
 The benchmark must not hardcode the local port as a production transport or bypass the configured remote identity. Reuse the launcher's owner-only config validation and the runtime OAuth secret without printing, serializing, or committing credential material.
+
+The GBrain MCP operation is named `search`. Its required argument is `query`; optional arguments are `limit`, `offset`, `mode`, `types`, and `snippet_chars`. The current Dashboard requirements contain `nats-py` only, and the managed Python environment does not provide `mcp`, `httpx`, `requests`, or `aiohttp`. A stdio proof avoids adding an HTTP/OAuth dependency before the performance case is established. It must still inherit the launcher's isolated `GBRAIN_HOME` and secret environment rather than reading or copying credentials itself.
 
 Avoid lowering the current graph/search timeouts without new evidence. Earlier profiling found valid organization graph reads completing near 7.851 seconds, so a blanket timeout reduction would lose real evidence.
 
