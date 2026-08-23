@@ -2899,19 +2899,36 @@ def evidence_record_search_results(
         return [], "skipped_no_terms"
     candidates = {}
     status = "complete"
-    for page_type in EVIDENCE_SEARCH_TYPES:
-        timeout = per_type_timeout
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+    timeout = per_type_timeout
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return [], "partial_timeout"
+        timeout = max(0.5, min(per_type_timeout, remaining))
+
+    rows_by_type = {}
+    with ThreadPoolExecutor(max_workers=len(EVIDENCE_SEARCH_TYPES)) as executor:
+        futures = {
+            page_type: executor.submit(
+                run_gbrain,
+                "list",
+                "--type",
+                page_type,
+                "-n",
+                str(per_type_limit),
+                timeout=timeout,
+            )
+            for page_type in EVIDENCE_SEARCH_TYPES
+        }
+        for page_type in EVIDENCE_SEARCH_TYPES:
+            try:
+                rows_by_type[page_type] = parse_page_list(futures[page_type].result())
+            except Exception:  # noqa: BLE001
                 status = "partial_timeout"
-                break
-            timeout = max(0.5, min(per_type_timeout, remaining))
-        try:
-            rows = parse_page_list(run_gbrain("list", "--type", page_type, "-n", str(per_type_limit), timeout=timeout))
-        except Exception:  # noqa: BLE001
-            status = "partial_timeout"
-            continue
+                rows_by_type[page_type] = []
+
+    for page_type in EVIDENCE_SEARCH_TYPES:
+        rows = rows_by_type[page_type]
         for row in rows:
             slug = str(row.get("slug") or "")
             score = score_evidence_record(row, query, terms)

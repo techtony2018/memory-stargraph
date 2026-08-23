@@ -14,6 +14,7 @@ from server import (
     ensure_media_references_available,
     extract_openclaw_answer,
     effective_yoda_retrieval_question,
+    evidence_record_search_results,
     expand_raw_graph,
     finalize_graph,
     friendly_label,
@@ -124,6 +125,26 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["score"], 0.7772)
         self.assertEqual(rows[0]["label"], "Equal Rights For All PAC (ERFA PAC)")
         self.assertEqual(rows[1]["slug"], "products/jtuner/rfc/part-03")
+
+    def test_evidence_record_search_lists_types_concurrently(self):
+        barrier = threading.Barrier(4)
+        slugs = {
+            "learning": "learnings/parallel-evidence-benchmark",
+            "todo": "notes/memory-starmap-todo-list/parallel-evidence-benchmark",
+            "report": "reports/parallel-evidence-benchmark",
+            "run": "runs/parallel-evidence-benchmark",
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            page_type = args[2]
+            barrier.wait(timeout=2)
+            return f"{slugs[page_type]}\t{page_type}\t2026-08-23\tParallel evidence benchmark\n"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            results, status = evidence_record_search_results("parallel evidence benchmark")
+
+        self.assertEqual(status, "complete")
+        self.assertEqual({result["slug"] for result in results}, set(slugs.values()))
 
     def test_search_raw_graph_promotes_matching_evidence_records(self):
         raw_graph = {
