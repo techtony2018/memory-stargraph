@@ -5445,7 +5445,7 @@ class GraphStore:
             },
         }
 
-    def build_yoda_current_todo_context(self, question, selected_slug):
+    def build_yoda_current_todo_context(self, question, selected_slug, todo_root_loader=None):
         question_text = str(question or "").lower()
         selected = str(selected_slug or "").strip()
         todo_root = "notes/memory-starmap-todo-list"
@@ -5472,7 +5472,8 @@ class GraphStore:
         if not is_todo_question:
             return {"text": "", "counts": {}}
 
-        root_raw = self.get_entity_raw(todo_root) or ""
+        root_raw = todo_root_loader() if todo_root_loader is not None else self.get_entity_raw(todo_root)
+        root_raw = root_raw or ""
         rows = parse_memory_starmap_todo_rows(root_raw)
         if not rows:
             return {"text": "", "counts": {"current_todo_rows": 0, "current_todo_child_reads": 0}}
@@ -5524,7 +5525,7 @@ class GraphStore:
             },
         }
 
-    def build_yoda_operational_remediation_context(self, question, selected_slug):
+    def build_yoda_operational_remediation_context(self, question, selected_slug, todo_root_loader=None):
         question_text = str(question or "").lower()
         selected = str(selected_slug or "").strip()
         todo_root = "notes/memory-starmap-todo-list"
@@ -5557,7 +5558,8 @@ class GraphStore:
         if not any(token in question_text for token in operational_tokens):
             return {"text": "", "counts": {}}
 
-        root_raw = self.get_entity_raw(todo_root) or ""
+        root_raw = todo_root_loader() if todo_root_loader is not None else self.get_entity_raw(todo_root)
+        root_raw = root_raw or ""
         rows = parse_memory_starmap_todo_rows(root_raw)
         if not rows:
             return {"text": "", "counts": {"operational_state_rows": 0, "operational_state_child_reads": 0}}
@@ -5693,8 +5695,19 @@ class GraphStore:
                 backlink_preview,
             ]
         )
+        todo_root_cache = []
+
+        def load_todo_root():
+            if not todo_root_cache:
+                todo_root_cache.append(self.get_entity_raw("notes/memory-starmap-todo-list") or "")
+            return todo_root_cache[0]
+
         phase_started = time.perf_counter()
-        current_todo_context = self.build_yoda_current_todo_context(effective_question or question, slug)
+        current_todo_context = self.build_yoda_current_todo_context(
+            effective_question or question,
+            slug,
+            todo_root_loader=load_todo_root,
+        )
         current_todo_text = current_todo_context.get("text") or ""
         if current_todo_text:
             lines.extend(
@@ -5706,7 +5719,11 @@ class GraphStore:
             counts.update(current_todo_context.get("counts") or {})
             trace["current_todo_state"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
-        operational_context = self.build_yoda_operational_remediation_context(effective_question or question, slug)
+        operational_context = self.build_yoda_operational_remediation_context(
+            effective_question or question,
+            slug,
+            todo_root_loader=load_todo_root,
+        )
         operational_text = operational_context.get("text") or ""
         if operational_text:
             lines.extend(

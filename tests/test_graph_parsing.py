@@ -194,6 +194,46 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(list(pages), ["pages/one", "pages/two", "pages/three"])
         self.assertEqual(pages["pages/two"], "# pages/two")
 
+    def test_yoda_state_reconciliation_reuses_one_todo_root_read(self):
+        store = GraphStore()
+        todo_root = "notes/memory-starmap-todo-list"
+        backlog = """| id | status | priority | title | node | updated | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG-1000 | planned | P1 | Current reliability gap | [[notes/memory-starmap-todo-list/current-gap]] | 2026-08-23 | Planned. |
+| SG-0999 | completed | P1 | Resolved reliability gap | [[notes/memory-starmap-todo-list/resolved-gap]] | 2026-08-22 | Completed. |
+"""
+        pages = {
+            todo_root: backlog,
+            "notes/memory-starmap-todo-list/current-gap": "# Current gap",
+            "notes/memory-starmap-todo-list/resolved-gap": "# Resolved gap",
+        }
+        calls = []
+
+        def fake_get_entity_raw(slug):
+            calls.append(slug)
+            return pages.get(slug)
+
+        stable_context = {
+            "selected_node": "# Product",
+            "graph": "",
+            "backlinks": "",
+            "timings": {},
+        }
+        with (
+            mock.patch.object(store, "get_entity_raw", side_effect=fake_get_entity_raw),
+            mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
+            mock.patch("server.run_gbrain", return_value=""),
+        ):
+            prompt = store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "What current reliability gaps remain?",
+                stable_context=stable_context,
+            )
+
+        self.assertIn("Current reliability gap", prompt)
+        self.assertIn("Resolved reliability gap", prompt)
+        self.assertEqual(calls.count(todo_root), 1)
+
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
             "title": "Memory Stargraph",
