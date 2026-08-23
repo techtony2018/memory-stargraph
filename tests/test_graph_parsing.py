@@ -9,7 +9,7 @@ from server import (
     DEFAULT_CONFIG,
     EvidenceListCache,
     GraphStore,
-    YodaSearchCache,
+    TimedTextCache,
     append_attachment_reference,
     collapse_part_identity,
     collect_seed_graph,
@@ -177,14 +177,16 @@ class GraphParsingTests(unittest.TestCase):
         store = GraphStore()
         store.evidence_list_cache.put("run", 40, [{"slug": "runs/cached"}])
         store.yoda_search_cache.put("question", "cached search")
+        store.yoda_source_cache.put("source", "cached source")
 
         store.invalidate()
 
         self.assertIsNone(store.evidence_list_cache.get("run", 40))
         self.assertIsNone(store.yoda_search_cache.get("question"))
+        self.assertIsNone(store.yoda_source_cache.get("source"))
 
-    def test_yoda_search_cache_expires_and_bounds_entries(self):
-        cache = YodaSearchCache(ttl_seconds=10, max_entries=2)
+    def test_timed_text_cache_expires_and_bounds_entries(self):
+        cache = TimedTextCache(ttl_seconds=10, max_entries=2)
         with mock.patch("server.time.monotonic", return_value=0):
             cache.put("oldest", "one")
         with mock.patch("server.time.monotonic", return_value=1):
@@ -261,7 +263,19 @@ class GraphParsingTests(unittest.TestCase):
             "backlinks": "",
             "timings": {},
         }
-        search_output = "[0.99] products/memory-stargraph -- # Memory Stargraph"
+        search_output = "\n".join(
+            (
+                "[0.99] products/memory-stargraph -- # Memory Stargraph",
+                "[0.90] sources/relevant -- # Relevant source",
+            )
+        )
+
+        def gbrain_result(*args, **_kwargs):
+            if args[0] == "query":
+                return search_output
+            if args[0] == "get":
+                return "# Relevant source"
+            raise AssertionError(args)
 
         with (
             mock.patch.object(store, "build_yoda_current_todo_context", return_value={"text": "", "counts": {}}),
@@ -271,7 +285,7 @@ class GraphParsingTests(unittest.TestCase):
                 return_value={"text": "", "counts": {}},
             ),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
-            mock.patch("server.run_gbrain", return_value=search_output) as run,
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
         ):
             first_prompt = store.build_yoda_prompt(
                 "products/memory-stargraph",
@@ -290,9 +304,12 @@ class GraphParsingTests(unittest.TestCase):
             )
 
         query_calls = [call for call in run.call_args_list if call.args[0] == "query"]
+        get_calls = [call for call in run.call_args_list if call.args[0] == "get"]
         self.assertEqual(first_prompt, second_prompt)
         self.assertEqual(len(query_calls), 2)
+        self.assertEqual(len(get_calls), 1)
         self.assertEqual(len(store.yoda_search_cache.entries), 2)
+        self.assertEqual(len(store.yoda_source_cache.entries), 1)
 
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {

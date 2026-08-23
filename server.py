@@ -2755,6 +2755,8 @@ SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_EVIDENCE_CACHE_SECONDS = 30
 YODA_SEARCH_CACHE_SECONDS = 30
 YODA_SEARCH_CACHE_MAX_ENTRIES = 32
+YODA_SOURCE_CACHE_SECONDS = 30
+YODA_SOURCE_CACHE_MAX_ENTRIES = 64
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -2916,8 +2918,8 @@ class EvidenceListCache:
             self.entries.clear()
 
 
-class YodaSearchCache:
-    def __init__(self, ttl_seconds=YODA_SEARCH_CACHE_SECONDS, max_entries=YODA_SEARCH_CACHE_MAX_ENTRIES):
+class TimedTextCache:
+    def __init__(self, ttl_seconds, max_entries):
         self.ttl_seconds = ttl_seconds
         self.max_entries = max_entries
         self.entries = {}
@@ -4922,7 +4924,14 @@ class GraphStore:
         self.refreshing = False
         self.condition = threading.Condition()
         self.yoda_context_cache = {}
-        self.yoda_search_cache = YodaSearchCache()
+        self.yoda_search_cache = TimedTextCache(
+            ttl_seconds=YODA_SEARCH_CACHE_SECONDS,
+            max_entries=YODA_SEARCH_CACHE_MAX_ENTRIES,
+        )
+        self.yoda_source_cache = TimedTextCache(
+            ttl_seconds=YODA_SOURCE_CACHE_SECONDS,
+            max_entries=YODA_SOURCE_CACHE_MAX_ENTRIES,
+        )
         self.evidence_list_cache = EvidenceListCache()
 
     def get_health_graph(self):
@@ -4946,6 +4955,7 @@ class GraphStore:
         if force:
             self.yoda_context_cache = {}
             self.yoda_search_cache.clear()
+            self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -5000,6 +5010,7 @@ class GraphStore:
         if force:
             self.yoda_context_cache = {}
             self.yoda_search_cache.clear()
+            self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -5079,6 +5090,7 @@ class GraphStore:
             self.loaded_at = 0.0
             self.yoda_context_cache = {}
             self.yoda_search_cache.clear()
+            self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -5238,6 +5250,28 @@ class GraphStore:
         ) or ""
         self.yoda_search_cache.put(cache_key, output)
         return output
+
+    def get_yoda_source_pages(self, slugs):
+        ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))
+        pages = {}
+        missing_slugs = []
+        cache_keys = {}
+        for slug in ordered_slugs:
+            cache_key = hashlib.sha256(slug.encode("utf-8")).hexdigest()
+            cache_keys[slug] = cache_key
+            cached = self.yoda_source_cache.get(cache_key)
+            if cached is None:
+                missing_slugs.append(slug)
+            else:
+                pages[slug] = cached
+        if missing_slugs:
+            fetched_pages = self.get_entities_raw(missing_slugs)
+            for slug in missing_slugs:
+                page = fetched_pages.get(slug)
+                pages[slug] = page
+                if page is not None:
+                    self.yoda_source_cache.put(cache_keys[slug], page)
+        return {slug: pages.get(slug) for slug in ordered_slugs}
 
     def get_entity_media(self, slug):
         raw = self.get_entity_raw(slug)
@@ -5813,7 +5847,7 @@ class GraphStore:
         if likely_slugs:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
-            candidate_pages = self.get_entities_raw(likely_slugs)
+            candidate_pages = self.get_yoda_source_pages(likely_slugs)
             for candidate in likely_slugs:
                 candidate_raw = candidate_pages.get(candidate)
                 if candidate_raw is None:
