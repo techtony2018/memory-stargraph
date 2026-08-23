@@ -7,6 +7,7 @@ from unittest import mock
 
 from server import (
     DEFAULT_CONFIG,
+    EvidenceListCache,
     GraphStore,
     append_attachment_reference,
     collapse_part_identity,
@@ -141,10 +142,43 @@ class GraphParsingTests(unittest.TestCase):
             return f"{slugs[page_type]}\t{page_type}\t2026-08-23\tParallel evidence benchmark\n"
 
         with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
-            results, status = evidence_record_search_results("parallel evidence benchmark")
+            results, status, cache_status = evidence_record_search_results("parallel evidence benchmark")
 
         self.assertEqual(status, "complete")
+        self.assertEqual(cache_status, "disabled")
         self.assertEqual({result["slug"] for result in results}, set(slugs.values()))
+
+    def test_evidence_record_search_reuses_short_lived_page_cache(self):
+        calls = []
+        cache = EvidenceListCache(ttl_seconds=60)
+
+        def fake_run_gbrain(*args, **_kwargs):
+            page_type = args[2]
+            calls.append(page_type)
+            return f"runs/{page_type}-cache-benchmark\trun\t2026-08-23\tCache benchmark\n"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            first_results, first_status, first_cache_status = evidence_record_search_results(
+                "cache benchmark", row_cache=cache
+            )
+            second_results, second_status, second_cache_status = evidence_record_search_results(
+                "cache benchmark", row_cache=cache
+            )
+
+        self.assertEqual(first_status, "complete")
+        self.assertEqual(second_status, "complete")
+        self.assertEqual(first_cache_status, "miss")
+        self.assertEqual(second_cache_status, "hit")
+        self.assertEqual(first_results, second_results)
+        self.assertEqual(len(calls), 4)
+
+    def test_graph_store_invalidation_clears_evidence_list_cache(self):
+        store = GraphStore()
+        store.evidence_list_cache.put("run", 40, [{"slug": "runs/cached"}])
+
+        store.invalidate()
+
+        self.assertIsNone(store.evidence_list_cache.get("run", 40))
 
     def test_search_raw_graph_promotes_matching_evidence_records(self):
         raw_graph = {

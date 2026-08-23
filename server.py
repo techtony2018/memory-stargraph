@@ -2752,6 +2752,7 @@ EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
 SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
+SEARCH_EVIDENCE_CACHE_SECONDS = 30
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -2885,6 +2886,34 @@ def score_evidence_record(row, query, terms):
     return score
 
 
+class EvidenceListCache:
+    def __init__(self, ttl_seconds=SEARCH_EVIDENCE_CACHE_SECONDS):
+        self.ttl_seconds = ttl_seconds
+        self.entries = {}
+        self.lock = threading.Lock()
+
+    def get(self, page_type, per_type_limit):
+        key = (page_type, per_type_limit)
+        now = time.monotonic()
+        with self.lock:
+            entry = self.entries.get(key)
+            if not entry or now - entry["stored_at"] >= self.ttl_seconds:
+                self.entries.pop(key, None)
+                return None
+            return entry["rows"]
+
+    def put(self, page_type, per_type_limit, rows):
+        with self.lock:
+            self.entries[(page_type, per_type_limit)] = {
+                "rows": tuple(rows),
+                "stored_at": time.monotonic(),
+            }
+
+    def clear(self):
+        with self.lock:
+            self.entries.clear()
+
+
 def evidence_record_search_results(
     query,
     existing_slugs=None,
@@ -2892,40 +2921,62 @@ def evidence_record_search_results(
     result_limit=10,
     deadline=None,
     per_type_timeout=2.5,
+    row_cache=None,
 ):
     existing_slugs = set(existing_slugs or [])
     terms = evidence_search_terms(query)
     if not terms:
-        return [], "skipped_no_terms"
+        return [], "skipped_no_terms", "skipped_no_terms"
     candidates = {}
     status = "complete"
-    timeout = per_type_timeout
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return [], "partial_timeout"
-        timeout = max(0.5, min(per_type_timeout, remaining))
-
     rows_by_type = {}
-    with ThreadPoolExecutor(max_workers=len(EVIDENCE_SEARCH_TYPES)) as executor:
-        futures = {
-            page_type: executor.submit(
-                run_gbrain,
-                "list",
-                "--type",
-                page_type,
-                "-n",
-                str(per_type_limit),
-                timeout=timeout,
-            )
-            for page_type in EVIDENCE_SEARCH_TYPES
-        }
-        for page_type in EVIDENCE_SEARCH_TYPES:
-            try:
-                rows_by_type[page_type] = parse_page_list(futures[page_type].result())
-            except Exception:  # noqa: BLE001
-                status = "partial_timeout"
-                rows_by_type[page_type] = []
+    missing_types = []
+    for page_type in EVIDENCE_SEARCH_TYPES:
+        cached_rows = row_cache.get(page_type, per_type_limit) if row_cache is not None else None
+        if cached_rows is None:
+            missing_types.append(page_type)
+        else:
+            rows_by_type[page_type] = cached_rows
+
+    if row_cache is None:
+        cache_status = "disabled"
+    elif not missing_types:
+        cache_status = "hit"
+    elif len(missing_types) == len(EVIDENCE_SEARCH_TYPES):
+        cache_status = "miss"
+    else:
+        cache_status = "partial_hit"
+
+    if missing_types:
+        timeout = per_type_timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return [], "partial_timeout", cache_status
+            timeout = max(0.5, min(per_type_timeout, remaining))
+
+        with ThreadPoolExecutor(max_workers=len(missing_types)) as executor:
+            futures = {
+                page_type: executor.submit(
+                    run_gbrain,
+                    "list",
+                    "--type",
+                    page_type,
+                    "-n",
+                    str(per_type_limit),
+                    timeout=timeout,
+                )
+                for page_type in missing_types
+            }
+            for page_type in missing_types:
+                try:
+                    rows = parse_page_list(futures[page_type].result())
+                    rows_by_type[page_type] = rows
+                    if row_cache is not None:
+                        row_cache.put(page_type, per_type_limit, rows)
+                except Exception:  # noqa: BLE001
+                    status = "partial_timeout"
+                    rows_by_type[page_type] = []
 
     for page_type in EVIDENCE_SEARCH_TYPES:
         rows = rows_by_type[page_type]
@@ -2956,7 +3007,7 @@ def evidence_record_search_results(
             ),
             reverse=True,
         )[:result_limit]
-    ], status
+    ], status, cache_status
 
 
 def merge_search_results(primary_results, evidence_results, query=""):
@@ -4494,7 +4545,7 @@ def expand_raw_graph(raw_graph, center_slug):
     }
 
 
-def search_raw_graph(raw_graph, query):
+def search_raw_graph(raw_graph, query, evidence_cache=None):
     started = time.monotonic()
     deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
     exact_todo_results, exact_todo_status = exact_todo_id_search_results(query)
@@ -4523,17 +4574,20 @@ def search_raw_graph(raw_graph, query):
         evidence_results = []
         sentinel_results = []
         evidence_status = "skipped_exact_todo_id"
+        evidence_cache_status = "skipped_exact_todo_id"
     elif remaining <= 0:
         evidence_results = []
         sentinel_results = search_sentinel_results(query, existing_slugs=[result["slug"] for result in primary_results])
         evidence_status = "partial_timeout"
+        evidence_cache_status = "skipped_budget"
     else:
         evidence_budget = min(SEARCH_EVIDENCE_BUDGET_SECONDS, remaining)
         evidence_deadline = min(deadline, time.monotonic() + evidence_budget)
-        evidence_results, evidence_status = evidence_record_search_results(
+        evidence_results, evidence_status, evidence_cache_status = evidence_record_search_results(
             query,
             deadline=evidence_deadline,
             per_type_timeout=evidence_budget,
+            row_cache=evidence_cache,
         )
         sentinel_results = search_sentinel_results(
             query,
@@ -4575,6 +4629,7 @@ def search_raw_graph(raw_graph, query):
     coverage["search_status"] = "complete" if primary_status == "complete" and evidence_complete else "partial_timeout"
     coverage["search_primary_status"] = primary_status
     coverage["search_evidence_status"] = evidence_status
+    coverage["search_evidence_cache_status"] = evidence_cache_status
     if exact_todo_results is not None:
         coverage["search_exact_todo_id_status"] = exact_todo_status
     else:
@@ -4825,6 +4880,7 @@ class GraphStore:
         self.refreshing = False
         self.condition = threading.Condition()
         self.yoda_context_cache = {}
+        self.evidence_list_cache = EvidenceListCache()
 
     def get_health_graph(self):
         with self.condition:
@@ -4846,6 +4902,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
         if not self.graph and not force:
@@ -4898,6 +4955,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
         if not self.graph and not force:
@@ -4962,7 +5020,9 @@ class GraphStore:
     def search(self, query):
         graph = self.get_seed_graph()
         raw_graph = graph_to_raw_payload(graph)
-        payload = finalize_graph(search_raw_graph(raw_graph, query))
+        payload = finalize_graph(
+            search_raw_graph(raw_graph, query, evidence_cache=self.evidence_list_cache)
+        )
         with self.condition:
             self.graph = payload
             self.loaded_at = time.time()
@@ -4973,6 +5033,7 @@ class GraphStore:
             self.graph = None
             self.loaded_at = 0.0
             self.yoda_context_cache = {}
+            self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
         slug = node.get("slug")

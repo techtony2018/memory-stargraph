@@ -23,18 +23,19 @@ DEFAULT_QUERIES = [
 
 def run_evidence_case(query: str) -> dict[str, object]:
     started = time.perf_counter()
-    results, status = server.evidence_record_search_results(query, per_type_timeout=10)
+    results, status, cache_status = server.evidence_record_search_results(query, per_type_timeout=10)
     return {
         "query": query,
         "elapsed_ms": round((time.perf_counter() - started) * 1000),
         "status": status,
+        "cache_status": cache_status,
         "result_count": len(results),
         "top_slug": results[0]["slug"] if results else None,
     }
 
 
-def run_full_case(query: str) -> dict[str, object]:
-    store = server.GraphStore()
+def run_full_case(query: str, store: server.GraphStore | None = None) -> dict[str, object]:
+    store = store or server.GraphStore()
     started = time.perf_counter()
     graph = store.search(query)
     elapsed_ms = round((time.perf_counter() - started) * 1000)
@@ -46,6 +47,7 @@ def run_full_case(query: str) -> dict[str, object]:
         "status": coverage.get("search_status"),
         "primary_status": coverage.get("search_primary_status"),
         "evidence_status": coverage.get("search_evidence_status"),
+        "evidence_cache_status": coverage.get("search_evidence_cache_status"),
         "top_slug": (coverage.get("search_slugs") or [None])[0],
     }
 
@@ -59,7 +61,8 @@ def main() -> int:
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
 
-    runner = run_evidence_case if args.mode == "evidence" else run_full_case
+    store = server.GraphStore()
+    runner = run_evidence_case if args.mode == "evidence" else lambda query: run_full_case(query, store)
     results = [runner(query) for _ in range(args.repeat) for query in (args.queries or DEFAULT_QUERIES)]
     elapsed_values = [int(result["elapsed_ms"]) for result in results]
     payload = {
