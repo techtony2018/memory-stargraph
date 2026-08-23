@@ -2753,6 +2753,7 @@ SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_EVIDENCE_CACHE_SECONDS = 30
+SEARCH_EVIDENCE_STALE_SECONDS = 300
 YODA_SEARCH_CACHE_SECONDS = 30
 YODA_SEARCH_CACHE_MAX_ENTRIES = 32
 YODA_SOURCE_CACHE_SECONDS = 30
@@ -2891,9 +2892,12 @@ def score_evidence_record(row, query, terms):
 
 
 class EvidenceListCache:
-    def __init__(self, ttl_seconds=SEARCH_EVIDENCE_CACHE_SECONDS):
+    def __init__(self, ttl_seconds=SEARCH_EVIDENCE_CACHE_SECONDS, stale_seconds=SEARCH_EVIDENCE_STALE_SECONDS):
         self.ttl_seconds = ttl_seconds
+        self.stale_seconds = max(ttl_seconds, stale_seconds)
         self.entries = {}
+        self.refreshing = set()
+        self.generation = 0
         self.lock = threading.Lock()
 
     def get(self, page_type, per_type_limit):
@@ -2901,7 +2905,22 @@ class EvidenceListCache:
         now = time.monotonic()
         with self.lock:
             entry = self.entries.get(key)
-            if not entry or now - entry["stored_at"] >= self.ttl_seconds:
+            if not entry:
+                return None
+            age = now - entry["stored_at"]
+            if age >= self.stale_seconds:
+                self.entries.pop(key, None)
+                return None
+            if age >= self.ttl_seconds:
+                return None
+            return entry["rows"]
+
+    def get_stale(self, page_type, per_type_limit):
+        key = (page_type, per_type_limit)
+        now = time.monotonic()
+        with self.lock:
+            entry = self.entries.get(key)
+            if not entry or now - entry["stored_at"] >= self.stale_seconds:
                 self.entries.pop(key, None)
                 return None
             return entry["rows"]
@@ -2913,9 +2932,35 @@ class EvidenceListCache:
                 "stored_at": time.monotonic(),
             }
 
+    def refresh_async(self, page_type, per_type_limit, loader):
+        key = (page_type, per_type_limit)
+        with self.lock:
+            generation = self.generation
+            token = (generation, key)
+            if token in self.refreshing:
+                return False
+            self.refreshing.add(token)
+
+        def refresh():
+            try:
+                rows = tuple(loader())
+            except Exception:  # noqa: BLE001
+                rows = None
+            with self.lock:
+                self.refreshing.discard(token)
+                if rows is not None and self.generation == generation:
+                    self.entries[key] = {
+                        "rows": rows,
+                        "stored_at": time.monotonic(),
+                    }
+
+        threading.Thread(target=refresh, daemon=True).start()
+        return True
+
     def clear(self):
         with self.lock:
             self.entries.clear()
+            self.generation += 1
 
 
 class TimedTextCache:
@@ -2973,21 +3018,45 @@ def evidence_record_search_results(
     status = "complete"
     rows_by_type = {}
     missing_types = []
+    stale_types = []
     for page_type in EVIDENCE_SEARCH_TYPES:
         cached_rows = row_cache.get(page_type, per_type_limit) if row_cache is not None else None
         if cached_rows is None:
-            missing_types.append(page_type)
+            stale_rows = row_cache.get_stale(page_type, per_type_limit) if row_cache is not None else None
+            if stale_rows is None:
+                missing_types.append(page_type)
+            else:
+                rows_by_type[page_type] = stale_rows
+                stale_types.append(page_type)
         else:
             rows_by_type[page_type] = cached_rows
 
     if row_cache is None:
         cache_status = "disabled"
+    elif stale_types:
+        cache_status = "stale_hit" if len(stale_types) == len(EVIDENCE_SEARCH_TYPES) else "partial_stale_hit"
     elif not missing_types:
         cache_status = "hit"
     elif len(missing_types) == len(EVIDENCE_SEARCH_TYPES):
         cache_status = "miss"
     else:
         cache_status = "partial_hit"
+
+    for page_type in stale_types:
+        row_cache.refresh_async(
+            page_type,
+            per_type_limit,
+            lambda page_type=page_type: parse_page_list(
+                run_gbrain(
+                    "list",
+                    "--type",
+                    page_type,
+                    "-n",
+                    str(per_type_limit),
+                    timeout=per_type_timeout,
+                )
+            ),
+        )
 
     if missing_types:
         timeout = per_type_timeout

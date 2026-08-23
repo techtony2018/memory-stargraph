@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
+import time
 from unittest import mock
 
 from server import (
@@ -172,6 +173,66 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(second_cache_status, "hit")
         self.assertEqual(first_results, second_results)
         self.assertEqual(len(calls), 4)
+
+    def test_evidence_record_search_serves_stale_rows_while_refreshing(self):
+        cache = EvidenceListCache(ttl_seconds=30, stale_seconds=300)
+        prefixes = {
+            "learning": "learnings",
+            "todo": "notes/memory-starmap-todo-list",
+            "report": "reports",
+            "run": "runs",
+        }
+        with mock.patch("server.time.monotonic", return_value=0):
+            for page_type, prefix in prefixes.items():
+                cache.put(
+                    page_type,
+                    40,
+                    [
+                        {
+                            "slug": f"{prefix}/cache-benchmark-{page_type}",
+                            "type": page_type,
+                            "date": "2026-08-23",
+                            "title": "Cache benchmark evidence",
+                        }
+                    ],
+                )
+
+        with (
+            mock.patch("server.time.monotonic", return_value=31),
+            mock.patch.object(cache, "refresh_async", return_value=True) as refresh,
+            mock.patch("server.run_gbrain") as run,
+        ):
+            results, status, cache_status = evidence_record_search_results(
+                "cache benchmark",
+                row_cache=cache,
+            )
+
+        self.assertEqual(status, "complete")
+        self.assertEqual(cache_status, "stale_hit")
+        self.assertEqual(len(results), 4)
+        self.assertEqual(refresh.call_count, 4)
+        run.assert_not_called()
+
+    def test_evidence_cache_clear_supersedes_an_inflight_refresh(self):
+        cache = EvidenceListCache(ttl_seconds=30, stale_seconds=300)
+        started = threading.Event()
+        release = threading.Event()
+
+        def loader():
+            started.set()
+            release.wait(timeout=1)
+            return [{"slug": "runs/stale-refresh"}]
+
+        self.assertTrue(cache.refresh_async("run", 40, loader))
+        self.assertTrue(started.wait(timeout=1))
+        self.assertFalse(cache.refresh_async("run", 40, loader))
+        cache.clear()
+        release.set()
+        deadline = time.monotonic() + 1
+        while cache.refreshing and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertIsNone(cache.get_stale("run", 40))
 
     def test_graph_store_invalidation_clears_search_caches(self):
         store = GraphStore()
