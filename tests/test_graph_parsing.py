@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from server import (
     GraphStore,
     TimedValueCache,
     append_attachment_reference,
+    cached_primary_search_results,
     collapse_part_identity,
     collect_seed_graph,
     ensure_media_references_available,
@@ -326,6 +328,42 @@ class GraphParsingTests(unittest.TestCase):
         with mock.patch("server.time.monotonic", return_value=11.5):
             self.assertIsNone(cache.get("middle"))
             self.assertEqual(cache.get("newest"), "three")
+
+    def test_timed_value_cache_returns_stale_values_within_stale_window(self):
+        cache = TimedValueCache(ttl_seconds=10, stale_seconds=30, max_entries=2)
+        with mock.patch("server.time.monotonic", return_value=0):
+            cache.put("query", "cached")
+        with mock.patch("server.time.monotonic", return_value=12):
+            self.assertIsNone(cache.get("query"))
+            self.assertEqual(cache.get_stale("query"), "cached")
+        with mock.patch("server.time.monotonic", return_value=31):
+            self.assertIsNone(cache.get_stale("query"))
+
+    def test_primary_search_returns_stale_value_while_refreshing_once(self):
+        cache = TimedValueCache(ttl_seconds=10, stale_seconds=30, max_entries=2)
+        release = threading.Event()
+        cached_value = (({"slug": "pages/cached"},), "complete")
+        query = "stale query"
+        cache_key = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        with mock.patch("server.time.monotonic", return_value=0):
+            cache.put(cache_key, cached_value)
+
+        def slow_search(_query, _timeout):
+            release.wait(timeout=1)
+            return [{"slug": "pages/fresh"}], "complete"
+
+        with (
+            mock.patch("server.time.monotonic", return_value=12),
+            mock.patch("server.live_primary_search_results", side_effect=slow_search) as search,
+        ):
+            first = cached_primary_search_results(query, 1, cache)
+            second = cached_primary_search_results(query, 1, cache)
+            release.set()
+
+        self.assertEqual(first[0], [{"slug": "pages/cached"}])
+        self.assertEqual(first[2], "stale_refresh_started")
+        self.assertEqual(second[2], "stale_refresh_joined")
+        self.assertEqual(search.call_count, 1)
 
     def test_graph_store_reuses_exact_primary_search_results(self):
         store = GraphStore()

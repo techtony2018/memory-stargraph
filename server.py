@@ -2751,6 +2751,7 @@ def parse_search_results(output):
 EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
 SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
 SEARCH_PRIMARY_CACHE_SECONDS = 30
+SEARCH_PRIMARY_CACHE_STALE_SECONDS = 300
 SEARCH_PRIMARY_CACHE_MAX_ENTRIES = 64
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
@@ -2981,10 +2982,13 @@ class EvidenceListCache:
 
 
 class TimedValueCache:
-    def __init__(self, ttl_seconds, max_entries):
+    def __init__(self, ttl_seconds, max_entries, stale_seconds=None):
         self.ttl_seconds = ttl_seconds
+        self.stale_seconds = max(ttl_seconds, stale_seconds or ttl_seconds)
         self.max_entries = max_entries
         self.entries = {}
+        self.refreshing = set()
+        self.generation = 0
         self.lock = threading.Lock()
 
     def get(self, key):
@@ -2992,6 +2996,14 @@ class TimedValueCache:
         with self.lock:
             entry = self.entries.get(key)
             if not entry or now - entry["stored_at"] >= self.ttl_seconds:
+                return None
+            return entry["value"]
+
+    def get_stale(self, key):
+        now = time.monotonic()
+        with self.lock:
+            entry = self.entries.get(key)
+            if not entry or now - entry["stored_at"] >= self.stale_seconds:
                 self.entries.pop(key, None)
                 return None
             return entry["value"]
@@ -3002,7 +3014,7 @@ class TimedValueCache:
             self.entries = {
                 entry_key: entry
                 for entry_key, entry in self.entries.items()
-                if now - entry["stored_at"] < self.ttl_seconds
+                if now - entry["stored_at"] < self.stale_seconds
             }
             self.entries[key] = {"value": value, "stored_at": now}
             if len(self.entries) > self.max_entries:
@@ -3013,9 +3025,34 @@ class TimedValueCache:
                 for oldest_key in oldest_keys[:-self.max_entries]:
                     self.entries.pop(oldest_key, None)
 
+    def refresh_async(self, key, loader):
+        with self.lock:
+            generation = self.generation
+            token = (generation, key)
+            if token in self.refreshing:
+                return False
+            self.refreshing.add(token)
+
+        def refresh():
+            try:
+                value = loader()
+            except Exception:  # noqa: BLE001
+                value = None
+            with self.lock:
+                self.refreshing.discard(token)
+                if value is not None and self.generation == generation:
+                    self.entries[key] = {
+                        "value": value,
+                        "stored_at": time.monotonic(),
+                    }
+
+        threading.Thread(target=refresh, daemon=True).start()
+        return True
+
     def clear(self):
         with self.lock:
             self.entries.clear()
+            self.generation += 1
 
 
 def load_evidence_page_rows(page_type, per_type_limit, timeout):
@@ -4707,6 +4744,19 @@ def cached_primary_search_results(query, timeout, cache=None):
     if cached is not None:
         results, status = cached
         return [dict(result) for result in results], status, "hit"
+    stale = cache.get_stale(cache_key) if cache is not None else None
+    if stale is not None:
+        results, status = stale
+
+        def refresh():
+            fresh_results, fresh_status = live_primary_search_results(query, timeout)
+            if fresh_status != "complete":
+                return None
+            return tuple(dict(result) for result in fresh_results), fresh_status
+
+        refresh_started = cache.refresh_async(cache_key, refresh)
+        cache_status = "stale_refresh_started" if refresh_started else "stale_refresh_joined"
+        return [dict(result) for result in results], status, cache_status
     results, status = live_primary_search_results(query, timeout)
     if cache is not None and status == "complete":
         cache.put(cache_key, (tuple(dict(result) for result in results), status))
@@ -5048,6 +5098,7 @@ class GraphStore:
         self.yoda_context_cache = {}
         self.primary_search_cache = TimedValueCache(
             ttl_seconds=SEARCH_PRIMARY_CACHE_SECONDS,
+            stale_seconds=SEARCH_PRIMARY_CACHE_STALE_SECONDS,
             max_entries=SEARCH_PRIMARY_CACHE_MAX_ENTRIES,
         )
         self.yoda_search_cache = TimedValueCache(
