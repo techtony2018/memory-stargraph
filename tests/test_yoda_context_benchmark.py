@@ -44,6 +44,12 @@ class YodaContextBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["warm_cache_hits"], 2)
         self.assertAlmostEqual(summary["mean_grounding_recall"], 0.8333, places=4)
 
+    def test_health_probe_failure_is_reported_without_losing_benchmark_results(self):
+        with mock.patch.object(benchmark.urllib.request, "urlopen", side_effect=ConnectionResetError):
+            health = benchmark.read_health("http://127.0.0.1:8788")
+
+        self.assertEqual(health, {"ok": False, "error": "ConnectionResetError"})
+
     def test_forced_slow_graph_case_is_optional_timeout_but_grounded(self):
         case = {
             "id": "forced-slow",

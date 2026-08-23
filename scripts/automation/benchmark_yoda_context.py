@@ -151,8 +151,14 @@ def summarize_results(
 
 
 def read_health(service_url: str) -> dict[str, object]:
-    with urllib.request.urlopen(f"{service_url.rstrip('/')}/api/health", timeout=15) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(f"{service_url.rstrip('/')}/api/health", timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": type(exc).__name__,
+        }
     return {
         "ok": payload.get("ok") is True,
         "ui_version": payload.get("ui_version"),
@@ -248,18 +254,44 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline-ms", type=int, default=DEFAULT_BASELINE_MS)
     parser.add_argument("--max-median-cold-ms", type=int, default=15000)
     parser.add_argument("--max-p95-cold-ms", type=int, default=30000)
+    parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
+    cases = DEFAULT_CASES
+    if args.case_ids:
+        requested = set(args.case_ids)
+        cases = [case for case in DEFAULT_CASES if case["id"] in requested]
+        missing = requested - {str(case["id"]) for case in cases}
+        if missing:
+            parser.error(f"unknown --case value(s): {', '.join(sorted(missing))}")
+
     store = server.GraphStore()
-    results = [run_case(case, store=store) for case in DEFAULT_CASES]
+    results = []
+    for case in cases:
+        result = run_case(case, store=store)
+        results.append(result)
+        print(
+            json.dumps(
+                {
+                    "benchmark_case_complete": result["id"],
+                    "cold_prompt_ms": result["cold_prompt_ms"],
+                    "warm_prompt_ms": result["warm_prompt_ms"],
+                }
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
     summary = summarize_results(results, args.baseline_ms)
+    requires_slow_graph_timeout = any(case.get("force_slow_graph") for case in cases)
     gate = {
         "median_cold_pass": summary["median_cold_prompt_ms"] <= args.max_median_cold_ms,
         "p95_cold_pass": summary["p95_cold_prompt_ms"] <= args.max_p95_cold_ms,
         "grounding_pass": summary["mean_grounding_recall"] == 1.0,
-        "slow_graph_optional_timeout_pass": summary["optional_broad_graph_timeouts"] >= 1,
-        "multi_key_cache_pass": summary["max_cache_entries"] >= 2,
+        "slow_graph_optional_timeout_pass": (
+            not requires_slow_graph_timeout or summary["optional_broad_graph_timeouts"] >= 1
+        ),
+        "multi_key_cache_pass": len(cases) < 2 or summary["max_cache_entries"] >= 2,
     }
     payload = {
         "started_at": datetime.now(PACIFIC).replace(microsecond=0).isoformat(),

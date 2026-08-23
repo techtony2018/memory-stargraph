@@ -5165,6 +5165,18 @@ class GraphStore:
         except Exception:  # noqa: BLE001
             return None
 
+    def get_entities_raw(self, slugs, max_workers=4):
+        ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))
+        if not ordered_slugs:
+            return {}
+        workers = min(max_workers, len(ordered_slugs))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                slug: executor.submit(self.get_entity_raw, slug)
+                for slug in ordered_slugs
+            }
+            return {slug: futures[slug].result() for slug in ordered_slugs}
+
     def get_entity_media(self, slug):
         raw = self.get_entity_raw(slug)
         if raw is None:
@@ -5495,8 +5507,10 @@ class GraphStore:
         child_reads = 0
         if child_slugs:
             lines.extend(["", "Direct current TODO child-node reads:"])
-        for item_id, node_slug in child_slugs[:8]:
-            child_raw = self.get_entity_raw(node_slug) or ""
+        selected_child_slugs = child_slugs[:8]
+        child_pages = self.get_entities_raw(node_slug for _, node_slug in selected_child_slugs)
+        for item_id, node_slug in selected_child_slugs:
+            child_raw = child_pages.get(node_slug) or ""
             if not child_raw:
                 continue
             child_reads += 1
@@ -5584,8 +5598,10 @@ class GraphStore:
         child_reads = 0
         if child_slugs:
             lines.extend(["", "Direct completed remediation child-node reads:"])
-        for item_id, node_slug in child_slugs[:6]:
-            child_raw = self.get_entity_raw(node_slug) or ""
+        selected_child_slugs = child_slugs[:6]
+        child_pages = self.get_entities_raw(node_slug for _, node_slug in selected_child_slugs)
+        for item_id, node_slug in selected_child_slugs:
+            child_raw = child_pages.get(node_slug) or ""
             if not child_raw:
                 continue
             child_reads += 1
@@ -5727,11 +5743,11 @@ class GraphStore:
         if likely_slugs:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
+            candidate_pages = self.get_entities_raw(likely_slugs)
             for candidate in likely_slugs:
-                try:
-                    candidate_raw = run_gbrain("get", candidate)
-                except Exception as exc:  # noqa: BLE001
-                    candidate_raw = f"Unable to read {candidate}: {exc}"
+                candidate_raw = candidate_pages.get(candidate)
+                if candidate_raw is None:
+                    candidate_raw = f"Unable to read {candidate}"
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
         trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()

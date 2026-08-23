@@ -180,6 +180,20 @@ class GraphParsingTests(unittest.TestCase):
 
         self.assertIsNone(store.evidence_list_cache.get("run", 40))
 
+    def test_graph_store_reads_independent_entities_concurrently_in_input_order(self):
+        store = GraphStore()
+        barrier = threading.Barrier(3)
+
+        def fake_get_entity_raw(slug):
+            barrier.wait(timeout=2)
+            return f"# {slug}"
+
+        with mock.patch.object(store, "get_entity_raw", side_effect=fake_get_entity_raw):
+            pages = store.get_entities_raw(["pages/one", "pages/two", "pages/three"])
+
+        self.assertEqual(list(pages), ["pages/one", "pages/two", "pages/three"])
+        self.assertEqual(pages["pages/two"], "# pages/two")
+
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
             "title": "Memory Stargraph",
