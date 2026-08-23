@@ -307,6 +307,7 @@ class GraphParsingTests(unittest.TestCase):
         get_calls = [call for call in run.call_args_list if call.args[0] == "get"]
         self.assertEqual(first_prompt, second_prompt)
         self.assertEqual(len(query_calls), 2)
+        self.assertTrue(all("--no-expand" in call.args for call in query_calls))
         self.assertEqual(len(get_calls), 1)
         self.assertEqual(len(store.yoda_search_cache.entries), 2)
         self.assertEqual(len(store.yoda_source_cache.entries), 1)
@@ -1711,7 +1712,7 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("get", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
-                mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
+                mock.call("query", "What should I know? people/tony-guan", "--no-expand", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--type", "employed by", "--direction", "both", "--depth", "2"),
                 mock.call("get", "people/tony-guan"),
@@ -1786,7 +1787,7 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("get", "people/tony-guan"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
-                mock.call("query", "What does White Swan connect to? people/tony-guan", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
+                mock.call("query", "What does White Swan connect to? people/tony-guan", "--no-expand", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("get", "notes/tai-chi/white-swan"),
             ],
             any_order=True,

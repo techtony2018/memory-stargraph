@@ -5241,6 +5241,7 @@ class GraphStore:
         output = run_gbrain(
             "query",
             query,
+            "--no-expand",
             "--adaptive-return",
             "true",
             "--limit",
