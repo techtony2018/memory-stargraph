@@ -1337,6 +1337,7 @@ class ApiEndpointTests(unittest.TestCase):
                 "| --- | --- | --- | --- | --- | --- | --- |",
                 "| SG-0128 | completed | P1 | Separate synthetic resolver probe telemetry | [[notes/memory-starmap-todo-list/separate-synthetic-resolver-probe-telemetry]] | 2026-07-16T03:10:00-07:00 | Completed: synthetic/test probes are isolated from production learning clusters. |",
                 "| SG-0139 | completed | P1 | Add broad graph timeout telemetry | [[notes/memory-starmap-todo-list/add-broad-graph-timeout-telemetry]] | 2026-07-17T02:10:00-07:00 | Completed: yoda logs expose context_degraded and broad_graph_timeout. |",
+                "| SG-0150 | completed | P1 | Restore unrelated resolver health | [[notes/memory-starmap-todo-list/restore-unrelated-resolver-health]] | 2026-07-18T02:10:00-07:00 | Completed: reliability monitoring is healthy. |",
                 "| SG-0149 | planned | P1 | Reconcile Ask Yoda operational recommendations with resolved incident state | [[notes/memory-starmap-todo-list/reconcile-ask-yoda-operational-recommendations-with-resolved-incident-st]] | 2026-07-19T01:14:12-07:00 | Planned current gap. |",
             ]
         )
@@ -1364,6 +1365,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("SG-0128", prompt)
         self.assertIn("completed", prompt)
         self.assertIn("live resolver dry run excluded synthetic probes", prompt)
+        self.assertNotIn("SG-0150", prompt)
 
     def test_yoda_model_config_endpoint_reads_and_writes_local_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:

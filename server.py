@@ -5665,7 +5665,7 @@ class GraphStore:
             for term in re.findall(r"[a-z0-9-]{4,}", question_text)
             if term not in {"what", "current", "remain", "remaining", "around", "with", "from", "that", "this"}
         }
-        operational_match_terms = set(operational_tokens) | question_terms
+        operational_match_terms = question_terms or set(operational_tokens)
         completed_rows = []
         for row in rows:
             if row.get("status") != "completed":
