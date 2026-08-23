@@ -180,6 +180,30 @@ class GraphParsingTests(unittest.TestCase):
 
         self.assertIsNone(store.evidence_list_cache.get("run", 40))
 
+    def test_search_runs_primary_and_evidence_calls_concurrently(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+            "edge_types": [],
+        }
+        barrier = threading.Barrier(5)
+
+        def fake_run_gbrain(*args, **_kwargs):
+            barrier.wait(timeout=2)
+            if args[0] == "search":
+                return "[0.90] learnings/concurrent-search -- Concurrent search\n"
+            if args[0] == "list":
+                return ""
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "concurrent search benchmark")
+
+        coverage = graph["source"]["coverage"]
+        self.assertEqual(coverage["search_status"], "complete")
+        self.assertEqual(coverage["search_slugs"][0], "learnings/concurrent-search")
+
     def test_search_raw_graph_promotes_matching_evidence_records(self):
         raw_graph = {
             "title": "Memory Stargraph",
@@ -253,7 +277,7 @@ class GraphParsingTests(unittest.TestCase):
             coverage["search_slugs"],
         )
 
-    def test_search_raw_graph_reserves_evidence_budget_when_primary_times_out(self):
+    def test_search_raw_graph_collects_evidence_when_primary_times_out(self):
         raw_graph = {
             "title": "Memory Stargraph",
             "source": {"coverage": {}},
@@ -286,7 +310,7 @@ class GraphParsingTests(unittest.TestCase):
             graph = search_raw_graph(raw_graph, "optional timeout telemetry is not a todo")
 
         coverage = graph["source"]["coverage"]
-        self.assertLessEqual(primary_timeouts[0], 5.25)
+        self.assertLessEqual(primary_timeouts[0], 6)
         self.assertEqual(coverage["search_primary_status"], "timeout")
         self.assertEqual(coverage["search_evidence_status"], "complete")
         self.assertEqual(coverage["search_status"], "partial_timeout")

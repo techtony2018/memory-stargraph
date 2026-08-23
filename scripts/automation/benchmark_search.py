@@ -57,17 +57,28 @@ def main() -> int:
     parser.add_argument("--mode", choices=("evidence", "full"), default="full")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--query", action="append", dest="queries")
+    parser.add_argument(
+        "--cold-each-case",
+        action="store_true",
+        help="Use a fresh GraphStore for every full-search case.",
+    )
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
 
     store = server.GraphStore()
-    runner = run_evidence_case if args.mode == "evidence" else lambda query: run_full_case(query, store)
+    if args.mode == "evidence":
+        runner = run_evidence_case
+    elif args.cold_each_case:
+        runner = lambda query: run_full_case(query, server.GraphStore())
+    else:
+        runner = lambda query: run_full_case(query, store)
     results = [runner(query) for _ in range(args.repeat) for query in (args.queries or DEFAULT_QUERIES)]
     elapsed_values = [int(result["elapsed_ms"]) for result in results]
     payload = {
         "mode": args.mode,
         "repeat": args.repeat,
+        "cold_each_case": args.cold_each_case,
         "case_count": len(results),
         "median_elapsed_ms": round(statistics.median(elapsed_values)),
         "complete_count": sum(1 for result in results if result["status"] == "complete"),

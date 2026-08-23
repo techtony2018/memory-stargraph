@@ -4545,50 +4545,52 @@ def expand_raw_graph(raw_graph, center_slug):
     }
 
 
+def live_primary_search_results(query, timeout):
+    try:
+        search_output = run_gbrain("search", query, timeout=timeout)
+        return parse_search_results(search_output), "complete"
+    except Exception:  # noqa: BLE001
+        return [], "timeout"
+
+
 def search_raw_graph(raw_graph, query, evidence_cache=None):
     started = time.monotonic()
     deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
     exact_todo_results, exact_todo_status = exact_todo_id_search_results(query)
-    primary_status = "complete"
     if exact_todo_results is not None:
         primary_results = exact_todo_results
         primary_status = "complete" if exact_todo_status == "complete" else "timeout"
+        evidence_results = []
+        sentinel_results = []
+        evidence_status = "skipped_exact_todo_id"
+        evidence_cache_status = "skipped_exact_todo_id"
     else:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             primary_results = []
             primary_status = "timeout"
+            evidence_results = []
+            evidence_status = "partial_timeout"
+            evidence_cache_status = "skipped_budget"
         else:
-            try:
-                primary_budget = min(
-                    SEARCH_PRIMARY_TIMEOUT_SECONDS,
-                    max(0.5, remaining - SEARCH_EVIDENCE_BUDGET_SECONDS),
+            primary_budget = min(SEARCH_PRIMARY_TIMEOUT_SECONDS, max(0.5, remaining))
+            evidence_budget = min(SEARCH_EVIDENCE_BUDGET_SECONDS, remaining)
+            evidence_deadline = min(deadline, time.monotonic() + evidence_budget)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                primary_future = executor.submit(
+                    live_primary_search_results,
+                    query,
+                    primary_budget,
                 )
-                search_output = run_gbrain("search", query, timeout=primary_budget)
-                primary_results = parse_search_results(search_output)
-            except Exception:  # noqa: BLE001
-                primary_results = []
-                primary_status = "timeout"
-    remaining = deadline - time.monotonic()
-    if exact_todo_results is not None:
-        evidence_results = []
-        sentinel_results = []
-        evidence_status = "skipped_exact_todo_id"
-        evidence_cache_status = "skipped_exact_todo_id"
-    elif remaining <= 0:
-        evidence_results = []
-        sentinel_results = search_sentinel_results(query, existing_slugs=[result["slug"] for result in primary_results])
-        evidence_status = "partial_timeout"
-        evidence_cache_status = "skipped_budget"
-    else:
-        evidence_budget = min(SEARCH_EVIDENCE_BUDGET_SECONDS, remaining)
-        evidence_deadline = min(deadline, time.monotonic() + evidence_budget)
-        evidence_results, evidence_status, evidence_cache_status = evidence_record_search_results(
-            query,
-            deadline=evidence_deadline,
-            per_type_timeout=evidence_budget,
-            row_cache=evidence_cache,
-        )
+                evidence_future = executor.submit(
+                    evidence_record_search_results,
+                    query,
+                    deadline=evidence_deadline,
+                    per_type_timeout=evidence_budget,
+                    row_cache=evidence_cache,
+                )
+                primary_results, primary_status = primary_future.result()
+                evidence_results, evidence_status, evidence_cache_status = evidence_future.result()
         sentinel_results = search_sentinel_results(
             query,
             existing_slugs=[result["slug"] for result in evidence_results + primary_results],
