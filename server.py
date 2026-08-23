@@ -2753,6 +2753,8 @@ SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_EVIDENCE_CACHE_SECONDS = 30
+YODA_SEARCH_CACHE_SECONDS = 30
+YODA_SEARCH_CACHE_MAX_ENTRIES = 32
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -2908,6 +2910,44 @@ class EvidenceListCache:
                 "rows": tuple(rows),
                 "stored_at": time.monotonic(),
             }
+
+    def clear(self):
+        with self.lock:
+            self.entries.clear()
+
+
+class YodaSearchCache:
+    def __init__(self, ttl_seconds=YODA_SEARCH_CACHE_SECONDS, max_entries=YODA_SEARCH_CACHE_MAX_ENTRIES):
+        self.ttl_seconds = ttl_seconds
+        self.max_entries = max_entries
+        self.entries = {}
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        now = time.monotonic()
+        with self.lock:
+            entry = self.entries.get(key)
+            if not entry or now - entry["stored_at"] >= self.ttl_seconds:
+                self.entries.pop(key, None)
+                return None
+            return entry["output"]
+
+    def put(self, key, output):
+        now = time.monotonic()
+        with self.lock:
+            self.entries = {
+                entry_key: entry
+                for entry_key, entry in self.entries.items()
+                if now - entry["stored_at"] < self.ttl_seconds
+            }
+            self.entries[key] = {"output": output, "stored_at": now}
+            if len(self.entries) > self.max_entries:
+                oldest_keys = sorted(
+                    self.entries,
+                    key=lambda entry_key: self.entries[entry_key]["stored_at"],
+                )
+                for oldest_key in oldest_keys[:-self.max_entries]:
+                    self.entries.pop(oldest_key, None)
 
     def clear(self):
         with self.lock:
@@ -4882,6 +4922,7 @@ class GraphStore:
         self.refreshing = False
         self.condition = threading.Condition()
         self.yoda_context_cache = {}
+        self.yoda_search_cache = YodaSearchCache()
         self.evidence_list_cache = EvidenceListCache()
 
     def get_health_graph(self):
@@ -4904,6 +4945,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.yoda_search_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -4957,6 +4999,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.yoda_search_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -5035,6 +5078,7 @@ class GraphStore:
             self.graph = None
             self.loaded_at = 0.0
             self.yoda_context_cache = {}
+            self.yoda_search_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -5176,6 +5220,24 @@ class GraphStore:
                 for slug in ordered_slugs
             }
             return {slug: futures[slug].result() for slug in ordered_slugs}
+
+    def get_yoda_search_output(self, query):
+        cache_key = hashlib.sha256(str(query or "").encode("utf-8")).hexdigest()
+        cached = self.yoda_search_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        output = run_gbrain(
+            "query",
+            query,
+            "--adaptive-return",
+            "true",
+            "--limit",
+            "10",
+            "--relational",
+            "true",
+        ) or ""
+        self.yoda_search_cache.put(cache_key, output)
+        return output
 
     def get_entity_media(self, slug):
         raw = self.get_entity_raw(slug)
@@ -5736,16 +5798,7 @@ class GraphStore:
             trace["operational_state"] = int((time.perf_counter() - phase_started) * 1000)
         phase_started = time.perf_counter()
         try:
-            search_output = run_gbrain(
-                "query",
-                f"{effective_question} {slug}",
-                "--adaptive-return",
-                "true",
-                "--limit",
-                "10",
-                "--relational",
-                "true",
-            )
+            search_output = self.get_yoda_search_output(f"{effective_question} {slug}")
         except Exception as exc:  # noqa: BLE001
             search_output = f"Broader retrieval unavailable: {exc}"
         trace["search"] = int((time.perf_counter() - phase_started) * 1000)

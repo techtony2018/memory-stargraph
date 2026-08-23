@@ -9,6 +9,7 @@ from server import (
     DEFAULT_CONFIG,
     EvidenceListCache,
     GraphStore,
+    YodaSearchCache,
     append_attachment_reference,
     collapse_part_identity,
     collect_seed_graph,
@@ -172,13 +173,31 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(first_results, second_results)
         self.assertEqual(len(calls), 4)
 
-    def test_graph_store_invalidation_clears_evidence_list_cache(self):
+    def test_graph_store_invalidation_clears_search_caches(self):
         store = GraphStore()
         store.evidence_list_cache.put("run", 40, [{"slug": "runs/cached"}])
+        store.yoda_search_cache.put("question", "cached search")
 
         store.invalidate()
 
         self.assertIsNone(store.evidence_list_cache.get("run", 40))
+        self.assertIsNone(store.yoda_search_cache.get("question"))
+
+    def test_yoda_search_cache_expires_and_bounds_entries(self):
+        cache = YodaSearchCache(ttl_seconds=10, max_entries=2)
+        with mock.patch("server.time.monotonic", return_value=0):
+            cache.put("oldest", "one")
+        with mock.patch("server.time.monotonic", return_value=1):
+            cache.put("middle", "two")
+        with mock.patch("server.time.monotonic", return_value=2):
+            cache.put("newest", "three")
+        with mock.patch("server.time.monotonic", return_value=3):
+            self.assertIsNone(cache.get("oldest"))
+            self.assertEqual(cache.get("middle"), "two")
+            self.assertEqual(cache.get("newest"), "three")
+        with mock.patch("server.time.monotonic", return_value=11.5):
+            self.assertIsNone(cache.get("middle"))
+            self.assertEqual(cache.get("newest"), "three")
 
     def test_graph_store_reads_independent_entities_concurrently_in_input_order(self):
         store = GraphStore()
@@ -233,6 +252,47 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIn("Current reliability gap", prompt)
         self.assertIn("Resolved reliability gap", prompt)
         self.assertEqual(calls.count(todo_root), 1)
+
+    def test_yoda_search_reuses_an_exact_query_but_not_a_different_question(self):
+        store = GraphStore()
+        stable_context = {
+            "selected_node": "# Product",
+            "graph": "",
+            "backlinks": "",
+            "timings": {},
+        }
+        search_output = "[0.99] products/memory-stargraph -- # Memory Stargraph"
+
+        with (
+            mock.patch.object(store, "build_yoda_current_todo_context", return_value={"text": "", "counts": {}}),
+            mock.patch.object(
+                store,
+                "build_yoda_operational_remediation_context",
+                return_value={"text": "", "counts": {}},
+            ),
+            mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
+            mock.patch("server.run_gbrain", return_value=search_output) as run,
+        ):
+            first_prompt = store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "What changed?",
+                stable_context=stable_context,
+            )
+            second_prompt = store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "What changed?",
+                stable_context=stable_context,
+            )
+            store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "What is next?",
+                stable_context=stable_context,
+            )
+
+        query_calls = [call for call in run.call_args_list if call.args[0] == "query"]
+        self.assertEqual(first_prompt, second_prompt)
+        self.assertEqual(len(query_calls), 2)
+        self.assertEqual(len(store.yoda_search_cache.entries), 2)
 
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
