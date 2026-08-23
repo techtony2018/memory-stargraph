@@ -46,6 +46,7 @@ def run_full_case(query: str, store: server.GraphStore | None = None) -> dict[st
         "search_elapsed_ms": coverage.get("search_elapsed_ms"),
         "status": coverage.get("search_status"),
         "primary_status": coverage.get("search_primary_status"),
+        "primary_cache_status": coverage.get("search_primary_cache_status"),
         "evidence_status": coverage.get("search_evidence_status"),
         "evidence_cache_status": coverage.get("search_evidence_cache_status"),
         "top_slug": (coverage.get("search_slugs") or [None])[0],

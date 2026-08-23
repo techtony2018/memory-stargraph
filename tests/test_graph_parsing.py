@@ -10,7 +10,7 @@ from server import (
     DEFAULT_CONFIG,
     EvidenceListCache,
     GraphStore,
-    TimedTextCache,
+    TimedValueCache,
     append_attachment_reference,
     collapse_part_identity,
     collect_seed_graph,
@@ -300,17 +300,19 @@ class GraphParsingTests(unittest.TestCase):
     def test_graph_store_invalidation_clears_search_caches(self):
         store = GraphStore()
         store.evidence_list_cache.put("run", 40, [{"slug": "runs/cached"}])
+        store.primary_search_cache.put("query", (({"slug": "cached"},), "complete"))
         store.yoda_search_cache.put("question", "cached search")
         store.yoda_source_cache.put("source", "cached source")
 
         store.invalidate()
 
         self.assertIsNone(store.evidence_list_cache.get("run", 40))
+        self.assertIsNone(store.primary_search_cache.get("query"))
         self.assertIsNone(store.yoda_search_cache.get("question"))
         self.assertIsNone(store.yoda_source_cache.get("source"))
 
-    def test_timed_text_cache_expires_and_bounds_entries(self):
-        cache = TimedTextCache(ttl_seconds=10, max_entries=2)
+    def test_timed_value_cache_expires_and_bounds_entries(self):
+        cache = TimedValueCache(ttl_seconds=10, max_entries=2)
         with mock.patch("server.time.monotonic", return_value=0):
             cache.put("oldest", "one")
         with mock.patch("server.time.monotonic", return_value=1):
@@ -324,6 +326,42 @@ class GraphParsingTests(unittest.TestCase):
         with mock.patch("server.time.monotonic", return_value=11.5):
             self.assertIsNone(cache.get("middle"))
             self.assertEqual(cache.get("newest"), "three")
+
+    def test_graph_store_reuses_exact_primary_search_results(self):
+        store = GraphStore()
+        seed_graph = finalize_graph(
+            {
+                "title": "Search cache test",
+                "source": {"coverage": {}},
+                "nodes": [
+                    {
+                        "slug": "index",
+                        "id": "index",
+                        "label": "Index",
+                        "type": "root",
+                        "links": [],
+                    }
+                ],
+                "edge_types": [],
+            }
+        )
+        for page_type in ("learning", "todo", "report", "run"):
+            store.evidence_list_cache.put(page_type, 40, [])
+
+        with (
+            mock.patch.object(store, "get_seed_graph", return_value=seed_graph),
+            mock.patch(
+                "server.run_gbrain",
+                return_value="[0.99] products/memory-stargraph -- # Memory Stargraph",
+            ) as run,
+        ):
+            first = store.search("memory stargraph")
+            second = store.search("memory stargraph")
+
+        search_calls = [call for call in run.call_args_list if call.args[0] == "search"]
+        self.assertEqual(len(search_calls), 1)
+        self.assertEqual(first["source"]["coverage"]["search_primary_cache_status"], "miss")
+        self.assertEqual(second["source"]["coverage"]["search_primary_cache_status"], "hit")
 
     def test_graph_store_reads_independent_entities_concurrently_in_input_order(self):
         store = GraphStore()

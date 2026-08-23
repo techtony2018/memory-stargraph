@@ -2750,6 +2750,8 @@ def parse_search_results(output):
 
 EVIDENCE_SEARCH_TYPES = ("learning", "todo", "report", "run")
 SEARCH_PRIMARY_TIMEOUT_SECONDS = 6
+SEARCH_PRIMARY_CACHE_SECONDS = 30
+SEARCH_PRIMARY_CACHE_MAX_ENTRIES = 64
 SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_EVIDENCE_CACHE_SECONDS = 30
@@ -2978,7 +2980,7 @@ class EvidenceListCache:
             self.generation += 1
 
 
-class TimedTextCache:
+class TimedValueCache:
     def __init__(self, ttl_seconds, max_entries):
         self.ttl_seconds = ttl_seconds
         self.max_entries = max_entries
@@ -2992,9 +2994,9 @@ class TimedTextCache:
             if not entry or now - entry["stored_at"] >= self.ttl_seconds:
                 self.entries.pop(key, None)
                 return None
-            return entry["output"]
+            return entry["value"]
 
-    def put(self, key, output):
+    def put(self, key, value):
         now = time.monotonic()
         with self.lock:
             self.entries = {
@@ -3002,7 +3004,7 @@ class TimedTextCache:
                 for entry_key, entry in self.entries.items()
                 if now - entry["stored_at"] < self.ttl_seconds
             }
-            self.entries[key] = {"output": output, "stored_at": now}
+            self.entries[key] = {"value": value, "stored_at": now}
             if len(self.entries) > self.max_entries:
                 oldest_keys = sorted(
                     self.entries,
@@ -4699,13 +4701,26 @@ def live_primary_search_results(query, timeout):
         return [], "timeout"
 
 
-def search_raw_graph(raw_graph, query, evidence_cache=None):
+def cached_primary_search_results(query, timeout, cache=None):
+    cache_key = hashlib.sha256(str(query or "").strip().lower().encode("utf-8")).hexdigest()
+    cached = cache.get(cache_key) if cache is not None else None
+    if cached is not None:
+        results, status = cached
+        return [dict(result) for result in results], status, "hit"
+    results, status = live_primary_search_results(query, timeout)
+    if cache is not None and status == "complete":
+        cache.put(cache_key, (tuple(dict(result) for result in results), status))
+    return results, status, "miss" if cache is not None else "disabled"
+
+
+def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
     started = time.monotonic()
     deadline = started + SEARCH_TOTAL_BUDGET_SECONDS
     exact_todo_results, exact_todo_status = exact_todo_id_search_results(query)
     if exact_todo_results is not None:
         primary_results = exact_todo_results
         primary_status = "complete" if exact_todo_status == "complete" else "timeout"
+        primary_cache_status = "skipped_exact_todo_id"
         evidence_results = []
         sentinel_results = []
         evidence_status = "skipped_exact_todo_id"
@@ -4715,6 +4730,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None):
         if remaining <= 0:
             primary_results = []
             primary_status = "timeout"
+            primary_cache_status = "skipped_budget"
             evidence_results = []
             evidence_status = "partial_timeout"
             evidence_cache_status = "skipped_budget"
@@ -4724,9 +4740,10 @@ def search_raw_graph(raw_graph, query, evidence_cache=None):
             evidence_deadline = min(deadline, time.monotonic() + evidence_budget)
             with ThreadPoolExecutor(max_workers=2) as executor:
                 primary_future = executor.submit(
-                    live_primary_search_results,
+                    cached_primary_search_results,
                     query,
                     primary_budget,
+                    primary_cache,
                 )
                 evidence_future = executor.submit(
                     evidence_record_search_results,
@@ -4735,7 +4752,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None):
                     per_type_timeout=evidence_budget,
                     row_cache=evidence_cache,
                 )
-                primary_results, primary_status = primary_future.result()
+                primary_results, primary_status, primary_cache_status = primary_future.result()
                 evidence_results, evidence_status, evidence_cache_status = evidence_future.result()
         sentinel_results = search_sentinel_results(
             query,
@@ -4776,6 +4793,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None):
     evidence_complete = evidence_status in {"complete", "skipped_no_terms", "skipped_exact_todo_id"}
     coverage["search_status"] = "complete" if primary_status == "complete" and evidence_complete else "partial_timeout"
     coverage["search_primary_status"] = primary_status
+    coverage["search_primary_cache_status"] = primary_cache_status
     coverage["search_evidence_status"] = evidence_status
     coverage["search_evidence_cache_status"] = evidence_cache_status
     if exact_todo_results is not None:
@@ -5028,11 +5046,15 @@ class GraphStore:
         self.refreshing = False
         self.condition = threading.Condition()
         self.yoda_context_cache = {}
-        self.yoda_search_cache = TimedTextCache(
+        self.primary_search_cache = TimedValueCache(
+            ttl_seconds=SEARCH_PRIMARY_CACHE_SECONDS,
+            max_entries=SEARCH_PRIMARY_CACHE_MAX_ENTRIES,
+        )
+        self.yoda_search_cache = TimedValueCache(
             ttl_seconds=YODA_SEARCH_CACHE_SECONDS,
             max_entries=YODA_SEARCH_CACHE_MAX_ENTRIES,
         )
-        self.yoda_source_cache = TimedTextCache(
+        self.yoda_source_cache = TimedValueCache(
             ttl_seconds=YODA_SOURCE_CACHE_SECONDS,
             max_entries=YODA_SOURCE_CACHE_MAX_ENTRIES,
         )
@@ -5079,6 +5101,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
@@ -5134,6 +5157,7 @@ class GraphStore:
         now = time.time()
         if force:
             self.yoda_context_cache = {}
+            self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
@@ -5202,7 +5226,12 @@ class GraphStore:
         graph = self.get_seed_graph()
         raw_graph = graph_to_raw_payload(graph)
         payload = finalize_graph(
-            search_raw_graph(raw_graph, query, evidence_cache=self.evidence_list_cache)
+            search_raw_graph(
+                raw_graph,
+                query,
+                evidence_cache=self.evidence_list_cache,
+                primary_cache=self.primary_search_cache,
+            )
         )
         with self.condition:
             self.graph = payload
@@ -5214,6 +5243,7 @@ class GraphStore:
             self.graph = None
             self.loaded_at = 0.0
             self.yoda_context_cache = {}
+            self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.evidence_list_cache.clear()
