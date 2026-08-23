@@ -2754,6 +2754,7 @@ SEARCH_TOTAL_BUDGET_SECONDS = 8.6
 SEARCH_EVIDENCE_BUDGET_SECONDS = 4.0
 SEARCH_EVIDENCE_CACHE_SECONDS = 30
 SEARCH_EVIDENCE_STALE_SECONDS = 300
+SEARCH_EVIDENCE_PREWARM_TIMEOUT_SECONDS = 10
 YODA_SEARCH_CACHE_SECONDS = 30
 YODA_SEARCH_CACHE_MAX_ENTRIES = 32
 YODA_SOURCE_CACHE_SECONDS = 30
@@ -2897,6 +2898,7 @@ class EvidenceListCache:
         self.stale_seconds = max(ttl_seconds, stale_seconds)
         self.entries = {}
         self.refreshing = set()
+        self.refresh_events = {}
         self.generation = 0
         self.lock = threading.Lock()
 
@@ -2940,6 +2942,8 @@ class EvidenceListCache:
             if token in self.refreshing:
                 return False
             self.refreshing.add(token)
+            refresh_event = threading.Event()
+            self.refresh_events[token] = refresh_event
 
         def refresh():
             try:
@@ -2948,14 +2952,25 @@ class EvidenceListCache:
                 rows = None
             with self.lock:
                 self.refreshing.discard(token)
+                self.refresh_events.pop(token, None)
                 if rows is not None and self.generation == generation:
                     self.entries[key] = {
                         "rows": rows,
                         "stored_at": time.monotonic(),
                     }
+                refresh_event.set()
 
         threading.Thread(target=refresh, daemon=True).start()
         return True
+
+    def wait_for_refresh(self, page_type, per_type_limit, timeout):
+        key = (page_type, per_type_limit)
+        with self.lock:
+            refresh_event = self.refresh_events.get((self.generation, key))
+        if refresh_event is None:
+            return self.get(page_type, per_type_limit)
+        refresh_event.wait(timeout=max(0, timeout))
+        return self.get(page_type, per_type_limit)
 
     def clear(self):
         with self.lock:
@@ -3001,6 +3016,19 @@ class TimedTextCache:
             self.entries.clear()
 
 
+def load_evidence_page_rows(page_type, per_type_limit, timeout):
+    return parse_page_list(
+        run_gbrain(
+            "list",
+            "--type",
+            page_type,
+            "-n",
+            str(per_type_limit),
+            timeout=timeout,
+        )
+    )
+
+
 def evidence_record_search_results(
     query,
     existing_slugs=None,
@@ -3019,12 +3047,25 @@ def evidence_record_search_results(
     rows_by_type = {}
     missing_types = []
     stale_types = []
+    prewarm_types = []
     for page_type in EVIDENCE_SEARCH_TYPES:
         cached_rows = row_cache.get(page_type, per_type_limit) if row_cache is not None else None
         if cached_rows is None:
             stale_rows = row_cache.get_stale(page_type, per_type_limit) if row_cache is not None else None
             if stale_rows is None:
-                missing_types.append(page_type)
+                wait_timeout = per_type_timeout
+                if deadline is not None:
+                    wait_timeout = max(0, deadline - time.monotonic())
+                refreshed_rows = (
+                    row_cache.wait_for_refresh(page_type, per_type_limit, wait_timeout)
+                    if row_cache is not None and wait_timeout > 0
+                    else None
+                )
+                if refreshed_rows is None:
+                    missing_types.append(page_type)
+                else:
+                    rows_by_type[page_type] = refreshed_rows
+                    prewarm_types.append(page_type)
             else:
                 rows_by_type[page_type] = stale_rows
                 stale_types.append(page_type)
@@ -3033,6 +3074,8 @@ def evidence_record_search_results(
 
     if row_cache is None:
         cache_status = "disabled"
+    elif prewarm_types:
+        cache_status = "prewarm_hit" if not missing_types and not stale_types else "partial_prewarm_hit"
     elif stale_types:
         cache_status = "stale_hit" if len(stale_types) == len(EVIDENCE_SEARCH_TYPES) else "partial_stale_hit"
     elif not missing_types:
@@ -3046,15 +3089,10 @@ def evidence_record_search_results(
         row_cache.refresh_async(
             page_type,
             per_type_limit,
-            lambda page_type=page_type: parse_page_list(
-                run_gbrain(
-                    "list",
-                    "--type",
-                    page_type,
-                    "-n",
-                    str(per_type_limit),
-                    timeout=per_type_timeout,
-                )
+            lambda page_type=page_type: load_evidence_page_rows(
+                page_type,
+                per_type_limit,
+                per_type_timeout,
             ),
         )
 
@@ -3069,19 +3107,16 @@ def evidence_record_search_results(
         with ThreadPoolExecutor(max_workers=len(missing_types)) as executor:
             futures = {
                 page_type: executor.submit(
-                    run_gbrain,
-                    "list",
-                    "--type",
+                    load_evidence_page_rows,
                     page_type,
-                    "-n",
-                    str(per_type_limit),
-                    timeout=timeout,
+                    per_type_limit,
+                    timeout,
                 )
                 for page_type in missing_types
             }
             for page_type in missing_types:
                 try:
-                    rows = parse_page_list(futures[page_type].result())
+                    rows = futures[page_type].result()
                     rows_by_type[page_type] = rows
                     if row_cache is not None:
                         row_cache.put(page_type, per_type_limit, rows)
@@ -5002,6 +5037,27 @@ class GraphStore:
             max_entries=YODA_SOURCE_CACHE_MAX_ENTRIES,
         )
         self.evidence_list_cache = EvidenceListCache()
+
+    def prewarm_search_evidence(
+        self,
+        per_type_limit=40,
+        timeout=SEARCH_EVIDENCE_PREWARM_TIMEOUT_SECONDS,
+    ):
+        started = 0
+        for page_type in EVIDENCE_SEARCH_TYPES:
+            if self.evidence_list_cache.get(page_type, per_type_limit) is not None:
+                continue
+            if self.evidence_list_cache.refresh_async(
+                page_type,
+                per_type_limit,
+                lambda page_type=page_type: load_evidence_page_rows(
+                    page_type,
+                    per_type_limit,
+                    timeout,
+                ),
+            ):
+                started += 1
+        return started
 
     def get_health_graph(self):
         with self.condition:
@@ -8313,6 +8369,7 @@ def main():
     args = parser.parse_args()
 
     ensure_data_dir()
+    STORE.prewarm_search_evidence()
     server = MemoryStargraphHTTPServer(
         (args.host, args.port), MemoryStargraphHandler
     )

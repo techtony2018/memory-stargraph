@@ -234,6 +234,69 @@ class GraphParsingTests(unittest.TestCase):
 
         self.assertIsNone(cache.get_stale("run", 40))
 
+    def test_search_evidence_prewarm_is_nonblocking_and_coalesces(self):
+        store = GraphStore()
+        release = threading.Event()
+        calls = []
+
+        def fake_run_gbrain(*args, **_kwargs):
+            page_type = args[2]
+            calls.append(page_type)
+            release.wait(timeout=1)
+            return f"{page_type}s/prewarmed\t{page_type}\t2026-08-23\tPrewarmed evidence\n"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            started_at = time.perf_counter()
+            started = store.prewarm_search_evidence()
+            elapsed = time.perf_counter() - started_at
+            duplicate_started = store.prewarm_search_evidence()
+            release.set()
+            deadline = time.monotonic() + 1
+            while store.evidence_list_cache.refreshing and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertEqual(started, 4)
+        self.assertEqual(duplicate_started, 0)
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(set(calls), set(("learning", "todo", "report", "run")))
+        for page_type in ("learning", "todo", "report", "run"):
+            self.assertIsNotNone(store.evidence_list_cache.get(page_type, 40))
+            self.assertIsNotNone(store.evidence_list_cache.wait_for_refresh(page_type, 40, 0))
+
+    def test_evidence_search_joins_an_inflight_prewarm(self):
+        store = GraphStore()
+        release = threading.Event()
+        calls = []
+        prefixes = {
+            "learning": "learnings",
+            "todo": "notes/memory-starmap-todo-list",
+            "report": "reports",
+            "run": "runs",
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            page_type = args[2]
+            calls.append(page_type)
+            release.wait(timeout=1)
+            return f"{prefixes[page_type]}/prewarm-benchmark-{page_type}\t{page_type}\t2026-08-23\tPrewarm benchmark evidence\n"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            self.assertEqual(store.prewarm_search_evidence(), 4)
+            timer = threading.Timer(0.05, release.set)
+            timer.start()
+            results, status, cache_status = evidence_record_search_results(
+                "prewarm benchmark",
+                deadline=time.monotonic() + 1,
+                per_type_timeout=1,
+                row_cache=store.evidence_list_cache,
+            )
+            timer.join(timeout=1)
+
+        self.assertEqual(status, "complete")
+        self.assertEqual(cache_status, "prewarm_hit")
+        self.assertEqual(len(results), 4)
+        self.assertEqual(len(calls), 4)
+
     def test_graph_store_invalidation_clears_search_caches(self):
         store = GraphStore()
         store.evidence_list_cache.put("run", 40, [{"slug": "runs/cached"}])
