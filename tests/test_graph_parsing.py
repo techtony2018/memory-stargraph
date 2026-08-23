@@ -401,6 +401,35 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(first["source"]["coverage"]["search_primary_cache_status"], "miss")
         self.assertEqual(second["source"]["coverage"]["search_primary_cache_status"], "hit")
 
+    def test_primary_search_coalesces_concurrent_cold_loads(self):
+        cache = TimedValueCache(ttl_seconds=30, stale_seconds=300, max_entries=2)
+        started = threading.Event()
+        release = threading.Event()
+        rows = []
+
+        def slow_search(_query, _timeout):
+            started.set()
+            release.wait(timeout=1)
+            return [{"slug": "pages/fresh"}], "complete"
+
+        def search():
+            rows.append(cached_primary_search_results("cold query", 1, cache))
+
+        with mock.patch("server.live_primary_search_results", side_effect=slow_search) as live_search:
+            first = threading.Thread(target=search)
+            second = threading.Thread(target=search)
+            first.start()
+            self.assertTrue(started.wait(timeout=1))
+            second.start()
+            time.sleep(0.01)
+            release.set()
+            first.join(timeout=1)
+            second.join(timeout=1)
+
+        self.assertEqual(live_search.call_count, 1)
+        self.assertEqual({row[2] for row in rows}, {"miss", "coalesced_hit"})
+        self.assertTrue(all(row[0] == [{"slug": "pages/fresh"}] for row in rows))
+
     def test_graph_store_reads_independent_entities_concurrently_in_input_order(self):
         store = GraphStore()
         barrier = threading.Barrier(3)

@@ -2988,6 +2988,7 @@ class TimedValueCache:
         self.max_entries = max_entries
         self.entries = {}
         self.refreshing = set()
+        self.loading_events = {}
         self.generation = 0
         self.lock = threading.Lock()
 
@@ -3048,6 +3049,37 @@ class TimedValueCache:
 
         threading.Thread(target=refresh, daemon=True).start()
         return True
+
+    def load_once(self, key, loader, timeout):
+        with self.lock:
+            generation = self.generation
+            token = (generation, key)
+            load_event = self.loading_events.get(token)
+            owner = load_event is None
+            if owner:
+                load_event = threading.Event()
+                self.loading_events[token] = load_event
+
+        if owner:
+            try:
+                value = loader()
+            except Exception:  # noqa: BLE001
+                value = None
+            with self.lock:
+                self.loading_events.pop(token, None)
+                if value is not None and self.generation == generation:
+                    self.entries[key] = {
+                        "value": value,
+                        "stored_at": time.monotonic(),
+                    }
+                load_event.set()
+            return value, "loaded"
+
+        load_event.wait(timeout=max(0, timeout))
+        with self.lock:
+            entry = self.entries.get(key)
+            value = entry["value"] if entry and self.generation == generation else None
+        return value, "joined" if value is not None else "timeout"
 
     def clear(self):
         with self.lock:
@@ -4757,10 +4789,22 @@ def cached_primary_search_results(query, timeout, cache=None):
         refresh_started = cache.refresh_async(cache_key, refresh)
         cache_status = "stale_refresh_started" if refresh_started else "stale_refresh_joined"
         return [dict(result) for result in results], status, cache_status
-    results, status = live_primary_search_results(query, timeout)
-    if cache is not None and status == "complete":
-        cache.put(cache_key, (tuple(dict(result) for result in results), status))
-    return results, status, "miss" if cache is not None else "disabled"
+    if cache is None:
+        results, status = live_primary_search_results(query, timeout)
+        return results, status, "disabled"
+
+    def load():
+        fresh_results, fresh_status = live_primary_search_results(query, timeout)
+        if fresh_status != "complete":
+            return None
+        return tuple(dict(result) for result in fresh_results), fresh_status
+
+    loaded, load_status = cache.load_once(cache_key, load, timeout)
+    if loaded is None:
+        return [], "timeout", "coalesced_timeout" if load_status == "timeout" else "miss"
+    results, status = loaded
+    cache_status = "coalesced_hit" if load_status == "joined" else "miss"
+    return [dict(result) for result in results], status, cache_status
 
 
 def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
