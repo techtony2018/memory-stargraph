@@ -104,9 +104,17 @@ Cold primary search is now the dominant remaining Search cost. The installed GBr
 
 This shows that process startup is a material part of the remaining latency. The next bounded experiment should evaluate a persistent GBrain transport (`gbrain serve` over stdio or local HTTP) against the existing subprocess path.
 
+The host already has a managed persistent service:
+
+- Process: `gbrain serve --http --port 3131 --bind 127.0.0.1 ...`
+- Read-only probe: `GET http://127.0.0.1:3131/health` returned HTTP 200 in 53 milliseconds.
+- Probe payload: status `ok`, version `0.46.28.0`, engine `postgres`.
+- A plain GET to `/mcp` returned HTTP 405, as expected for an MCP endpoint requiring the correct method and authentication flow.
+- Reuse this existing managed service for the benchmark. Do not restart it or launch a competing GBrain server.
+
 Recommended sequence:
 
-1. Add a benchmark-only persistent client; do not replace production behavior first.
+1. Add a benchmark-only client for the existing local HTTP MCP service; do not replace production behavior first.
 2. Compare cold and repeated Search latency, output parity, timeout behavior, and process recovery across at least 20 queries.
 3. Require exact slug/result-order parity and fail-closed fallback to the current subprocess path.
 4. Only integrate if the median and p95 gains are stable and lifecycle management does not require unauthorized service changes.
