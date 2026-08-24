@@ -1735,6 +1735,52 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(dict(cached_edge_types), dict(edge_types))
 
+    def test_expand_entity_reuses_relationship_types_for_immediate_detail(self):
+        store = GraphStore()
+        graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {"expanded_slugs": []}},
+            "nodes": [
+                {
+                    "slug": "people/tony-guan",
+                    "label": "Tony Guan",
+                    "type": "person",
+                    "summary": "Person",
+                    "links": [],
+                    "expanded": False,
+                }
+            ],
+            "edges": [],
+            "stats": {"max_degree": 0},
+        }
+        graph_output = """[depth 0] people/tony-guan
+  --built-> projects/jtuner (depth 1)
+"""
+        backlinks_output = """[
+  {"from_slug":"projects/jtuner","to_slug":"people/tony-guan","link_type":"mentioned"},
+  {"from_slug":"organizations/erfa","to_slug":"people/tony-guan","link_type":"led_by"}
+]"""
+
+        with (
+            mock.patch.object(store, "get_seed_graph", return_value=graph),
+            mock.patch("server.run_gbrain", side_effect=[graph_output, backlinks_output]) as run,
+            mock.patch("server.write_cache"),
+        ):
+            expanded = store.expand_entity("people/tony-guan")
+            cached_edge_types = store.direct_relationship_types("people/tony-guan")
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            cached_edge_types[("people/tony-guan", "projects/jtuner")],
+            {"built", "mentioned"},
+        )
+        self.assertEqual(
+            cached_edge_types[("organizations/erfa", "people/tony-guan")],
+            {"led_by"},
+        )
+        center = next(node for node in expanded["nodes"] if node["slug"] == "people/tony-guan")
+        self.assertTrue(center["expanded"])
+
     def test_parse_neighbors_ignores_unrelated_neighbor_edges_in_depth_one_json(self):
         output = """  Schema version 1 → 119 (114 migration(s) pending)
 [

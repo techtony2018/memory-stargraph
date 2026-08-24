@@ -5482,7 +5482,7 @@ def graph_to_raw_payload(graph):
     }
 
 
-def expand_raw_graph(raw_graph, center_slug):
+def expand_raw_graph(raw_graph, center_slug, relationship_types_out=None):
     nodes = {}
     edge_set = set()
     edge_types = defaultdict(set)
@@ -5526,12 +5526,16 @@ def expand_raw_graph(raw_graph, center_slug):
         str(GRAPH_DEPTH),
     )
     outbound_types = parse_graph_query_link_types(graph_output, center_slug)
+    if relationship_types_out is not None:
+        merge_edge_types(relationship_types_out, outbound_types)
     graph_edges = set(outbound_types)
     discovered_edges = set(graph_edges)
     merge_edge_types(edge_types, outbound_types)
     backlinks_output = run_gbrain("backlinks", center_slug)
     backlink_edges = parse_backlinks(backlinks_output, center_slug)
     backlink_types = parse_backlink_types(backlinks_output, center_slug)
+    if relationship_types_out is not None:
+        merge_edge_types(relationship_types_out, backlink_types)
     supplement_edges = choose_backlink_supplement_edges(graph_edges, backlink_edges, backlink_types)
     discovered_edges.update(supplement_edges)
     merge_edge_types(edge_types, filter_edge_types(backlink_types, supplement_edges))
@@ -6196,7 +6200,9 @@ class GraphStore:
         if node_map.get(slug, {}).get("expanded"):
             return graph
         raw_graph = graph_to_raw_payload(graph)
-        payload = finalize_graph(expand_raw_graph(raw_graph, slug))
+        relationship_types = defaultdict(set)
+        payload = finalize_graph(expand_raw_graph(raw_graph, slug, relationship_types))
+        self.cache_relationship_types(slug, relationship_types)
         write_cache(payload)
         with self.condition:
             self.graph = payload
@@ -6289,6 +6295,13 @@ class GraphStore:
                     future.result()
                 except Exception:  # noqa: BLE001
                     pass
+
+    def cache_relationship_types(self, slug, edge_types):
+        snapshot = tuple(
+            (key, tuple(sorted(types)))
+            for key, types in sorted(edge_types.items())
+        )
+        self.relationship_type_cache.put(slug, snapshot)
 
     def direct_relationship_types(self, slug):
         cached = self.relationship_type_cache.get(slug)
