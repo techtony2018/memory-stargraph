@@ -508,6 +508,7 @@ The combined Settings endpoint now caches its complete read-only snapshot for 10
 - Before, three repeated isolated-server requests took 1.257, 1.168, and 1.132 seconds, with a 1.168-second median and identical 17,073-byte payloads.
 - After, the cold request took 1.285 seconds; the next two requests took 2.5 and 3.4 milliseconds, about 99.7% below the uncached median.
 - A manual forced refresh took 1.696 seconds, confirming that the explicit refresh command was not served stale. Tests also verify two concurrent cold callers share one digest and readiness construction.
+- The isolated Playwright parity smoke passed initial load, manual refresh, graph refresh, API/UI status and count parity, configured-target evidence parity, and privacy checks. The two explicit refreshes advanced request ids and both carried `refresh=1`.
 
 The same low-priority startup gate now waits while any foreground busy operation is active, polling at 100-millisecond intervals. This prevents initial timeline-badge and TODO/Yoda/Follow-ups prefetches from entering the GBrain lane during Search, View, relationship, history, or other explicitly requested work. The callback runs as soon as foreground work and any Settings snapshot settle.
 
