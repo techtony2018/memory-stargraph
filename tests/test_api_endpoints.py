@@ -3495,6 +3495,108 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("resolver_feedback_health", serialized)
         self.assertNotIn("Unknown tool", serialized)
 
+    def test_resolver_health_reuses_missing_tool_capability_and_fallback(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError(
+            "GBrain backend does not expose resolver_feedback_health: Unknown tool: resolver_feedback_health"
+        )
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool) as fake_tool,
+            mock.patch("server.resolver_feedback_health_from_local_ledger", return_value={"pending": 0}) as fallback,
+        ):
+            first = server.resolver_feedback_health()
+            second = server.resolver_feedback_health()
+
+        self.assertEqual(second, first)
+        self.assertEqual(fake_tool.call_count, 1)
+        self.assertEqual(fallback.call_count, 1)
+
+    def test_resolver_health_keeps_capability_when_result_cache_clears(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError("Unknown tool: resolver_feedback_health")
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool) as fake_tool,
+            mock.patch("server.resolver_feedback_health_from_local_ledger", return_value={"pending": 0}) as fallback,
+        ):
+            server.resolver_feedback_health()
+            store.resolver_read_cache.clear()
+            server.resolver_feedback_health()
+
+        self.assertEqual(fake_tool.call_count, 1)
+        self.assertEqual(fallback.call_count, 2)
+
+    def test_resolver_health_does_not_cache_transient_failures(self):
+        store = server.GraphStore()
+        transient = RuntimeError("GBrain remote request timed out")
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", side_effect=transient) as fake_tool,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                server.resolver_feedback_health()
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                server.resolver_feedback_health()
+
+        self.assertEqual(fake_tool.call_count, 2)
+
+    def test_resolver_proposals_reuses_successful_result_cache(self):
+        store = server.GraphStore()
+        result = {"proposals": [{"id": "rp-1", "impact": "{}"}]}
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", return_value=result) as fake_tool,
+        ):
+            first = server.resolver_list_proposals("pending", 100)
+            second = server.resolver_list_proposals("pending", 100)
+
+        self.assertEqual(second, first)
+        self.assertEqual(fake_tool.call_count, 1)
+
+    def test_resolver_proposals_reuses_explicit_missing_tool_capability(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError(
+            "GBrain backend does not expose resolver_proposals_list: Unknown tool: resolver_proposals_list"
+        )
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool) as fake_tool,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "resolver_proposals_list"):
+                server.resolver_list_proposals("pending", 100)
+            with self.assertRaisesRegex(RuntimeError, "resolver_proposals_list"):
+                server.resolver_list_proposals("accepted", 100)
+
+        self.assertEqual(fake_tool.call_count, 1)
+
+    def test_resolver_proposals_does_not_cache_transient_failures(self):
+        store = server.GraphStore()
+        transient = RuntimeError("GBrain remote request timed out")
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", side_effect=transient) as fake_tool,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                server.resolver_list_proposals("pending", 100)
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                server.resolver_list_proposals("pending", 100)
+
+        self.assertEqual(fake_tool.call_count, 2)
+
+    def test_resolver_write_invalidates_read_and_settings_caches(self):
+        store = server.GraphStore()
+        store.resolver_read_cache.put("health", {"pending": 0})
+        store.settings_evidence_cache.put("week", {"digest": {}})
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.gbrain_call_tool", return_value={"ok": True}),
+        ):
+            server.resolver_submit_event({"event_id": "event-1"})
+
+        self.assertEqual(len(store.resolver_read_cache), 0)
+        self.assertEqual(len(store.settings_evidence_cache), 0)
+
     def test_resolver_health_fallback_reports_pending_without_mutating(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)

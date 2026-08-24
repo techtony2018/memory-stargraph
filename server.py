@@ -2231,6 +2231,37 @@ def openclaw_provisioning_authorized(headers):
     return bool(token) and hmac.compare_digest(str(supplied), f"Bearer {token}")
 
 
+def resolver_read_cache():
+    store = globals().get("STORE")
+    return getattr(store, "resolver_read_cache", None)
+
+
+def resolver_capability_cache():
+    store = globals().get("STORE")
+    return getattr(store, "resolver_capability_cache", None)
+
+
+def invalidate_resolver_read_caches():
+    store = globals().get("STORE")
+    for name in ("resolver_read_cache", "settings_evidence_cache"):
+        cache = getattr(store, name, None)
+        if cache is not None:
+            cache.clear()
+
+
+def resolver_tool_unavailable(error, tool_name):
+    message = str(error)
+    return (
+        f"GBrain backend does not expose {tool_name}" in message
+        or f"Unknown tool: {tool_name}" in message
+        or ("unknown_operation" in message and tool_name in message)
+    )
+
+
+def resolver_tool_cache_key(tool_name, *parts):
+    return (tool_name, gbrain_call_tool, *parts)
+
+
 def resolver_submit_event(payload):
     event_payload = {
         "event_id": str(payload.get("event_id") or f"stargraph-{int(time.time() * 1000)}"),
@@ -2250,7 +2281,9 @@ def resolver_submit_event(payload):
         "test_run": payload.get("test_run") is True,
         "pair_id": sanitize_text_summary(payload.get("pair_id"), 160),
     }
-    return gbrain_call_tool("resolver_events_submit", event_payload, timeout=20)
+    result = gbrain_call_tool("resolver_events_submit", event_payload, timeout=20)
+    invalidate_resolver_read_caches()
+    return result
 
 
 def resolver_list_events(limit=50, producer=None, outcome=None):
@@ -2302,11 +2335,32 @@ def resolver_list_proposals(status_filter="", limit=100):
     payload = {"limit": limit}
     if status_filter:
         payload["status"] = status_filter
-    data = gbrain_call_tool("resolver_proposals_list", payload, timeout=30)
+    cache = resolver_read_cache()
+    cache_key = resolver_tool_cache_key(
+        "resolver_proposals_list",
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+    )
+    cached = cache.get(cache_key) if cache is not None else None
+    if cached is not None:
+        return cached
+    capability = resolver_capability_cache()
+    capability_key = resolver_tool_cache_key("resolver_proposals_list:capability")
+    if capability is not None and capability.get(capability_key) is False:
+        raise RuntimeError("GBrain backend does not expose resolver_proposals_list")
+    try:
+        data = gbrain_call_tool("resolver_proposals_list", payload, timeout=30)
+        if capability is not None:
+            capability.put(capability_key, True)
+    except RuntimeError as exc:
+        if resolver_tool_unavailable(exc, "resolver_proposals_list") and capability is not None:
+            capability.put(capability_key, False)
+        raise
     if not isinstance(data, dict) or not isinstance(data.get("proposals"), list):
         return data
     normalized = dict(data)
     normalized["proposals"] = [normalize_resolver_proposal(row) for row in data["proposals"]]
+    if cache is not None:
+        cache.put(cache_key, normalized)
     return normalized
 
 
@@ -2314,14 +2368,18 @@ def resolver_generate_proposals(payload=None):
     request_payload = dict(payload or {})
     request_payload.setdefault("min_evidence", 2)
     request_payload.setdefault("run_source", "memory-stargraph")
-    return gbrain_call_tool("resolver_proposals_generate", request_payload, timeout=60)
+    result = gbrain_call_tool("resolver_proposals_generate", request_payload, timeout=60)
+    invalidate_resolver_read_caches()
+    return result
 
 
 def resolver_update_proposal(proposal_id, action, payload=None):
     request_payload = dict(payload or {})
     request_payload["proposal_id"] = proposal_id
     request_payload["action"] = action
-    return gbrain_call_tool("resolver_proposals_update", request_payload, timeout=30)
+    result = gbrain_call_tool("resolver_proposals_update", request_payload, timeout=30)
+    invalidate_resolver_read_caches()
+    return result
 
 
 def resolver_apply_proposal(proposal_id, payload=None):
@@ -2337,26 +2395,47 @@ def resolver_apply_proposal(proposal_id, payload=None):
     request_payload["approved_route"] = approved_route
     request_payload.setdefault("environments", ["codex", "openclaw"])
     request_payload["validation"] = validate_resolver_release(proposal, approved_route)
-    return gbrain_call_tool("resolver_releases_apply", request_payload, timeout=60)
+    result = gbrain_call_tool("resolver_releases_apply", request_payload, timeout=60)
+    invalidate_resolver_read_caches()
+    return result
 
 
 def resolver_measure_impact(proposal_id, payload=None):
     request_payload = dict(payload or {})
     request_payload["proposal_id"] = proposal_id
-    return gbrain_call_tool("resolver_impact_measure", request_payload, timeout=30)
+    result = gbrain_call_tool("resolver_impact_measure", request_payload, timeout=30)
+    invalidate_resolver_read_caches()
+    return result
 
 
 def resolver_feedback_health():
-    try:
-        return gbrain_call_tool("resolver_feedback_health", {}, timeout=20)
-    except RuntimeError as exc:
-        message = str(exc)
-        if (
-            "GBrain backend does not expose resolver_feedback_health" not in message
-            and "Unknown tool: resolver_feedback_health" not in message
-        ):
-            raise
-        return resolver_feedback_health_from_local_ledger(message)
+    cache = resolver_read_cache()
+    cache_key = resolver_tool_cache_key(
+        "resolver_feedback_health",
+        str(RESOLVER_PROPOSALS_PATH),
+        str(RESOLVER_EVENTS_PATH),
+    )
+    cached = cache.get(cache_key) if cache is not None else None
+    if cached is not None:
+        return cached
+    capability = resolver_capability_cache()
+    capability_key = resolver_tool_cache_key("resolver_feedback_health:capability")
+    if capability is not None and capability.get(capability_key) is False:
+        result = resolver_feedback_health_from_local_ledger()
+    else:
+        try:
+            result = gbrain_call_tool("resolver_feedback_health", {}, timeout=20)
+            if capability is not None:
+                capability.put(capability_key, True)
+        except RuntimeError as exc:
+            if not resolver_tool_unavailable(exc, "resolver_feedback_health"):
+                raise
+            if capability is not None:
+                capability.put(capability_key, False)
+            result = resolver_feedback_health_from_local_ledger(str(exc))
+    if cache is not None and result is not None:
+        cache.put(cache_key, result)
+    return result
 
 
 def clamp_take_review_limit(value):
@@ -3465,6 +3544,9 @@ AUTOPILOT_FINDINGS_CAPABILITY_CACHE_SECONDS = 300
 TAKE_REVIEW_CACHE_SECONDS = 30
 TAKE_REVIEW_CACHE_MAX_ENTRIES = 32
 TAKE_REVIEW_CAPABILITY_CACHE_SECONDS = 300
+RESOLVER_READ_CACHE_SECONDS = 30
+RESOLVER_READ_CACHE_MAX_ENTRIES = 16
+RESOLVER_CAPABILITY_CACHE_SECONDS = 300
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
@@ -6155,6 +6237,14 @@ class GraphStore:
             ttl_seconds=TAKE_REVIEW_CAPABILITY_CACHE_SECONDS,
             max_entries=1,
         )
+        self.resolver_read_cache = TimedValueCache(
+            ttl_seconds=RESOLVER_READ_CACHE_SECONDS,
+            max_entries=RESOLVER_READ_CACHE_MAX_ENTRIES,
+        )
+        self.resolver_capability_cache = TimedValueCache(
+            ttl_seconds=RESOLVER_CAPABILITY_CACHE_SECONDS,
+            max_entries=2,
+        )
         self.settings_evidence_cache = TimedValueCache(
             ttl_seconds=SETTINGS_EVIDENCE_CACHE_SECONDS,
             max_entries=1,
@@ -6211,6 +6301,7 @@ class GraphStore:
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
+            self.resolver_read_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6274,6 +6365,7 @@ class GraphStore:
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
+            self.resolver_read_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6378,6 +6470,7 @@ class GraphStore:
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
+            self.resolver_read_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
 
