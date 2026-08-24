@@ -773,7 +773,10 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('id="settingsEvidenceCards"', markup)
         self.assertIn("Weekly outcomes and customer readiness", markup)
         self.assertIn('const settingsEvidenceCards = document.getElementById("settingsEvidenceCards")', script)
-        self.assertIn('apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId))', script)
+        self.assertIn(
+            'apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId, options.reason === "manual"))',
+            script,
+        )
         self.assertIn("function refreshSettingsEvidenceCards", script)
         self.assertIn("function performSettingsEvidenceRefresh", script)
         self.assertIn("let settingsEvidenceRefreshPromise = null", script)
@@ -788,6 +791,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function renderSettingsUnavailableCard", script)
         self.assertIn("function settingsEvidenceUrl", script)
         self.assertIn("settings_request=", script)
+        self.assertIn('const refresh = forceRefresh ? "&refresh=1" : ""', script)
         self.assertIn("SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS = 15000", script)
         self.assertIn("function scheduleSettingsEvidenceAutoRefresh", script)
         self.assertIn("function clearSettingsEvidenceAutoRefresh", script)

@@ -4306,9 +4306,10 @@ function clearSettingsEvidenceAutoRefresh() {
   settingsEvidenceRefreshTimer = null;
 }
 
-function settingsEvidenceUrl(path, requestId) {
+function settingsEvidenceUrl(path, requestId, forceRefresh = false) {
   const separator = path.includes("?") ? "&" : "?";
-  return `${path}${separator}settings_request=${encodeURIComponent(requestId)}&settings_ts=${Date.now()}`;
+  const refresh = forceRefresh ? "&refresh=1" : "";
+  return `${path}${separator}settings_request=${encodeURIComponent(requestId)}&settings_ts=${Date.now()}${refresh}`;
 }
 
 function renderSettingsEvidenceMessage(message) {
@@ -4399,12 +4400,12 @@ function renderSettingsUnavailableCard(kind, message) {
   return card;
 }
 
-async function performSettingsEvidenceRefresh() {
+async function performSettingsEvidenceRefresh(options = {}) {
   clearSettingsEvidenceAutoRefresh();
   const requestId = ++settingsEvidenceRequestId;
   renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
   const evidenceResponse = await withSettingsEvidenceTimeout(
-    apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId)),
+    apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId, options.reason === "manual")),
     "Settings evidence",
     SETTINGS_EVIDENCE_TIMEOUT_MS,
   );
@@ -4437,7 +4438,7 @@ async function refreshSettingsEvidenceCards(options = {}) {
   }
   if (settingsFlyout?.hidden) return;
   if (settingsEvidenceRefreshPromise) return settingsEvidenceRefreshPromise;
-  const refreshPromise = performSettingsEvidenceRefresh();
+  const refreshPromise = performSettingsEvidenceRefresh(options);
   settingsEvidenceRefreshPromise = refreshPromise;
   try {
     return await refreshPromise;

@@ -2603,20 +2603,64 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["target_evidence"]["configured_remote"]["verified_target_count"], 1)
 
     def test_settings_evidence_builds_one_digest_for_both_cards(self):
+        store = server.GraphStore()
         digest = {"ok": True, "verified_memory_outcomes": {"status": "pass"}}
         readiness = {"ok": True, "status": "ready"}
         with (
+            mock.patch("server.STORE", store),
             mock.patch("server.memory_value_digest", return_value=digest) as digest_read,
             mock.patch("server.customer_readiness", return_value=readiness) as readiness_read,
         ):
             status, data = self.dispatch_get("/api/settings-evidence")
+            cached_status, cached = self.dispatch_get("/api/settings-evidence")
+            refreshed_status, refreshed = self.dispatch_get("/api/settings-evidence?refresh=1")
 
         self.assertEqual(status, 200)
+        self.assertEqual(cached_status, 200)
+        self.assertEqual(refreshed_status, 200)
         self.assertTrue(data["read_only"])
         self.assertEqual(data["digest"], digest)
         self.assertEqual(data["readiness"], readiness)
-        digest_read.assert_called_once_with("week")
-        readiness_read.assert_called_once_with(digest)
+        self.assertEqual(cached, data)
+        self.assertEqual(refreshed, data)
+        self.assertEqual(digest_read.call_count, 2)
+        self.assertEqual(readiness_read.call_count, 2)
+        digest_read.assert_has_calls([mock.call("week"), mock.call("week")])
+        readiness_read.assert_has_calls([mock.call(digest), mock.call(digest)])
+
+    def test_settings_evidence_coalesces_concurrent_cold_reads(self):
+        store = server.GraphStore()
+        digest_started = threading.Event()
+        release_digest = threading.Event()
+        results = []
+
+        def load_digest(_window):
+            digest_started.set()
+            release_digest.wait(timeout=1)
+            return {"ok": True, "verified_memory_outcomes": {"status": "pass"}}
+
+        def read_settings():
+            results.append(server.settings_evidence())
+
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.memory_value_digest", side_effect=load_digest) as digest_read,
+            mock.patch("server.customer_readiness", return_value={"ok": True}) as readiness_read,
+        ):
+            first = threading.Thread(target=read_settings)
+            second = threading.Thread(target=read_settings)
+            first.start()
+            self.assertTrue(digest_started.wait(timeout=1))
+            second.start()
+            time.sleep(0.02)
+            release_digest.set()
+            first.join(timeout=1)
+            second.join(timeout=1)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(digest_read.call_count, 1)
+        self.assertEqual(readiness_read.call_count, 1)
 
     def test_customer_readiness_reports_degraded_missing_partial_and_no_activity(self):
         fake_store = FakeStore()

@@ -3461,6 +3461,7 @@ YODA_CONTEXT_CACHE_SECONDS = 300
 YODA_CONTEXT_CACHE_MAX_ENTRIES = 8
 AUTOPILOT_FINDINGS_CACHE_SECONDS = 30
 AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES = 16
+SETTINGS_EVIDENCE_CACHE_SECONDS = 10
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -6083,6 +6084,10 @@ class GraphStore:
             ttl_seconds=AUTOPILOT_FINDINGS_CACHE_SECONDS,
             max_entries=AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES,
         )
+        self.settings_evidence_cache = TimedValueCache(
+            ttl_seconds=SETTINGS_EVIDENCE_CACHE_SECONDS,
+            max_entries=1,
+        )
         self.evidence_list_cache = EvidenceListCache()
 
     def prewarm_search_evidence(
@@ -6134,6 +6139,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6195,6 +6201,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6297,6 +6304,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -8831,15 +8839,26 @@ def memory_value_digest(window="day"):
     return digest
 
 
-def settings_evidence():
-    digest = memory_value_digest("week")
-    return {
-        "ok": True,
-        "read_only": True,
-        "ui_version": UI_VERSION,
-        "digest": digest,
-        "readiness": customer_readiness(digest),
-    }
+def settings_evidence(force=False):
+    cache_key = "week"
+    if force:
+        STORE.settings_evidence_cache.clear()
+    cached = STORE.settings_evidence_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    def load():
+        digest = memory_value_digest("week")
+        return {
+            "ok": True,
+            "read_only": True,
+            "ui_version": UI_VERSION,
+            "digest": digest,
+            "readiness": customer_readiness(digest),
+        }
+
+    payload, _status = STORE.settings_evidence_cache.load_once(cache_key, load, timeout=60)
+    return payload if payload is not None else load()
 
 
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
@@ -8988,7 +9007,9 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))
         if parsed.path == "/api/settings-evidence":
-            return self.end_json(settings_evidence())
+            query = parse_qs(parsed.query)
+            force = (query.get("refresh") or [""])[0].strip().lower() in {"1", "true"}
+            return self.end_json(settings_evidence(force=force))
         if parsed.path == "/api/customer-readiness":
             return self.end_json(customer_readiness())
         if parsed.path == "/api/graph":
