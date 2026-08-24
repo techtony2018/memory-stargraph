@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `b1e585e`
-- Current performance code commit: `b1e585e` (`perf: defer startup reads during interaction`)
-- Previous pushed commit: `d02dca5` (`perf: prioritize interactive settings evidence`)
+- Current merged and pushed source: `8ee2877`
+- Current performance code commit: `8ee2877` (`perf: cache repeated follow-up listings`)
+- Previous pushed commit: `b1e585e` (`perf: defer startup reads during interaction`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 613 tests passed in 47.030 seconds.
+- Latest verification: 613 tests passed in 51.719 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -97,6 +97,8 @@ After the shared Settings evidence snapshot follow-up, the full suite passed 613
 After the interactive Settings priority follow-up, the full suite passed 613 tests in 45.534 seconds with the same static checks passing. The Settings parity smoke passed and its initial settled request id was `1`, confirming hover and click shared one in-flight request.
 
 After the general interactive startup-read deferral follow-up, the full suite passed 613 tests in 47.030 seconds with static checks passing. The Settings parity smoke also passed initial load, manual refresh, auto refresh, API/UI parity, and privacy checks.
+
+After the repeated Follow-ups listing cache follow-up, the full suite passed 613 tests in 51.719 seconds. Python compilation and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -498,6 +500,15 @@ The same low-priority startup gate now waits while any foreground busy operation
 - Before, startup timeline and Follow-ups reads entered 1.2-1.6 seconds after Search began and remained active during primary retrieval.
 - After, neither startup request entered during Search. The only observed timeline request began exactly when a successful Search selected its result, preserving the existing non-system selection contract.
 - Query wording used the same three semantic patterns with distinct suffixes to avoid the 30-second exact-query cache. Treat the result as a bounded startup-interaction benchmark rather than a backend-wide Search claim.
+
+### Repeated Follow-ups listing cache
+
+Normalized read-only Autopilot Follow-ups list results now use a 30-second cache bounded to 16 filter combinations. The cache includes the supported tag fallback used when the installed GBrain backend does not expose `autopilot_findings_list`. Graph refresh/invalidation and successful acknowledgement clear it immediately.
+
+- Three uncached identical badge queries took 3.533, 3.559, and 3.270 seconds; median was 3.533 seconds.
+- In the accepted run, the cold fallback took 6.031 seconds. The next three same-filter reads took 0.143, 0.039, and 0.015 milliseconds, greater than 99.99% below the uncached median.
+- Tests verify repeated fallback reads perform one tool capability attempt and one pass over the two bounded fallback tags, while returning the exact same normalized payload.
+- Cache keys include normalized state, limit, and offset. Different views do not share incompatible pagination, and external changes become visible after at most 30 seconds even without an explicit invalidation.
 
 ## Earlier Performance Work
 
