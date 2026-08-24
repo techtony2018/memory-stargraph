@@ -43,6 +43,8 @@ After the bounded graph expansion and seed-load follow-up, the full suite passed
 
 After the repeated relationship-type cache follow-up, the full suite passed 591 tests in 40.526 seconds with the same static checks passing.
 
+After the persistent paginated page-list follow-up, the full suite passed 594 tests in 42.077 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -208,6 +210,15 @@ Successful outbound-plus-inbound relationship type snapshots are cached for 30 s
 - Before: six repeated `people/tony-guan` entity reads had a 181.8-millisecond median and a stable relationship signature.
 - After: the first read was 353.6 milliseconds; the next five had a 10.25-millisecond median, a 94.4% warm-repeat improvement.
 - Correctness: all 6/6 relationship signatures matched, and tests verify that the second read performs no additional graph-query or backlinks call.
+
+### Persistent paginated page listing
+
+The persistent GBrain read session now maps read-only `list` calls to MCP `list_pages`, preserving the existing tabular parser contract. It supports the current type/tag/limit/offset/date/sort/source options and paginates explicit limits above the MCP 100-row page cap under one session lock.
+
+- Before: five representative CLI list calls had a 1.193-second median and each returned the default 50 rows because GBrain 0.46.28 no longer recognizes the caller's `-n` shorthand.
+- After: the same calls had a 29.6-millisecond median, a 97.5% improvement; the 140-row seed request returned 140 rows and each evidence request returned exactly 40.
+- Seed impact: fresh seed collection fell from 1.407 seconds with 75 discovered nodes to 137 milliseconds with 165 nodes, while keeping `root_index_loaded=true`.
+- Unsupported options and persistent-session failures retain the existing fail-closed CLI fallback.
 
 ## Earlier Performance Work
 

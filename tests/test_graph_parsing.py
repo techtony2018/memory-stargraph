@@ -53,8 +53,10 @@ from server import (
     merge_search_results,
     format_mcp_json,
     format_mcp_graph_query,
+    format_mcp_page_list,
     format_mcp_search_results,
     parse_gbrain_graph_query_arguments,
+    parse_gbrain_list_arguments,
     parse_gbrain_query_arguments,
     parse_gbrain_search_arguments,
 )
@@ -233,6 +235,33 @@ class GraphParsingTests(unittest.TestCase):
             '[\n  {\n    "slug": "products/memory-stargraph",\n    "context": "Memory"\n  }\n]\n',
         )
 
+    def test_parse_and_format_persistent_list_matches_cli_contract(self):
+        payload = parse_gbrain_list_arguments(
+            ("list", "--type", "run", "-n", "40", "--sort", "updated_desc")
+        )
+        output = format_mcp_page_list(
+            [
+                {
+                    "slug": "runs/example",
+                    "type": "run",
+                    "title": "Example Run",
+                    "updated_at": "2026-08-23T12:34:56.000Z",
+                }
+            ]
+        )
+
+        self.assertEqual(
+            payload,
+            {"type": "run", "limit": 40, "sort": "updated_desc"},
+        )
+        self.assertEqual(
+            output,
+            "runs/example\trun\t2026-08-23\tExample Run\n",
+        )
+        self.assertEqual(parse_page_list(output)[0]["slug"], "runs/example")
+        with self.assertRaisesRegex(ValueError, "unsupported persistent list option"):
+            parse_gbrain_list_arguments(("list", "--unknown"))
+
     def test_parse_and_format_persistent_graph_query_matches_cli_tree(self):
         payload = parse_gbrain_graph_query_arguments(
             (
@@ -323,7 +352,7 @@ class GraphParsingTests(unittest.TestCase):
 
     def test_run_gbrain_routes_supported_read_commands_to_persistent_session(self):
         persistent = mock.Mock(active=True)
-        persistent.read_cli_output.side_effect = ["query", "page", "[]\n"]
+        persistent.read_cli_output.side_effect = ["query", "page", "[]\n", "rows\n"]
         with (
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess") as fallback,
@@ -332,11 +361,85 @@ class GraphParsingTests(unittest.TestCase):
                 run_gbrain("query", "question", timeout=6),
                 run_gbrain("get", "products/memory-stargraph", timeout=6),
                 run_gbrain("backlinks", "products/memory-stargraph", timeout=6),
+                run_gbrain("list", "--type", "run", "-n", "40", timeout=6),
             ]
 
-        self.assertEqual(outputs, ["query", "page", "[]\n"])
-        self.assertEqual(persistent.read_cli_output.call_count, 3)
+        self.assertEqual(outputs, ["query", "page", "[]\n", "rows\n"])
+        self.assertEqual(persistent.read_cli_output.call_count, 4)
         fallback.assert_not_called()
+
+    def test_persistent_read_session_formats_list_pages(self):
+        session = PersistentGBrainSearch()
+        with (
+            mock.patch.object(session, "_start_locked"),
+            mock.patch.object(
+                session,
+                "_call_tool_locked",
+                return_value=[
+                    {
+                        "slug": "runs/example",
+                        "type": "run",
+                        "title": "Example Run",
+                        "updated_at": "2026-08-23T12:34:56.000Z",
+                    }
+                ],
+            ) as call_tool,
+        ):
+            output = session.read_cli_output(
+                ("list", "--type", "run", "-n", "40"),
+                5,
+            )
+
+        self.assertEqual(
+            output,
+            "runs/example\trun\t2026-08-23\tExample Run\n",
+        )
+        self.assertEqual(call_tool.call_args.args[0], "list_pages")
+        self.assertEqual(
+            call_tool.call_args.args[1],
+            {"type": "run", "limit": 40},
+        )
+
+    def test_persistent_read_session_pages_explicit_large_list_limit(self):
+        session = PersistentGBrainSearch()
+        first_page = [
+            {
+                "slug": f"pages/item-{index:03d}",
+                "type": "note",
+                "title": f"Item {index}",
+                "updated_at": "2026-08-23T12:34:56.000Z",
+            }
+            for index in range(100)
+        ]
+        second_page = [
+            {
+                "slug": f"pages/item-{index:03d}",
+                "type": "note",
+                "title": f"Item {index}",
+                "updated_at": "2026-08-23T12:34:56.000Z",
+            }
+            for index in range(100, 140)
+        ]
+        with (
+            mock.patch.object(session, "_start_locked"),
+            mock.patch.object(
+                session,
+                "_call_tool_locked",
+                side_effect=[first_page, second_page],
+            ) as call_tool,
+        ):
+            output = session.read_cli_output(("list", "-n", "140"), 5)
+
+        self.assertEqual(len(parse_page_list(output)), 140)
+        self.assertEqual(call_tool.call_count, 2)
+        self.assertEqual(
+            call_tool.call_args_list[0].args,
+            ("list_pages", {"limit": 100, "offset": 0}, mock.ANY),
+        )
+        self.assertEqual(
+            call_tool.call_args_list[1].args,
+            ("list_pages", {"limit": 40, "offset": 100}, mock.ANY),
+        )
 
     def test_persistent_read_session_formats_query_get_and_backlinks(self):
         session = PersistentGBrainSearch()

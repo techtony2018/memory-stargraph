@@ -1309,6 +1309,35 @@ def parse_gbrain_graph_query_arguments(args):
     return payload
 
 
+def parse_gbrain_list_arguments(args):
+    if not args or args[0] != "list":
+        raise ValueError("persistent list requires a list command")
+    payload = {}
+    option_names = {
+        "--type": ("type", str),
+        "--tag": ("tag", str),
+        "-n": ("limit", int),
+        "--limit": ("limit", int),
+        "--offset": ("offset", int),
+        "--updated-after": ("updated_after", str),
+        "--sort": ("sort", str),
+        "--source-id": ("source_id", str),
+    }
+    index = 1
+    while index < len(args):
+        option = str(args[index])
+        if option == "--include-deleted":
+            payload["include_deleted"] = True
+            index += 1
+            continue
+        if option not in option_names or index + 1 >= len(args):
+            raise ValueError(f"unsupported persistent list option: {option}")
+        key, parser = option_names[option]
+        payload[key] = parser(args[index + 1])
+        index += 2
+    return payload
+
+
 def truncate_utf16(text, max_units):
     encoded = str(text or "").encode("utf-16-le")
     return encoded[: max(0, int(max_units)) * 2].decode("utf-16-le", errors="ignore")
@@ -1332,6 +1361,25 @@ def format_mcp_search_results(rows):
 
 def format_mcp_json(value):
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+
+
+def format_mcp_page_list(rows):
+    lines = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not row.get("slug"):
+            continue
+        updated = str(row.get("updated_at") or row.get("date") or "")[:10]
+        lines.append(
+            "\t".join(
+                (
+                    str(row["slug"]),
+                    str(row.get("type") or ""),
+                    updated,
+                    str(row.get("title") or ""),
+                )
+            )
+        )
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def format_mcp_graph_query(paths, payload):
@@ -1525,6 +1573,28 @@ class PersistentGBrainSearch:
         )
         return json.loads(text_item)
 
+    def _list_pages_locked(self, payload, deadline):
+        requested = payload.get("limit")
+        if requested is None or int(requested) <= 100:
+            return self._call_tool_locked("list_pages", payload, deadline)
+
+        rows = []
+        remaining = max(0, int(requested))
+        offset = max(0, int(payload.get("offset") or 0))
+        while remaining > 0:
+            page_limit = min(100, remaining)
+            page_payload = dict(payload)
+            page_payload["limit"] = page_limit
+            page_payload["offset"] = offset + len(rows)
+            page = self._call_tool_locked("list_pages", page_payload, deadline)
+            if not isinstance(page, list):
+                raise RuntimeError("persistent GBrain list returned invalid rows")
+            rows.extend(page)
+            remaining -= len(page)
+            if len(page) < page_limit:
+                break
+        return rows
+
     def read_cli_output(self, args, timeout):
         command = args[0] if args else ""
         if command == "search":
@@ -1547,17 +1617,25 @@ class PersistentGBrainSearch:
             tool_name = "traverse_graph"
             payload = parse_gbrain_graph_query_arguments(args)
             formatter = None
+        elif command == "list":
+            tool_name = "list_pages"
+            payload = parse_gbrain_list_arguments(args)
+            formatter = format_mcp_page_list
         else:
             raise ValueError(f"unsupported persistent GBrain command: {command}")
-        lane_wait_limit = 2.0 if command in {"get", "backlinks", "graph-query"} else 0.25
+        lane_wait_limit = 2.0 if command in {"get", "backlinks", "graph-query", "list"} else 0.25
         lock_wait = min(lane_wait_limit, max(0.0, float(timeout)))
         if not self.lock.acquire(timeout=lock_wait):
             raise RuntimeError("persistent GBrain read session is busy")
         deadline = time.monotonic() + max(0.1, float(timeout))
         try:
             self._start_locked(deadline)
-            value = self._call_tool_locked(tool_name, payload, deadline)
-            if command in {"search", "query", "backlinks", "graph-query"} and not isinstance(value, list):
+            value = (
+                self._list_pages_locked(payload, deadline)
+                if command == "list"
+                else self._call_tool_locked(tool_name, payload, deadline)
+            )
+            if command in {"search", "query", "backlinks", "graph-query", "list"} and not isinstance(value, list):
                 raise RuntimeError(f"persistent GBrain {command} returned invalid rows")
             if command == "get":
                 if not isinstance(value, dict) or not isinstance(value.get("content"), str):
@@ -1625,7 +1703,7 @@ def run_gbrain_subprocess(*args, input_text=None, timeout=20):
 
 def run_gbrain(*args, input_text=None, timeout=20):
     started = time.monotonic()
-    persistent_commands = {"search", "query", "get", "backlinks", "graph-query"}
+    persistent_commands = {"search", "query", "get", "backlinks", "graph-query", "list"}
     if input_text is None and args and args[0] in persistent_commands and PERSISTENT_GBRAIN_SEARCH.active:
         try:
             return PERSISTENT_GBRAIN_SEARCH.read_cli_output(args, timeout)
