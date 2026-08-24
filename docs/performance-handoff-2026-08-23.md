@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `53e1449`
-- Current performance code commit: `53e1449` (`perf: defer noncritical startup data`)
-- Previous pushed commit: `76a565b` (`perf: reuse searches across terminal punctuation`)
+- Current merged and pushed source: `32e502c`
+- Current performance code commit: `32e502c` (`perf: overlap selection metadata reads`)
+- Previous pushed commit: `53e1449` (`perf: defer noncritical startup data`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 605 tests passed in 40.463 seconds.
+- Latest verification: 606 tests passed in 51.096 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -69,6 +69,8 @@ After the exact prewarmed evidence-title Search follow-up, the full suite passed
 After the terminal-punctuation Search cache follow-up, the full suite passed 604 tests in 48.208 seconds with the same static checks passing.
 
 After the deferred startup-data follow-up, the full suite passed 605 tests in 40.463 seconds. JavaScript syntax and `git diff --check` also passed. A targeted isolated-source browser run rendered a nonblank 242-node canvas with no runtime errors and exposed the graph in 614 milliseconds. The broader legacy browser smoke progressed through startup and several journeys, then failed on an existing backend-data assertion because the Chinese query `聊天室` returned zero matches; that failure is unrelated to startup ordering.
+
+After the selection-metadata overlap follow-up, the full suite passed 606 tests in 51.096 seconds with JavaScript syntax and `git diff --check` passing. Isolated-source browser comparison against the previous commit completed with no runtime errors.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -348,6 +350,16 @@ The frontend now preserves hidden-node loading before graph application, renders
 - An isolated-source Playwright verification exposed the graph in 614 milliseconds, rendered 242 nodes on a nonblank canvas, and reported no page or console errors. Resource timing confirmed `/api/hidden` and `/api/graph` completed before the deferred auxiliary requests began.
 - A static regression test locks the hidden-before-graph and graph/route-before-auxiliary ordering.
 
+### Concurrent selected-entity metadata
+
+After direct-neighbor expansion, entity detail now starts first and its independent timeline and media reads begin immediately alongside it. Detail rendering still waits for a successful entity response. Timeline/media failures remain isolated, stale-selection guards are unchanged, and the prefetched responses are reused instead of issuing duplicate requests after detail loads.
+
+- Alternating read-only endpoint samples for `people/tony-guan` measured serial entity/timeline/media completion at 6.248 and 6.302 seconds. Concurrent samples took 5.372 and 3.966 seconds.
+- In an isolated-source deep-link comparison, the previous commit completed the selected entity plus timeline in 6.050 seconds. The current implementation completed in 5.058 seconds, a 16.4% sample reduction.
+- From direct-neighbor expansion completion to timeline completion, the same browser trace changed from 4.455 to 3.889 seconds, a 12.7% reduction.
+- Resource timing verified that entity, timeline, and media started together after expansion. The current trace had no page errors, preserved the exact selected slug, and rendered the media preview normally.
+- The endpoints share GBrain transport capacity, so the gain is bounded by backend contention rather than the full sum of the three serial durations. Regression tests lock request start order, response reuse, and the existing render dependency.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -395,7 +407,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. The next frontend profiling pass should separate the selected-entity and timeline requests that begin after graph application: the isolated-source trace exposed the graph in 614 milliseconds, while the default selected entity and timeline continued loading afterward. Optimize those only if interaction traces show they block selection readiness; they no longer block graph visibility.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge, and selection metadata now overlaps after direct-neighbor expansion. The next frontend profiling pass should measure the expansion request itself and the entity endpoint's server-side phases separately. The browser trace still spent 428-524 milliseconds expanding the deep-linked node before the three metadata reads could start, while backend contention bounded the metadata overlap.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
