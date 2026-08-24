@@ -792,6 +792,15 @@ The three first-party startup text assets now use the same gzip level-1 negotiat
 - A real Chrome load reported CSS at 22,564 encoded versus 96,459 decoded bytes and JavaScript at 90,038 encoded versus 343,185 decoded bytes. All three text responses negotiated gzip, the graph loaded 274 nodes, Canvas dimensions were valid, and there were no page or console errors.
 - Tests cover lossless compressed assets, standard plain fallback, and conditional 304 behavior. The full suite passed 650 tests in 49.077 seconds; Python compilation and `git diff --check` passed.
 
+### Right-sized first-view brand assets
+
+The first viewport now loads display-sized derivatives for the navigation logo, favicon, graph wordmark, and Ask Yoda avatar while retaining the original high-resolution files as source assets. The favicon has its own 64-pixel derivative, so it no longer downloads the same large logo payload used by the page.
+
+- The previous first-view requests transferred 1,693,006 image bytes: the 706,663-byte logo twice, the 250,543-byte wordmark, and the 29,137-byte Yoda avatar. The new derivatives transfer 42,972 bytes total, a 97.46% reduction.
+- Desktop rendered the 256-pixel logo at 34 by 34 pixels, the original-dimension WebP wordmark at 258 by 85 pixels, and the 64-pixel Yoda asset at 22 by 22 and 20 by 20 pixels. Mobile at DPR 2 retained those intended CSS dimensions without horizontal overflow.
+- DPR-2 element comparisons against the original assets measured mean RGB deltas of 3.18/255 for the logo, 0.94/255 for the wordmark, and 1.27/255 for Yoda. A smaller 520-pixel wordmark derivative was rejected because its mean delta rose to 4.99/255; the accepted WebP keeps the original dimensions at 19,208 bytes.
+- Real desktop and mobile browser loads reported the exact new paths and byte sizes, preserved the visible brand treatments, and produced no page or console errors. Static tests enforce conservative byte ceilings for every derivative. The full suite passed 650 tests in 42.317 seconds.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:

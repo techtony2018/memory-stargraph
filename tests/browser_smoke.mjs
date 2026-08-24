@@ -229,11 +229,11 @@ try {
     || !initial.compactTopControls.noStatusLegend
     || !initial.compactTopControls.minLinksInline
     || !initial.compactTopControls.noConstellationView
-    || initial.compactTopControls.favicon !== "/assets/brand/logo-circle-transparent.png"
+    || initial.compactTopControls.favicon !== "/assets/brand/logo-circle-favicon.png"
     || !initial.compactTopControls.brandLogo
     || !initial.compactTopControls.brandWordmark
     || initial.compactTopControls.brandWordmarkLink !== "https://github.com/techtony2018/memory-stargraph"
-    || initial.compactTopControls.brandWordmarkSrc !== "/assets/brand/wordmark-line-small.png"
+    || initial.compactTopControls.brandWordmarkSrc !== "/assets/brand/wordmark-line-small.webp"
     || initial.compactTopControls.versionLink !== "https://github.com/techtony2018/memory-stargraph"
     || !initial.compactTopControls.hasTooltip
     || !initial.compactTopControls.searchInputNoTooltip

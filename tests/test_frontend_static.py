@@ -427,8 +427,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("<p class=\"panel-label\">Hot Hubs</p>", markup)
         self.assertIn("<span>Top</span>", markup)
         self.assertNotIn("<span>Top hubs</span>", markup)
-        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar.png?v=1.0.157"', markup)
-        self.assertIn('src="/assets/brand/yoda-selection-avatar.png?v=1.0.157"', markup)
+        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.200"', markup)
+        self.assertIn('src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.200"', markup)
         self.assertIn("object-fit: contain", styles)
         self.assertIn("overflow: hidden", styles)
         self.assertIn(".selection-actions", styles)
@@ -456,15 +456,23 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertNotIn("Search entities", markup)
         self.assertNotIn("Constellation View", markup)
-        self.assertIn('rel="icon" type="image/png" href="/assets/brand/logo-circle-transparent.png"', markup)
-        self.assertIn('rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent.png"', markup)
+        self.assertIn('rel="icon" type="image/png" sizes="64x64" href="/assets/brand/logo-circle-favicon.png"', markup)
+        self.assertIn('rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent-small.png"', markup)
         self.assertIn('class="nav-logo"', markup)
         self.assertIn('class="graph-wordmark"', markup)
         self.assertIn('class="graph-wordmark-link has-tooltip"', markup)
-        self.assertIn('src="/assets/brand/wordmark-line-small.png"', markup)
+        self.assertIn('src="/assets/brand/wordmark-line-small.webp"', markup)
         self.assertTrue((ROOT / "public" / "assets" / "brand" / "logo-circle-transparent.png").exists())
         self.assertTrue((ROOT / "public" / "assets" / "brand" / "wordmark-line.png").exists())
         self.assertTrue((ROOT / "public" / "assets" / "brand" / "wordmark-line-small.png").exists())
+        optimized_logo = ROOT / "public" / "assets" / "brand" / "logo-circle-transparent-small.png"
+        optimized_favicon = ROOT / "public" / "assets" / "brand" / "logo-circle-favicon.png"
+        optimized_wordmark = ROOT / "public" / "assets" / "brand" / "wordmark-line-small.webp"
+        optimized_yoda = ROOT / "public" / "assets" / "brand" / "yoda-selection-avatar-small.png"
+        self.assertLess(optimized_logo.stat().st_size, 30_000)
+        self.assertLess(optimized_favicon.stat().st_size, 10_000)
+        self.assertLess(optimized_wordmark.stat().st_size, 30_000)
+        self.assertLess(optimized_yoda.stat().st_size, 10_000)
         self.assertIn('href="https://github.com/techtony2018/memory-stargraph"', markup)
         self.assertIn("Matches", markup)
         self.assertIn(">Links</span>", markup)
