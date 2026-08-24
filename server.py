@@ -3461,6 +3461,7 @@ YODA_CONTEXT_CACHE_SECONDS = 300
 YODA_CONTEXT_CACHE_MAX_ENTRIES = 8
 AUTOPILOT_FINDINGS_CACHE_SECONDS = 30
 AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES = 16
+AUTOPILOT_FINDINGS_CAPABILITY_CACHE_SECONDS = 300
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
@@ -6084,6 +6085,10 @@ class GraphStore:
             ttl_seconds=AUTOPILOT_FINDINGS_CACHE_SECONDS,
             max_entries=AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES,
         )
+        self.autopilot_findings_capability_cache = TimedValueCache(
+            ttl_seconds=AUTOPILOT_FINDINGS_CAPABILITY_CACHE_SECONDS,
+            max_entries=1,
+        )
         self.settings_evidence_cache = TimedValueCache(
             ttl_seconds=SETTINGS_EVIDENCE_CACHE_SECONDS,
             max_entries=1,
@@ -7565,7 +7570,7 @@ class GraphStore:
         if cached is not None:
             return cached
         capability_key = "autopilot_findings_list:capability"
-        tool_supported = self.autopilot_findings_cache.get(capability_key)
+        tool_supported = self.autopilot_findings_capability_cache.get(capability_key)
         if tool_supported is False:
             result = list_autopilot_findings_from_gbrain_pages(
                 payload,
@@ -7574,7 +7579,7 @@ class GraphStore:
         else:
             try:
                 result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
-                self.autopilot_findings_cache.put(capability_key, True)
+                self.autopilot_findings_capability_cache.put(capability_key, True)
             except RuntimeError as exc:
                 message = str(exc)
                 missing_operation = (
@@ -7587,7 +7592,7 @@ class GraphStore:
                 )
                 if not missing_operation:
                     raise
-                self.autopilot_findings_cache.put(capability_key, False)
+                self.autopilot_findings_capability_cache.put(capability_key, False)
                 result = list_autopilot_findings_from_gbrain_pages(
                     payload,
                     snapshot_cache=self.autopilot_findings_cache,
