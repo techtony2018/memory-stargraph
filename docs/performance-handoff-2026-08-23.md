@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `0b7d6fe`
-- Current performance code commit: `0b7d6fe` (`perf: share complete takes snapshots`)
+- Current merged and pushed source: `1ff4256`
+- Current performance code commit: `1ff4256` (`perf: bound dense flowing edge animation`)
 - Previous pushed commit: `0d29a23` (`docs: record rejected persistent takes read`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 642 tests passed in 41.234 seconds.
+- Latest verification: 645 tests passed in 53.413 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -536,6 +536,17 @@ Commit `4f7c7b4` raises the minimum category size for drawing a cloud from four 
 - Fixed-time, fixed-rotation screenshots changed 26.999% of desktop pixels and 37.261% of mobile pixels because broad translucent cloud areas overlap many otherwise unchanged pixels. Mean RGB deltas remained low at 2.3087 and 2.7459. Visual inspection retained the dominant category clouds, node colors, focus hierarchy, labels, and mobile framing.
 - Both viewports remained nonblank with no horizontal overflow, page errors, or console errors. Graph node/edge/focus parity held in every timing sample.
 - The full suite passed 645 tests in 44.346 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
+### Bounded flowing-edge animation on high-degree focus views
+
+Commit `1ff4256` keeps every static graph edge but limits the animated dashed overlay and glowing particle to 48 deterministic direct-focus edges when the selected node has degree greater than 80. The retained neighbors are ranked by degree with a stable slug tiebreak, so the same graph produces the same animation set. A genuinely hovered neighbor remains animated immediately. Focus views at degree 80 or lower preserve the previous behavior exactly.
+
+- The fresh `people/tony-guan` view contained 276 nodes, 139 drawable edges, and a degree-116 focus. The previous renderer animated all 139 edges and particles; the bounded renderer animated 48 while leaving all 139 static edges visible.
+- Four same-server browser pages ran in before/after/after/before order with forced Canvas rasterization. Aggregating the two per-variant medians, the edge stage fell from 14.55 to 4.85 milliseconds, a 66.7% reduction.
+- The same complete-frame aggregate fell from 124.4 to 100.5 milliseconds, a 19.2% reduction. The software-rendered tails remained noisy, so both direction-balanced samples are retained rather than presenting the best run.
+- A degree-24 `index` focus animated all 139 eligible edges in both revisions and produced no high-degree budget, verifying that lower-degree views are unchanged.
+- Fixed-time Canvas screenshots changed 3.7387% of desktop pixels and 7.5009% of mobile pixels. Mean RGB deltas were only 0.2013 and 0.5046; visual inspection retained a clear 48-edge flow field, all nodes and static edges, focus hierarchy, labels, and framing.
+- Desktop and mobile checks reported no page errors or horizontal overflow. The full suite passed 645 tests in 53.413 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
 ### Search results released before detail hydration
 
