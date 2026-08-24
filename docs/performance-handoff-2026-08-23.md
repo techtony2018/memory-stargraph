@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `d02dca5`
-- Current performance code commit: `d02dca5` (`perf: prioritize interactive settings evidence`)
-- Previous pushed commit: `5d21fee` (`perf: share settings evidence snapshot`)
+- Current merged and pushed source: `b1e585e`
+- Current performance code commit: `b1e585e` (`perf: defer startup reads during interaction`)
+- Previous pushed commit: `d02dca5` (`perf: prioritize interactive settings evidence`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 613 tests passed in 45.534 seconds.
+- Latest verification: 613 tests passed in 47.030 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -95,6 +95,8 @@ After the Settings evidence overlap follow-up, the full suite passed 612 tests i
 After the shared Settings evidence snapshot follow-up, the full suite passed 613 tests in 61.334 seconds with the same static checks passing. The isolated Playwright parity smoke again passed initial load, manual refresh, auto refresh, API/UI parity, and privacy checks using the combined endpoint.
 
 After the interactive Settings priority follow-up, the full suite passed 613 tests in 45.534 seconds with the same static checks passing. The Settings parity smoke passed and its initial settled request id was `1`, confirming hover and click shared one in-flight request.
+
+After the general interactive startup-read deferral follow-up, the full suite passed 613 tests in 47.030 seconds with static checks passing. The Settings parity smoke also passed initial load, manual refresh, auto refresh, API/UI parity, and privacy checks.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -488,6 +490,14 @@ Settings refreshes now share one in-flight browser Promise. This removes the dup
 - Median click-to-cards time fell from 6.332 to 3.654 seconds, a 42.3% reduction; request count fell 50%.
 - The first attempted detached-worktree comparison was discarded because that checkout lacked current host-local runtime state and produced invalid 404/502 behavior. Its timings are not included in the result.
 - Initial system selection still loads entity and media immediately. Timeline remains immediate for manual, Search, history, and deep-link selection, and explicit Timeline opens bypass the deferred badge path.
+
+The same low-priority startup gate now waits while any foreground busy operation is active, polling at 100-millisecond intervals. This prevents initial timeline-badge and TODO/Yoda/Follow-ups prefetches from entering the GBrain lane during Search, View, relationship, history, or other explicitly requested work. The callback runs as soon as foreground work and any Settings snapshot settle.
+
+- Three matched-pattern fresh startup Search samples before the general gate were 6.495, 4.309, and 3.572 seconds; median was 4.309 seconds.
+- Three fresh matched-pattern samples after the gate were 2.912, 3.118, and 2.649 seconds; median was 2.912 seconds, a 32.4% reduction.
+- Before, startup timeline and Follow-ups reads entered 1.2-1.6 seconds after Search began and remained active during primary retrieval.
+- After, neither startup request entered during Search. The only observed timeline request began exactly when a successful Search selected its result, preserving the existing non-system selection contract.
+- Query wording used the same three semantic patterns with distinct suffixes to avoid the 30-second exact-query cache. Treat the result as a bounded startup-interaction benchmark rather than a backend-wide Search claim.
 
 ## Earlier Performance Work
 
