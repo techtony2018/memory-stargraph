@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `76a565b`
-- Current performance code commit: `76a565b` (`perf: reuse searches across terminal punctuation`)
-- Previous pushed commit: `618f59e` (`perf: resolve exact evidence titles locally`)
+- Current merged and pushed source: `53e1449`
+- Current performance code commit: `53e1449` (`perf: defer noncritical startup data`)
+- Previous pushed commit: `76a565b` (`perf: reuse searches across terminal punctuation`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 604 tests passed in 48.208 seconds.
+- Latest verification: 605 tests passed in 40.463 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -67,6 +67,8 @@ After the targeted relationship direct-read fanout follow-up, the full suite pas
 After the exact prewarmed evidence-title Search follow-up, the full suite passed 604 tests in 45.575 seconds with the same static checks passing.
 
 After the terminal-punctuation Search cache follow-up, the full suite passed 604 tests in 48.208 seconds with the same static checks passing.
+
+After the deferred startup-data follow-up, the full suite passed 605 tests in 40.463 seconds. JavaScript syntax and `git diff --check` also passed. A targeted isolated-source browser run rendered a nonblank 242-node canvas with no runtime errors and exposed the graph in 614 milliseconds. The broader legacy browser smoke progressed through startup and several journeys, then failed on an existing backend-data assertion because the Chinese query `聊天室` returned zero matches; that failure is unrelated to startup ordering.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -336,6 +338,16 @@ Primary Search cache keys now ignore trailing ASCII sentence punctuation (`?`, `
 - Before: punctuated variants took 1.643-2.894 seconds, with a 2.620-second median and another GBrain search for every pair.
 - After: all variants were cache hits in 0.045-0.056 milliseconds, median 0.055 milliseconds, greater than 99.99% improvement, with zero additional GBrain calls.
 
+### Deferred noncritical startup data
+
+The frontend now preserves hidden-node loading before graph application, renders the graph and any requested deep link, and only then starts TODO backlog prefetch, persistent Yoda-log loading, and the Follow-ups badge request as one failure-isolated background group. These auxiliary reads no longer block the first usable graph.
+
+- On the dashboard-managed endpoint, the previous serial sequence took 6.623, 6.103, and 5.660 seconds, with a 6.103-second median.
+- The new first-graph critical path (`/api/hidden` followed by `/api/graph`) took 243, 238, and 198 milliseconds, with a 238-millisecond median: a 96.1% reduction.
+- The dominant removed blocker was `/api/autopilot-findings?limit=1&offset=0`, sampled at 3.351-5.530 seconds. TODO backlog prefetch sampled at 1.147-1.557 seconds; hidden state and Yoda logs were each about 11-17 milliseconds.
+- An isolated-source Playwright verification exposed the graph in 614 milliseconds, rendered 242 nodes on a nonblank canvas, and reported no page or console errors. Resource timing confirmed `/api/hidden` and `/api/graph` completed before the deferred auxiliary requests began.
+- A static regression test locks the hidden-before-graph and graph/route-before-auxiliary ordering.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -382,6 +394,8 @@ Replacing full backlinks with `graph-query --direction in --depth 1` was not imp
 Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out` was not implemented. The graph-only microbenchmark preserved parsed root-outbound edges in 5/5 samples and substantially reduced bytes, including 4.12 MB to 175 KB for the high-degree person node. End-to-end prompts reversed that apparent win: the relationship case regressed from 6.963 to 7.790 seconds and the product case from 8.330 to 9.446 seconds. Grounding and counts were unchanged, but both total-latency samples failed the acceptance gate.
 
 ## Next Bottleneck
+
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. The next frontend profiling pass should separate the selected-entity and timeline requests that begin after graph application: the isolated-source trace exposed the graph in 614 milliseconds, while the default selected entity and timeline continued loading afterward. Optimize those only if interaction traces show they block selection readiness; they no longer block graph visibility.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
