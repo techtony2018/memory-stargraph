@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `35c8628`
-- Current performance code commit: `35c8628` (`perf: bound accumulated search nodes`)
-- Previous pushed commit: `4907bae` (`docs: record paginated backlinks benchmark`)
+- Current merged and pushed source: `0cb7bc8`
+- Current performance code commit: `0cb7bc8` (`perf: reuse settings evidence in detail views`)
+- Previous pushed commit: `22f7b03` (`docs: record bounded search graph benchmark`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 623 tests passed in 41.769 seconds.
+- Latest verification: 624 tests passed in 47.311 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -116,6 +116,8 @@ After the paginated Backlinks response follow-up, the full suite passed 622 test
 
 After the bounded accumulated-search-node follow-up, the full suite passed 623 tests in 41.769 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. An isolated three-round browser A/B rendered a nonblank graph without runtime errors on both revisions.
 
+After the Settings detail-snapshot reuse follow-up, the full suite passed 624 tests in 47.311 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -125,6 +127,18 @@ Do not stage, overwrite, revert, or include these unrelated Product Owner files 
 ```
 
 ## Improvements Completed
+
+### Settings detail snapshot reuse
+
+Commit `0cb7bc8` lets the weekly Memory value digest and Customer readiness detail endpoints reuse the same combined read-only snapshot already loaded for the Settings cards. Reuse is bounded by the existing 10-second Settings evidence TTL. If no combined snapshot exists, or after it expires, both endpoints keep their original fresh-build behavior.
+
+- The combined Settings snapshot loaded cold in 1.429 seconds.
+- A subsequent weekly digest detail read completed in 1.5-2.4 milliseconds instead of the prior 1.26-1.33 seconds.
+- A subsequent Customer readiness detail read completed in 1.4-1.8 milliseconds instead of the prior 1.29-1.41 seconds.
+- After waiting beyond the 10-second TTL, the digest rebuilt in 1.347 seconds, confirming bounded freshness.
+- Regression coverage proves both detail routes consume the recent combined snapshot without duplicate digest or readiness builders.
+
+No dashboard-managed service was deployed or restarted.
 
 ### Bounded accumulated Search nodes
 
