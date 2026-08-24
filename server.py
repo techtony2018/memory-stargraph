@@ -1549,7 +1549,8 @@ class PersistentGBrainSearch:
             formatter = None
         else:
             raise ValueError(f"unsupported persistent GBrain command: {command}")
-        lock_wait = min(0.25, max(0.0, float(timeout)))
+        lane_wait_limit = 2.0 if command in {"get", "backlinks", "graph-query"} else 0.25
+        lock_wait = min(lane_wait_limit, max(0.0, float(timeout)))
         if not self.lock.acquire(timeout=lock_wait):
             raise RuntimeError("persistent GBrain read session is busy")
         deadline = time.monotonic() + max(0.1, float(timeout))
