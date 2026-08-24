@@ -3437,6 +3437,8 @@ YODA_SEARCH_CACHE_SECONDS = 30
 YODA_SEARCH_CACHE_MAX_ENTRIES = 32
 YODA_SOURCE_CACHE_SECONDS = 30
 YODA_SOURCE_CACHE_MAX_ENTRIES = 64
+YODA_CONTEXT_CACHE_SECONDS = 300
+YODA_CONTEXT_CACHE_MAX_ENTRIES = 8
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -3667,6 +3669,10 @@ class TimedValueCache:
         self.generation = 0
         self.lock = threading.Lock()
 
+    def __len__(self):
+        with self.lock:
+            return len(self.entries)
+
     def get(self, key):
         now = time.monotonic()
         with self.lock:
@@ -3743,10 +3749,23 @@ class TimedValueCache:
             with self.lock:
                 self.loading_events.pop(token, None)
                 if value is not None and self.generation == generation:
+                    now = time.monotonic()
+                    self.entries = {
+                        entry_key: entry
+                        for entry_key, entry in self.entries.items()
+                        if now - entry["stored_at"] < self.stale_seconds
+                    }
                     self.entries[key] = {
                         "value": value,
-                        "stored_at": time.monotonic(),
+                        "stored_at": now,
                     }
+                    if len(self.entries) > self.max_entries:
+                        oldest_keys = sorted(
+                            self.entries,
+                            key=lambda entry_key: self.entries[entry_key]["stored_at"],
+                        )
+                        for oldest_key in oldest_keys[:-self.max_entries]:
+                            self.entries.pop(oldest_key, None)
                 load_event.set()
             return value, "loaded"
 
@@ -5952,7 +5971,10 @@ class GraphStore:
         self.loaded_at = 0.0
         self.refreshing = False
         self.condition = threading.Condition()
-        self.yoda_context_cache = {}
+        self.yoda_context_cache = TimedValueCache(
+            ttl_seconds=YODA_CONTEXT_CACHE_SECONDS,
+            max_entries=YODA_CONTEXT_CACHE_MAX_ENTRIES,
+        )
         self.primary_search_cache = TimedValueCache(
             ttl_seconds=SEARCH_PRIMARY_CACHE_SECONDS,
             stale_seconds=SEARCH_PRIMARY_CACHE_STALE_SECONDS,
@@ -6012,7 +6034,7 @@ class GraphStore:
     def get_graph(self, force=False):
         now = time.time()
         if force:
-            self.yoda_context_cache = {}
+            self.yoda_context_cache.clear()
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
@@ -6069,7 +6091,7 @@ class GraphStore:
     def get_seed_graph(self, force=False):
         now = time.time()
         if force:
-            self.yoda_context_cache = {}
+            self.yoda_context_cache.clear()
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
@@ -6156,7 +6178,7 @@ class GraphStore:
         with self.condition:
             self.graph = None
             self.loaded_at = 0.0
-            self.yoda_context_cache = {}
+            self.yoda_context_cache.clear()
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
@@ -6560,6 +6582,33 @@ class GraphStore:
                 "backlinks": backlinks_ms,
             },
         }
+
+    def get_yoda_stable_context(self, slug, depth="4"):
+        yoda_depth = clamp_yoda_depth(depth)
+        cache_payload = json.dumps(
+            {"slug": slug, "depth": yoda_depth},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
+        cached_context = self.yoda_context_cache.get(cache_key)
+        cache_status = "hit"
+        if cached_context is None:
+            cached_context, load_status = self.yoda_context_cache.load_once(
+                cache_key,
+                lambda: self.build_yoda_stable_context(slug, yoda_depth),
+                timeout=60,
+            )
+            cache_status = "coalesced_hit" if load_status == "joined" else "miss"
+        if cached_context is None:
+            raise RuntimeError("Stable Ask Yoda context could not be loaded")
+
+        stable_context = dict(cached_context)
+        if cache_status != "miss":
+            stable_context["timings"] = {
+                key: 0 for key in ("selected_node", "graph", "backlinks")
+            }
+        return stable_context, cache_status
 
     def build_yoda_targeted_context(self, question, excluded_slugs=None):
         excluded = set(excluded_slugs or [])
@@ -6990,32 +7039,12 @@ class GraphStore:
             if is_targeted_relationship_question(retrieval_question)
             else min(yoda_depth, 2)
         )
-        cache_payload = json.dumps({"slug": slug, "depth": broad_graph_depth}, sort_keys=True, ensure_ascii=False)
-        cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
-        cache_now = time.time()
-        self.yoda_context_cache = {
-            key: entry
-            for key, entry in self.yoda_context_cache.items()
-            if cache_now - float(entry.get("created_at") or 0) <= 300
-        }
-        cache_entry = self.yoda_context_cache.get(cache_key) or {}
-        context_cache_hit = bool(cache_entry)
         context_subphases_ms = {}
-        if context_cache_hit:
-            stable_context = dict(cache_entry["context"])
-            stable_context["timings"] = {
-                key: 0 for key in ("selected_node", "graph", "backlinks")
-            }
-        else:
-            stable_context = self.build_yoda_stable_context(slug, broad_graph_depth)
-            self.yoda_context_cache[cache_key] = {"created_at": cache_now, "context": stable_context}
-            if len(self.yoda_context_cache) > 8:
-                oldest_keys = sorted(
-                    self.yoda_context_cache,
-                    key=lambda key: float(self.yoda_context_cache[key].get("created_at") or 0),
-                )
-                for oldest_key in oldest_keys[:-8]:
-                    self.yoda_context_cache.pop(oldest_key, None)
+        stable_context, context_cache_status = self.get_yoda_stable_context(
+            slug,
+            broad_graph_depth,
+        )
+        context_cache_hit = context_cache_status != "miss"
         context_counts = {}
         prompt = self.build_yoda_prompt(
             slug,

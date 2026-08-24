@@ -699,6 +699,7 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIsNone(store.yoda_search_cache.get("question"))
         self.assertIsNone(store.yoda_source_cache.get("source"))
         self.assertIsNone(store.relationship_type_cache.get("people/tony-guan"))
+        self.assertEqual(store.yoda_context_cache.entries, {})
 
     def test_timed_value_cache_expires_and_bounds_entries(self):
         cache = TimedValueCache(ttl_seconds=10, max_entries=2)
@@ -715,6 +716,19 @@ class GraphParsingTests(unittest.TestCase):
         with mock.patch("server.time.monotonic", return_value=11.5):
             self.assertIsNone(cache.get("middle"))
             self.assertEqual(cache.get("newest"), "three")
+
+    def test_timed_value_cache_load_once_prunes_expired_and_bounds_entries(self):
+        cache = TimedValueCache(ttl_seconds=10, max_entries=2)
+        cache.entries = {
+            "expired": {"stored_at": 0, "value": "old"},
+            "fresh": {"stored_at": 20, "value": "kept"},
+        }
+
+        with mock.patch("server.time.monotonic", return_value=21):
+            value, status = cache.load_once("new", lambda: "loaded", timeout=1)
+
+        self.assertEqual((value, status), ("loaded", "loaded"))
+        self.assertEqual(set(cache.entries), {"fresh", "new"})
 
     def test_timed_value_cache_returns_stale_values_within_stale_window(self):
         cache = TimedValueCache(ttl_seconds=10, stale_seconds=30, max_entries=2)
@@ -2960,7 +2974,7 @@ cover_image: companies/example-inc/logo.jpg
         )
         self.assertNotIn("prompt", cold["diagnostics"])
         store.invalidate()
-        self.assertEqual(store.yoda_context_cache, {})
+        self.assertEqual(store.yoda_context_cache.entries, {})
 
     def test_yoda_stable_context_fetches_independent_sources_concurrently(self):
         store = GraphStore()
@@ -3017,11 +3031,48 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("Broad graph context unavailable within retrieval budget", context["graph"])
         self.assertNotIn("forced slow graph traversal", context["graph"])
 
+    def test_yoda_stable_context_coalesces_concurrent_cold_loads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+        contexts = []
+        stable_context = {
+            "selected_node": "# Node",
+            "graph": "graph",
+            "backlinks": "backlinks",
+            "timings": {"selected_node": 1, "graph": 2, "backlinks": 3},
+        }
+
+        def load_context(_slug, _depth):
+            started.set()
+            release.wait(timeout=1)
+            return stable_context
+
+        def get_context():
+            contexts.append(store.get_yoda_stable_context("products/memory-stargraph", 2))
+
+        with mock.patch.object(store, "build_yoda_stable_context", side_effect=load_context) as load:
+            first = threading.Thread(target=get_context)
+            second = threading.Thread(target=get_context)
+            first.start()
+            self.assertTrue(started.wait(timeout=1))
+            second.start()
+            time.sleep(0.01)
+            release.set()
+            first.join(timeout=1)
+            second.join(timeout=1)
+
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual({status for _, status in contexts}, {"miss", "coalesced_hit"})
+        self.assertEqual(contexts[0][0]["selected_node"], "# Node")
+        coalesced_context = next(context for context, status in contexts if status == "coalesced_hit")
+        self.assertEqual(coalesced_context["timings"], {"selected_node": 0, "graph": 0, "backlinks": 0})
+
     def test_yoda_context_cache_preserves_fresh_multi_key_entries_and_prunes_expired(self):
         store = GraphStore()
-        store.yoda_context_cache = {
-            "stale": {"created_at": 600, "context": {}},
-            "fresh": {"created_at": 900, "context": {}},
+        store.yoda_context_cache.entries = {
+            "stale": {"stored_at": 600, "value": {}},
+            "fresh": {"stored_at": 900, "value": {}},
         }
         stable_context = {
             "selected_node": "# Node",
@@ -3047,6 +3098,7 @@ cover_image: companies/example-inc/logo.jpg
 
         with (
             mock.patch("server.time.time", return_value=1000),
+            mock.patch("server.time.monotonic", return_value=1000),
             mock.patch.object(store, "build_yoda_stable_context", return_value=stable_context),
             mock.patch.object(store, "build_yoda_prompt", return_value="prompt"),
             mock.patch("server.run_yoda_model", return_value=model_result),
@@ -3056,13 +3108,13 @@ cover_image: companies/example-inc/logo.jpg
         self.assertFalse(result["diagnostics"]["context_cache_hit"])
         self.assertEqual(result["diagnostics"]["node_runtime_status"], "ok")
         self.assertEqual(result["diagnostics"]["node_runtime_path"], "/opt/local/bin/node")
-        self.assertEqual(len(store.yoda_context_cache), 2)
-        self.assertIn("fresh", store.yoda_context_cache)
-        self.assertTrue(all(entry["created_at"] >= 700 for entry in store.yoda_context_cache.values()))
+        self.assertEqual(len(store.yoda_context_cache.entries), 2)
+        self.assertIn("fresh", store.yoda_context_cache.entries)
+        self.assertTrue(all(entry["stored_at"] >= 700 for entry in store.yoda_context_cache.entries.values()))
 
     def test_forced_graph_refresh_invalidates_stable_yoda_context(self):
         store = GraphStore()
-        store.yoda_context_cache = {"stale": {"created_at": 1, "context": {}}}
+        store.yoda_context_cache.put("stale", {})
         refreshed = {"nodes": [], "edges": [], "source": {"mode": "test"}}
 
         with (
@@ -3072,7 +3124,7 @@ cover_image: companies/example-inc/logo.jpg
         ):
             store.get_seed_graph(force=True)
 
-        self.assertEqual(store.yoda_context_cache, {})
+        self.assertEqual(store.yoda_context_cache.entries, {})
 
     def test_extract_openclaw_answer_ignores_cli_warnings(self):
         output = 'warning before json\n{"payloads":[{"text":"payload answer"}],"finalAssistantVisibleText":"visible answer"}\n[agent] done'
