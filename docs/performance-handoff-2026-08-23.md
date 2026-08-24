@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `32e502c`
-- Current performance code commit: `32e502c` (`perf: overlap selection metadata reads`)
-- Previous pushed commit: `53e1449` (`perf: defer noncritical startup data`)
+- Current merged and pushed source: `96599ce`
+- Current performance code commit: `96599ce` (`perf: reuse expanded relationship evidence`)
+- Previous pushed commit: `32e502c` (`perf: overlap selection metadata reads`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 606 tests passed in 51.096 seconds.
+- Latest verification: 607 tests passed in 42.217 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -71,6 +71,8 @@ After the terminal-punctuation Search cache follow-up, the full suite passed 604
 After the deferred startup-data follow-up, the full suite passed 605 tests in 40.463 seconds. JavaScript syntax and `git diff --check` also passed. A targeted isolated-source browser run rendered a nonblank 242-node canvas with no runtime errors and exposed the graph in 614 milliseconds. The broader legacy browser smoke progressed through startup and several journeys, then failed on an existing backend-data assertion because the Chinese query `聊天室` returned zero matches; that failure is unrelated to startup ordering.
 
 After the selection-metadata overlap follow-up, the full suite passed 606 tests in 51.096 seconds with JavaScript syntax and `git diff --check` passing. Isolated-source browser comparison against the previous commit completed with no runtime errors.
+
+After the expanded-relationship evidence reuse follow-up, the full suite passed 607 tests in 42.217 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -360,6 +362,16 @@ After direct-neighbor expansion, entity detail now starts first and its independ
 - Resource timing verified that entity, timeline, and media started together after expansion. The current trace had no page errors, preserved the exact selected slug, and rendered the media preview normally.
 - The endpoints share GBrain transport capacity, so the gain is bounded by backend contention rather than the full sum of the three serial durations. Regression tests lock request start order, response reuse, and the existing render dependency.
 
+### Reused lazy-expansion relationship evidence
+
+Successful lazy expansion already reads complete outbound `graph-query` and inbound `backlinks` evidence. The GraphStore now caches that full raw relationship-type map for the expanded center node, so the immediately following entity-detail request does not repeat the same two backend reads. The existing 30-second cache bound and global invalidation behavior remain unchanged.
+
+- On `products/memory-stargraph`, the immediate detail baseline took 3.420 seconds and called `get`, `graph-query`, and `backlinks` after expansion.
+- Reusing expansion evidence took 1.143 seconds and called only the still-required `get`, a 66.6% detail-stage reduction.
+- The complete entity payload was exactly equal before and after. Neighbor order, all 27 direct neighbors, and every `link_types` list matched.
+- A first implementation that reconstructed types from the bounded final graph was rejected: it preserved neighbors but lost valid backlink-derived types such as `doc_of`, `mentions`, and `runbook_for`. The accepted implementation captures the complete raw outbound/backlink type evidence before graph supplement bounding.
+- Regression tests verify two total relationship backend calls during expansion, zero repeats during immediate detail, and preservation of a backlink type on an edge already discovered outbound.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -407,7 +419,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge, and selection metadata now overlaps after direct-neighbor expansion. The next frontend profiling pass should measure the expansion request itself and the entity endpoint's server-side phases separately. The browser trace still spent 428-524 milliseconds expanding the deep-linked node before the three metadata reads could start, while backend contention bounded the metadata overlap.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, and the immediate entity detail reuses expansion relationship evidence. The timeline endpoint remains the longest selected-node request at roughly 3.7-3.9 seconds in the measured traces; profile its server-side timeline operation before changing client behavior again.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
