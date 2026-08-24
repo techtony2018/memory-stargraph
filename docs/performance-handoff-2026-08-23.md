@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `0763a35`
-- Current performance code commit: `0763a35` (`perf: reuse follow-up capability status`)
-- Previous pushed commit: `8ee2877` (`perf: cache repeated follow-up listings`)
+- Current merged and pushed source: `0e08e3b`
+- Current performance code commit: `0e08e3b` (`perf: reuse follow-up fallback snapshot`)
+- Previous pushed commit: `0763a35` (`perf: reuse follow-up capability status`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 614 tests passed in 41.344 seconds.
+- Latest verification: 614 tests passed in 40.162 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -101,6 +101,8 @@ After the general interactive startup-read deferral follow-up, the full suite pa
 After the repeated Follow-ups listing cache follow-up, the full suite passed 613 tests in 51.719 seconds. Python compilation and `git diff --check` also passed.
 
 After the Follow-ups capability-status reuse follow-up, the full suite passed 614 tests in 41.344 seconds with the same static checks passing.
+
+After the Follow-ups fallback-snapshot reuse follow-up, the full suite passed 614 tests in 40.162 seconds. Python compilation and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -517,6 +519,12 @@ The same short-lived cache now records whether `autopilot_findings_list` is supp
 - The cold path split into a 1.360-second missing-tool probe and a 2.860-second tag fallback.
 - With capability status reused, two different uncached filters completed through fallback in 2.176 and 2.211 seconds instead of repeating the roughly 4.220-second full path, reductions of 48.4% and 47.6%.
 - Tests verify two different filters make one capability call while independently performing their required bounded tag reads.
+
+The fallback now also caches its unfiltered, normalized, sorted page snapshot by bounded read budget. Badge, modal, and state-filtered requests sharing the same 20-page budget apply filtering and pagination locally. Larger offsets retain an independent larger-budget snapshot, while expiry, graph invalidation, force refresh, and acknowledgement preserve the existing freshness contract.
+
+- A real cold badge request took 3.452 seconds and populated the 20-page fallback snapshot.
+- The subsequent modal request with a different limit completed in 0.042 milliseconds; a different state filter completed in 0.025 milliseconds. Both are more than 99.99% below the prior 2.176-2.211-second repeated fallback samples.
+- Tests verify the badge and modal paths perform one two-tag scan total, and that a later state filter returns the correct subset without another tag or page read.
 
 ## Earlier Performance Work
 
