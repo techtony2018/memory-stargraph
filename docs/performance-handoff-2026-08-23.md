@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `8e15094`
-- Current performance code commit: `8e15094` (`perf: overlap Yoda status reconciliation`)
-- Previous pushed commit: `a3c2e0d` (`perf: coalesce concurrent Yoda context`)
+- Current merged and pushed source: `a6bb366`
+- Current performance code commit: `a6bb366` (`perf: overlap Yoda relationship evidence`)
+- Previous pushed commit: `8e15094` (`perf: overlap Yoda status reconciliation`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 601 tests passed in 43.310 seconds.
+- Latest verification: 602 tests passed in 42.785 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -55,6 +55,8 @@ After the concurrent Ask Yoda source-page coalescing follow-up, the full suite p
 After the concurrent Ask Yoda stable-context coalescing follow-up, the full suite passed 600 tests in 43.176 seconds with the same static checks passing.
 
 After the Ask Yoda status-reconciliation overlap follow-up, the full suite passed 601 tests in 43.310 seconds with the same static checks passing.
+
+After the Ask Yoda relationship-evidence overlap follow-up, the full suite passed 602 tests in 42.785 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -273,6 +275,15 @@ Ask Yoda now builds authoritative current-TODO context and completed operational
 - After: two parallel samples took 4.242 and 3.860 seconds, reducing median wall time by about 8.5%.
 - Full product-case cold prompt construction changed from 12.489 seconds to 11.202 seconds, a 10.3% sample improvement; warm construction changed from 5.137 to 4.848 seconds.
 - Correctness: current-TODO text, operational text, counts, final prompt length, and grounding were unchanged. Tests verify true concurrent execution and deterministic current-before-operational output order.
+
+### Concurrent Ask Yoda relationship evidence
+
+After broader retrieval determines the likely source slugs and targeted exclusion set, Ask Yoda now loads direct source pages and targeted entity-relationship evidence concurrently. The final prompt still places direct reads before targeted evidence.
+
+- Before: the two independent evidence sections took 6.919 and 8.182 seconds sequentially in the relationship-question profile; total prompt construction was 20.427 seconds.
+- After: the same profile completed direct and targeted work in 3.987 and 4.368 seconds concurrently; total prompt construction was 10.194 seconds, a 50.1% sample improvement.
+- A separate alternating microbenchmark reduced median direct-plus-targeted wall time from about 5.105 to 4.308 seconds, a 15.6% improvement.
+- Correctness: prompt length remained 19,653 characters, with 6 search results, 4 direct reads, identical targeted counts, and unchanged degradation state. Tests verify true overlap and deterministic evidence ordering.
 
 ## Earlier Performance Work
 
