@@ -475,6 +475,16 @@ Successful selected-node timeline output is cached for 30 seconds, up to 64 slug
 - Regression tests verify one backend read for warm repeats, immediate invalidation after `timeline-add`, and a fresh backend read afterward.
 - This optimization does not reduce the first timeline read; it removes repeated backend work during reselection and repeated Timeline opening.
 
+### Coalesced cold timeline reads
+
+Concurrent first reads for the same entity timeline now share one in-flight backend call through the existing bounded Timeline cache. Different slugs remain independent, successful output keeps the same 30-second TTL, failures are not cached, and graph writes retain the existing immediate invalidation behavior.
+
+- A three-round direction-balanced fresh-process A/B sent eight synchronized Timeline requests for `products/memory-stargraph` on every run.
+- Median batch completion fell from 10.019 to 4.711 seconds, a 53.0% improvement. Median request time fell from 9.892 to 4.708 seconds, a 52.4% improvement.
+- Every run returned eight `200` responses with one exact 85-byte length and one SHA-256 hash.
+- Regression coverage proves eight same-slug callers invoke `gbrain timeline` exactly once, while the existing cache and post-write invalidation contract remains intact.
+- The full suite passed 661 tests in 53.950 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Coalesced raw entity reads
 
 Raw entity markdown now uses a 30-second, 128-entry single-flight cache shared by detail hydration, media extraction, View, and Ask Yoda source loading. Concurrent cold readers for one slug share one owner `get`; failed loads are not cached. All GraphStore invalidation paths clear the cache.

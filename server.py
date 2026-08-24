@@ -8039,8 +8039,13 @@ class GraphStore:
         cached = self.timeline_cache.get(slug)
         if cached is not None:
             return cached
-        output = run_gbrain("timeline", slug)
-        self.timeline_cache.put(slug, output)
+        output, _load_status = self.timeline_cache.load_once(
+            slug,
+            lambda: run_gbrain("timeline", slug),
+            timeout=20,
+        )
+        if output is None:
+            raise RuntimeError("GBrain timeline retrieval was unavailable")
         return output
 
     def refresh_embedding(self, slug):

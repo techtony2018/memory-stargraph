@@ -1870,6 +1870,30 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[1].args[:2], ("timeline-add", "products/memory-stargraph"))
         self.assertEqual(run.call_args_list[2].args, ("timeline", "products/memory-stargraph"))
 
+    def test_timeline_coalesces_concurrent_reads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_run(*args):
+            self.assertEqual(args, ("timeline", "products/memory-stargraph"))
+            started.set()
+            release.wait(timeout=1)
+            return "No timeline entries."
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(store.timeline, "products/memory-stargraph")
+                    for _ in range(8)
+                ]
+                self.assertTrue(started.wait(timeout=1))
+                release.set()
+                outputs = [future.result(timeout=2) for future in futures]
+
+        self.assertEqual(outputs, ["No timeline entries."] * 8)
+        self.assertEqual(run.call_count, 1)
+
     def test_entity_raw_coalesces_concurrent_reads(self):
         store = GraphStore()
         started = threading.Event()
