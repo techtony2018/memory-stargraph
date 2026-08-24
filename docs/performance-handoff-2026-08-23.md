@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `618f59e`
-- Current performance code commit: `618f59e` (`perf: resolve exact evidence titles locally`)
-- Previous pushed commit: `689a561` (`perf: narrow Yoda relationship source reads`)
+- Current merged and pushed source: `76a565b`
+- Current performance code commit: `76a565b` (`perf: reuse searches across terminal punctuation`)
+- Previous pushed commit: `618f59e` (`perf: resolve exact evidence titles locally`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 604 tests passed in 45.575 seconds.
+- Latest verification: 604 tests passed in 48.208 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -65,6 +65,8 @@ After the covered-entity targeted-lookup follow-up, the full suite passed 603 te
 After the targeted relationship direct-read fanout follow-up, the full suite passed 603 tests in 46.262 seconds with the same static checks passing.
 
 After the exact prewarmed evidence-title Search follow-up, the full suite passed 604 tests in 45.575 seconds with the same static checks passing.
+
+After the terminal-punctuation Search cache follow-up, the full suite passed 604 tests in 48.208 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -325,6 +327,14 @@ Search now resolves a query locally when it uniquely matches a complete title in
 - Before: the exact current Product Owner Run title took 3.318, 1.873, and 1.738 seconds; median 1.873 seconds. The correct Run ranked first in all three cases among broader results.
 - After: the same title took 9.535, 8.988, and 7.752 milliseconds; median 8.988 milliseconds, a 99.5% reduction.
 - Correctness: all 3/3 calls returned the same unique Run and made zero GBrain calls. The result exposes an explicit `search_exact_evidence_title` coverage marker.
+
+### Terminal-punctuation Search cache keys
+
+Primary Search cache keys now ignore trailing ASCII sentence punctuation (`?`, `!`, and `.`) after the existing case and whitespace normalization. The first request is still sent to GBrain exactly as entered; only a semantically equivalent repeat shares its result.
+
+- Five real plain/punctuated query pairs produced exact parsed-result parity and top-ten slug parity in 5/5 cases.
+- Before: punctuated variants took 1.643-2.894 seconds, with a 2.620-second median and another GBrain search for every pair.
+- After: all variants were cache hits in 0.045-0.056 milliseconds, median 0.055 milliseconds, greater than 99.99% improvement, with zero additional GBrain calls.
 
 ## Earlier Performance Work
 
