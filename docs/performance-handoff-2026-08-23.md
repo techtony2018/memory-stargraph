@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `b2b098b`
-- Current performance code commit: `b2b098b` (`perf: batch node cache touch writes`)
-- Previous pushed commit: `8ca1f13` (`perf: release search results before details`)
+- Current merged and pushed source: `aa3e5f0`
+- Current performance code commit: `aa3e5f0` (`perf: reuse node cache serialization`)
+- Previous pushed commit: `b2b098b` (`perf: batch node cache touch writes`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 610 tests passed in 48.274 seconds.
+- Latest verification: 610 tests passed in 46.764 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -85,6 +85,8 @@ After the high-degree graph-glow follow-up, the full suite passed 609 tests in 4
 After the Search result-release follow-up, the full suite passed 609 tests in 47.081 seconds. JavaScript syntax, the 71 focused frontend tests, and `git diff --check` also passed after the final stale-selection guard.
 
 After the batched node-cache touch follow-up, the full suite passed 610 tests in 48.274 seconds. JavaScript syntax, the 72 focused frontend tests, and `git diff --check` also passed.
+
+After the node-cache serialization reuse follow-up, the full suite passed 610 tests in 46.764 seconds with the same focused and static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -439,6 +441,12 @@ The browser node/media cache now parses its persisted JSON once into an in-memor
 - The previous hit path synchronously parsed and rewrote the entire cache. Synthetic median hit cost was 19.3 milliseconds at 1 MB and 63.1 milliseconds at 4 MB; 4 MB p95 was 133.5 milliseconds.
 - With a 4.21 MB real cache, five sequential full entity reselections completed in 11.9 milliseconds. Their entity and media reads produced zero synchronous cache writes and one merged 4.25 MB write after the delay.
 - The same roughly ten hits would cost about 631 milliseconds at the measured old 4 MB median. Immediate cache-touch work fell by about 98%, while response payloads and eviction semantics stayed unchanged.
+
+Cold cache writes also reuse one serialized payload for limit enforcement, persistence, and the displayed usage byte count. The common under-limit path no longer sorts LRU entries or serializes the multi-megabyte store three times.
+
+- In an alternating same-page 4 MB benchmark, the previous cold-write path had a 127.4-millisecond median and 142.1-millisecond mean.
+- The single-serialization path measured 73.3 milliseconds median and 75.9 milliseconds mean, reductions of 42.5% and 46.6%.
+- Over-limit writes still sort by `lastAccessed`, evict one entry at a time, and reserialize after each eviction until the configured byte cap is satisfied.
 
 ## Earlier Performance Work
 
