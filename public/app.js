@@ -400,6 +400,8 @@ function cacheLimitBytes() {
 let nodeCacheMemoryStore = null;
 let nodeCacheMemoryBytes = null;
 let nodeCacheTouchSaveTimer = null;
+let nodeCacheSaveDueAt = 0;
+let nodeCachePendingPayload = null;
 
 function cacheStore() {
   if (nodeCacheMemoryStore === null) {
@@ -420,18 +422,37 @@ function saveCacheStore(store, serialized = null) {
     window.clearTimeout(nodeCacheTouchSaveTimer);
     nodeCacheTouchSaveTimer = null;
   }
+  nodeCacheSaveDueAt = 0;
+  nodeCachePendingPayload = null;
   window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, payload);
 }
 
-function scheduleCacheTouchSave(store) {
+function scheduleCacheSave(store, delayMs, serialized = null) {
   nodeCacheMemoryStore = store;
-  if (nodeCacheTouchSaveTimer !== null) return;
+  if (serialized) {
+    nodeCachePendingPayload = serialized;
+    nodeCacheMemoryBytes = Math.max(0, serialized.length - 12);
+  }
+  const dueAt = Date.now() + delayMs;
+  if (nodeCacheTouchSaveTimer !== null && nodeCacheSaveDueAt <= dueAt) return;
+  if (nodeCacheTouchSaveTimer !== null) window.clearTimeout(nodeCacheTouchSaveTimer);
+  nodeCacheSaveDueAt = dueAt;
   nodeCacheTouchSaveTimer = window.setTimeout(() => {
     nodeCacheTouchSaveTimer = null;
-    const payload = JSON.stringify(nodeCacheMemoryStore || { entries: {} });
+    nodeCacheSaveDueAt = 0;
+    const payload = nodeCachePendingPayload || JSON.stringify(nodeCacheMemoryStore || { entries: {} });
+    nodeCachePendingPayload = null;
     nodeCacheMemoryBytes = Math.max(0, payload.length - 12);
     window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, payload);
-  }, 1000);
+  }, delayMs);
+}
+
+function scheduleCacheTouchSave(store) {
+  scheduleCacheSave(store, 1000);
+}
+
+function scheduleCacheContentSave(store, serialized) {
+  scheduleCacheSave(store, 500, serialized);
 }
 
 window.addEventListener("storage", (event) => {
@@ -440,6 +461,8 @@ window.addEventListener("storage", (event) => {
     window.clearTimeout(nodeCacheTouchSaveTimer);
     nodeCacheTouchSaveTimer = null;
   }
+  nodeCacheSaveDueAt = 0;
+  nodeCachePendingPayload = null;
   nodeCacheMemoryStore = safeJsonParse(event.newValue || "", { entries: {} });
   nodeCacheMemoryBytes = event.newValue
     ? Math.max(0, event.newValue.length - 12)
@@ -503,7 +526,7 @@ function cacheGet(url) {
   return { ok: true, status: 200, data: entry.data, cached: true };
 }
 
-function enforceCacheLimit(store = cacheStore()) {
+function enforceCacheLimit(store = cacheStore(), options = {}) {
   const limit = cacheLimitBytes();
   if (limit <= 0) {
     saveCacheStore({ entries: {} });
@@ -520,7 +543,8 @@ function enforceCacheLimit(store = cacheStore()) {
       usedBytes = Math.max(0, serialized.length - 12);
     }
   }
-  saveCacheStore(store, serialized);
+  if (options.deferSave) scheduleCacheContentSave(store, serialized);
+  else saveCacheStore(store, serialized);
   return store;
 }
 
@@ -529,7 +553,7 @@ function cacheSet(url, data) {
   const store = cacheStore();
   store.entries = store.entries || {};
   store.entries[url] = { data, lastAccessed: Date.now() };
-  enforceCacheLimit(store);
+  enforceCacheLimit(store, { deferSave: true });
   updateCacheSettingsView();
 }
 
