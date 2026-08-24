@@ -5249,9 +5249,17 @@ def collect_live_graph():
     graph_slugs = list(nodes)[:GRAPH_COMMAND_LIMIT]
     for index, slug in enumerate(graph_slugs):
         try:
-            graph_output = run_gbrain("graph", slug, "--depth", str(GRAPH_DEPTH))
-            edge_set.update(parse_neighbors(graph_output, slug))
-            merge_edge_types(edge_types, parse_link_types(graph_output, slug))
+            graph_output = run_gbrain(
+                "graph-query",
+                slug,
+                "--direction",
+                "out",
+                "--depth",
+                str(GRAPH_DEPTH),
+            )
+            outbound_types = parse_graph_query_link_types(graph_output, slug)
+            edge_set.update(outbound_types)
+            merge_edge_types(edge_types, outbound_types)
             backlinks_output = run_gbrain("backlinks", slug)
             edge_set.update(parse_backlinks(backlinks_output, slug))
             merge_edge_types(edge_types, parse_backlink_types(backlinks_output, slug))
@@ -5353,10 +5361,18 @@ def expand_raw_graph(raw_graph, center_slug):
             "expanded": False,
         }
 
-    graph_output = run_gbrain("graph", center_slug, "--depth", str(GRAPH_DEPTH))
-    graph_edges = parse_neighbors(graph_output, center_slug)
+    graph_output = run_gbrain(
+        "graph-query",
+        center_slug,
+        "--direction",
+        "out",
+        "--depth",
+        str(GRAPH_DEPTH),
+    )
+    outbound_types = parse_graph_query_link_types(graph_output, center_slug)
+    graph_edges = set(outbound_types)
     discovered_edges = set(graph_edges)
-    merge_edge_types(edge_types, parse_link_types(graph_output, center_slug))
+    merge_edge_types(edge_types, outbound_types)
     backlinks_output = run_gbrain("backlinks", center_slug)
     backlink_edges = parse_backlinks(backlinks_output, center_slug)
     backlink_types = parse_backlink_types(backlinks_output, center_slug)

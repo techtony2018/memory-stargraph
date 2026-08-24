@@ -1493,10 +1493,9 @@ class GraphParsingTests(unittest.TestCase):
                 }
             ],
         }
-        graph_output = """[
-  {"slug": "organizations/cfer-foundation", "links": [{"to_slug": "bills/aca7", "link_type": "oppose"}]},
-  {"slug": "bills/aca7", "links": []}
-]"""
+        graph_output = """[depth 0] organizations/cfer-foundation
+  --oppose-> bills/aca7 (depth 1)
+"""
         backlinks_output = """[
   {"from_slug": "people/frank-xu", "to_slug": "organizations/cfer-foundation", "link_type": "president"},
   {"from_slug": "people/gail-heriot", "to_slug": "organizations/cfer-foundation", "link_type": "executive vice president"}
