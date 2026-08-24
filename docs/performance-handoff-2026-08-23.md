@@ -838,6 +838,17 @@ Original `/media/` responses now stream files in fixed 1 MiB blocks instead of r
 - A separate full-speed local HTTP A/B transferred 82,259,376 bytes per batch. Three direction-balanced rounds had 420.7- versus 363.2-millisecond median batch wall time and 340.2- versus 259.7-millisecond median request time, confirming no throughput regression.
 - Regression coverage verifies the 1 MiB write ceiling, exact byte reconstruction, and zero-body HEAD behavior. The full suite passed 658 tests in 41.144 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Preview-sized media cards
+
+The first-class **View media** workflow now reuses each raster image's display-sized `preview_url` inside its cards. The card's **Open media URL** action still targets the original file, and non-image links such as PDFs are unchanged.
+
+- On desktop, the five visible image cards previously transferred 6,831,319 original-image bytes. Four uncached preview requests transferred 100,412 bytes after the already-visible selection preview was reused, a 98.53% reduction.
+- At 5 Mbps and 80 milliseconds of latency, desktop completion for the five visible images fell from 11,299.3 to 598.1 milliseconds, a 94.7% improvement.
+- On mobile, the two visible image cards previously transferred 3,115,491 original-image bytes. The one uncached preview transferred 29,226 bytes after selection-preview reuse, a 99.06% reduction.
+- Under the same network conditions, mobile completion for the two visible images fell from 5,535.4 to 324.4 milliseconds, a 94.1% improvement.
+- Isolated desktop and mobile screenshots retained clear previews, exact original-media links, stable card layout, and no page errors or horizontal overflow.
+- Regression coverage locks preview use inside media cards. The full suite passed 658 tests in 42.934 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Single-range original-media responses
 
 The local media route now honors one HTTP byte range, including bounded, open-ended, and suffix forms. Valid requests return `206`, `Accept-Ranges`, and exact `Content-Range` metadata while retaining the 1 MiB streaming ceiling. Unsatisfiable or multi-range requests fail closed with `416`; ordinary GET and HEAD behavior remains compatible.

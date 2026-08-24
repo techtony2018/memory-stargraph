@@ -3697,7 +3697,7 @@ function renderMediaItems(items) {
 
     const preview = document.createElement("div");
     preview.className = "media-card-preview";
-    if (renderSingleMediaPreview(preview, item)) {
+    if (renderSingleMediaPreview(preview, item, { preview: true })) {
       card.appendChild(preview);
     }
 
