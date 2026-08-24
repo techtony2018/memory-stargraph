@@ -2152,6 +2152,29 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertFalse(outcomes["resolver_choice"]["auto_approval"])
         self.assertEqual(outcomes["deployment_attestation"]["configured_remote"]["verified_target_count"], 1)
 
+    def test_weekly_memory_value_digest_overlaps_resolver_and_outcome_reads(self):
+        barrier = threading.Barrier(2)
+
+        def resolver_health():
+            barrier.wait(timeout=1)
+            return {"pending": 2}
+
+        def weekly_outcomes(_window, _backlog, _resolver):
+            barrier.wait(timeout=1)
+            return {"resolver_choice": {"status": "unknown", "pending_proposals": 0, "auto_approval": False}}
+
+        with (
+            mock.patch("server.STORE", FakeStore()),
+            mock.patch("server.safe_gbrain_get_text_bounded", return_value=""),
+            mock.patch("server.resolver_feedback_health", side_effect=resolver_health),
+            mock.patch("server.verified_memory_outcomes", side_effect=weekly_outcomes),
+        ):
+            data = server.memory_value_digest("week")
+
+        self.assertEqual(data["resolver_health"]["pending"], 2)
+        self.assertEqual(data["verified_memory_outcomes"]["resolver_choice"]["status"], "observed")
+        self.assertEqual(data["verified_memory_outcomes"]["resolver_choice"]["pending_proposals"], 2)
+
     def test_weekly_memory_value_digest_marks_missing_evidence_partial(self):
         fake_store = FakeStore()
 
@@ -2501,6 +2524,47 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("sk-", serialized)
         self.assertNotIn("authorization", serialized)
         self.assertNotIn("raw prompt", serialized)
+
+    def test_customer_readiness_reuses_weekly_resolver_and_deployment_evidence(self):
+        weekly = {
+            "resolver_health": {"pending": 0, "proposal_counts": {"pending": 0}},
+            "verified_memory_outcomes": {
+                "status": "pass",
+                "freshness": {"status": "current"},
+                "sre_numeric_evidence": {
+                    "status": "pass",
+                    "freshness": "current",
+                    "evidence_slugs": ["reports/sre"],
+                },
+                "deployment_attestation": {
+                    "status": "ready",
+                    "freshness": "current",
+                    "summary": "Configured target evidence is current.",
+                    "evidence_slugs": ["reports/deployment"],
+                    "local": {"status": "current"},
+                    "configured_remote": {
+                        "status": "ready",
+                        "configured_target_count": 1,
+                        "verified_target_count": 1,
+                    },
+                },
+            },
+        }
+        with (
+            mock.patch("server.STORE", FakeStore()),
+            mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
+            mock.patch("server.attachment_storage_status", return_value={"available": True}),
+            mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think"}),
+            mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.resolver_feedback_health", side_effect=AssertionError("duplicate resolver read")),
+            mock.patch("server.configured_target_readiness", side_effect=AssertionError("duplicate deployment read")),
+        ):
+            data = server.customer_readiness()
+
+        checks = {check["id"]: check for check in data["checks"]}
+        self.assertEqual(checks["resolver_pending"]["status"], "ready")
+        self.assertEqual(checks["configured_targets"]["status"], "ready")
+        self.assertEqual(data["target_evidence"]["configured_remote"]["verified_target_count"], 1)
 
     def test_customer_readiness_reports_degraded_missing_partial_and_no_activity(self):
         fake_store = FakeStore()

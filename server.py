@@ -7889,9 +7889,11 @@ def customer_readiness():
         model_config = {}
         model_error = str(exc)
     try:
-        weekly = memory_value_digest("week").get("verified_memory_outcomes") or {}
+        weekly_digest = memory_value_digest("week")
+        weekly = weekly_digest.get("verified_memory_outcomes") or {}
         weekly_error = ""
     except Exception as exc:  # noqa: BLE001
+        weekly_digest = {}
         weekly = {}
         weekly_error = str(exc)
     sre_numeric = weekly.get("sre_numeric_evidence") if isinstance(weekly, dict) else {}
@@ -7902,13 +7904,22 @@ def customer_readiness():
         except Exception as exc:  # noqa: BLE001
             sre_numeric = {}
             sre_numeric_error = str(exc)
-    try:
-        resolver = resolver_feedback_health()
-        resolver_error = ""
-    except Exception as exc:  # noqa: BLE001
-        resolver = {}
-        resolver_error = str(exc)
-    target_status, target_counts, target_summary = configured_target_readiness()
+    resolver = weekly_digest.get("resolver_health") if isinstance(weekly_digest, dict) else None
+    resolver_error = ""
+    if not isinstance(resolver, dict):
+        try:
+            resolver = resolver_feedback_health()
+        except Exception as exc:  # noqa: BLE001
+            resolver = {}
+            resolver_error = str(exc)
+    elif resolver.get("error"):
+        resolver_error = str(resolver.get("error"))
+    target_counts = weekly.get("deployment_attestation") if isinstance(weekly, dict) else None
+    if isinstance(target_counts, dict) and target_counts.get("status"):
+        target_status = str(target_counts.get("status"))
+        target_summary = str(target_counts.get("summary") or "Deployment attestation evidence is available in the weekly digest.")
+    else:
+        target_status, target_counts, target_summary = configured_target_readiness()
 
     health_status = "ready" if graph and stats and source else "blocked"
     activation_status = "ready" if activation.get("mode") == "live-ready" else "degraded"
@@ -8669,6 +8680,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
         "deployment_attestation": {
             "status": deployment_attestation["status"],
             "freshness": deployment_attestation["freshness"],
+            "summary": deployment_attestation["summary"],
             "source_timestamp": deployment_attestation.get("source_timestamp", ""),
             "readback_at": deployment_attestation.get("readback_at", ""),
             "evidence_slugs": deployment_attestation["evidence_slugs"],
@@ -8684,6 +8696,14 @@ def verified_memory_outcomes(window, backlog, resolver_health):
     }
 
 
+def resolver_choice_from_health(resolver_health):
+    return {
+        "status": "observed" if isinstance(resolver_health, dict) and not resolver_health.get("error") else "unknown",
+        "pending_proposals": parse_nonnegative_int((resolver_health or {}).get("pending", 0) if isinstance(resolver_health, dict) else 0),
+        "auto_approval": False,
+    }
+
+
 def memory_value_digest(window="day"):
     window = str(window or "day").strip().lower()
     if window not in {"day", "week"}:
@@ -8693,10 +8713,23 @@ def memory_value_digest(window="day"):
     backlog = safe_gbrain_get_text_bounded("notes/memory-starmap-todo-list", timeout=4, local_first=True)
     learnings = safe_gbrain_get_text_bounded("learnings/memory-stargraph-20260719-operational-state-reconciliation-and-source-sync-preflight", timeout=3, local_first=True)
     todo_movement = count_todo_statuses(backlog)
-    try:
-        resolver_health = resolver_feedback_health()
-    except Exception as exc:  # noqa: BLE001
-        resolver_health = {"error": sanitize_runtime_error(exc)}
+    outcomes = None
+    if window == "week":
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            resolver_future = executor.submit(resolver_feedback_health)
+            outcomes_future = executor.submit(verified_memory_outcomes, window, backlog, {})
+            try:
+                resolver_health = resolver_future.result()
+            except Exception as exc:  # noqa: BLE001
+                resolver_health = {"error": sanitize_runtime_error(exc)}
+            outcomes = outcomes_future.result()
+        if outcomes:
+            outcomes["resolver_choice"] = resolver_choice_from_health(resolver_health)
+    else:
+        try:
+            resolver_health = resolver_feedback_health()
+        except Exception as exc:  # noqa: BLE001
+            resolver_health = {"error": sanitize_runtime_error(exc)}
     learned_items = []
     if "source-sync" in learnings.lower() or "source sync" in learnings.lower():
         learned_items.append("Source-sync preflight is now treated as worker runtime evidence, not only deployment evidence.")
@@ -8741,7 +8774,6 @@ def memory_value_digest(window="day"):
         "next_action": next_action,
         "privacy": "Private node content is not embedded in this digest; inspect linked evidence only when authorized.",
     }
-    outcomes = verified_memory_outcomes(window, backlog, resolver_health)
     if outcomes:
         digest["verified_memory_outcomes"] = outcomes
     return digest
