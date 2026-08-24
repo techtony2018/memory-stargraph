@@ -539,6 +539,16 @@ Commit `4f7c7b4` raises the minimum category size for drawing a cloud from four 
 - Both viewports remained nonblank with no horizontal overflow, page errors, or console errors. Graph node/edge/focus parity held in every timing sample.
 - The full suite passed 645 tests in 44.346 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Stricter cloud budget on very dense graphs
+
+Commit `87c3fa3` raises the minimum cloud category from eight to twelve nodes only when more than 240 nodes are drawable. It extends the existing dense-view budget without changing the four-node threshold for ordinary graphs. The current 274-node degree-116 view retains seven clouds sized 54, 21, 18, 16, 14, 14, and 12 nodes, while omitting five faint clouds representing categories with only 8-11 nodes.
+
+- Four same-server pages ran in before/after/after/before order with forced Canvas rasterization. The aggregate cloud-stage median fell from 16.0 to 7.0 milliseconds, a 56.3% reduction.
+- Aggregate complete dirty-frame median fell from 78.6 to 41.9 milliseconds, a 46.7% reduction. Every page retained 274 nodes, 139 edges, 48 animated edges, the degree-116 focus, and no errors or overflow.
+- A runtime low-density check filtered the candidate to 100 drawable nodes. It retained the four-node threshold, predicted six clouds, and created exactly six radial gradients.
+- Fixed-time desktop and mobile screenshots changed 12.4362% and 13.5407% of pixels, with mean RGB deltas of only 1.5083 and 1.5027. Visual inspection retained the dominant color fields, graph hierarchy, focus treatment, labels, radar, and mobile framing; both Canvas layers remained nonblank and pointer hit-testing passed.
+- The full suite passed 645 tests in 40.825 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Bounded flowing-edge animation on high-degree focus views
 
 Commit `1ff4256` keeps every static graph edge but limits the animated dashed overlay and glowing particle to 48 deterministic direct-focus edges when the selected node has degree greater than 80. The retained neighbors are ranked by degree with a stable slug tiebreak, so the same graph produces the same animation set. A genuinely hovered neighbor remains animated immediately. Focus views at degree 80 or lower preserve the previous behavior exactly.
