@@ -503,6 +503,17 @@ The canvas renderer no longer gives every direct neighbor an expensive radial gl
 - A browser pixel check found 587,594 nontransparent canvas pixels and 516,916 bright pixels. The 276-node, 139-edge graph, selection details, focus treatment, and labels remained visible with no page errors.
 - The change does not lower graph data, hide nodes or edges, disable flowing-edge animation, or alter lower-degree focus views. It only bounds the most expensive glow tier at the default zoom.
 
+### Cached static Canvas background glow
+
+Commit `c445b1b` renders the two viewport-sized, visually static nebula/glow gradients once into a single offscreen Canvas and reuses that image on subsequent frames. The cache identity includes logical viewport width, height, and device pixel ratio, so resize and DPR changes rebuild the correctly sized texture. Canvas clearing, rotating radar rays, radar rings, twinkling stars, graph projection, clouds, edges, nodes, labels, and interactions remain on their existing live draw paths.
+
+- A forced-rasterization phase profile on the 314-node, 225-edge `people/tony-guan` view identified background drawing at a 12.5-millisecond median, versus clouds at 9.3 milliseconds, nodes at 8.1 milliseconds, edges at 2.4 milliseconds, and projection at 0.3 milliseconds.
+- In a four-page same-server alternating browser A/B, the forced background-phase median fell from 8.25 to 1.60 milliseconds, an 80.6% reduction.
+- The same benchmark's complete forced-frame median fell from 54.30 to 19.40 milliseconds, a 64.3% reduction. Graph parity held at 314 nodes, 225 edges, and the same selected focus with no page or console errors.
+- Fixed-time, fixed-rotation Canvas screenshots were pixel-identical on mobile DPR2. On desktop DPR1, only 0.0448% of pixels differed, with a maximum RGB delta of 2/255 and an average RGB delta of 0.0003; the difference is rasterization rounding rather than a visible composition change.
+- Desktop and mobile screenshots remained nonblank and correctly framed. The DPR2 mobile texture was allocated at exactly twice the logical viewport dimensions, and neither viewport had horizontal overflow.
+- The full suite passed 643 tests in 41.235 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Search results released before detail hydration
 
 Natural-language Search now releases its loading state as soon as the result graph and preferred focus are available. The selected graph result is rendered immediately, while direct-neighbor expansion, entity markdown, media, and timeline hydration continue through the existing cancellable entity loader. A newer manual selection increments the selection version and prevents the older background completion from changing feedback or detail state.
