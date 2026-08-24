@@ -560,6 +560,16 @@ Commit `1ff4256` keeps every static graph edge but limits the animated dashed ov
 - Fixed-time Canvas screenshots changed 3.7387% of desktop pixels and 7.5009% of mobile pixels. Mean RGB deltas were only 0.2013 and 0.5046; visual inspection retained a clear 48-edge flow field, all nodes and static edges, focus hierarchy, labels, and framing.
 - Desktop and mobile checks reported no page errors or horizontal overflow. The full suite passed 645 tests in 53.413 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Particle-only flowing-edge emphasis
+
+Commit `80564e7` removes the second dashed stroke from each animated edge while preserving every static edge and all 48 time-driven glowing particles on the degree-116 focus view. The low-alpha dashes duplicated geometry already communicated by the static focus-colored edge and moving particle. Relationship labels, hover behavior, animation selection, particle speed, glow, and lower-degree behavior are unchanged.
+
+- An alternating in-page component profile measured static-edge-only drawing at a 5.5-millisecond median and the previous full flowing treatment at 15.6 milliseconds. One full frame issued 139 edge-base strokes, 48 dashed strokes, and 48 particle fills; the base edges had about 100 distinct styles, ruling out lossless path batching as the next simple optimization.
+- Four same-server pages ran in before/after/after/before order with forced rasterization. Aggregate edge-stage median fell from 7.1 to 5.6 milliseconds, a 21.1% reduction.
+- Aggregate complete dirty-frame median fell from 78.6 to 38.8 milliseconds, a 50.6% reduction. Every page retained 274 nodes, 139 edges, 48 animated particles, exact focus identity, and no errors or overflow.
+- Fixed-time desktop and mobile screenshots changed only 0.3600% and 0.7639% of pixels, with mean RGB deltas of 0.0440 and 0.0897. Visual inspection found the graph effectively identical at rest; motion remains visible through the unchanged glowing particles.
+- The full suite passed 645 tests in 49.066 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Direct background gradients on current Chrome
 
 Commit `6559df8` removes the full-viewport offscreen texture and draws the same two nebula/glow radial gradients directly on the live Canvas. This reverses the older `c445b1b` implementation only after new profiling showed that the current Chrome software raster path spends most background time copying the large texture. Radar rings, rotating rays, stars, colors, gradient stops, graph layers, and interactions are unchanged.
