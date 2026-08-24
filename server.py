@@ -4870,9 +4870,7 @@ def copy_media_range(source, destination, byte_count):
         remaining -= len(chunk)
 
 
-@lru_cache(maxsize=32)
-def image_preview_bytes(path, mtime_ns, size):
-    del mtime_ns, size
+def _encode_image_preview(path):
     if Image is None or ImageOps is None:
         return None
     try:
@@ -4886,6 +4884,48 @@ def image_preview_bytes(path, mtime_ns, size):
             return output.getvalue()
     except (OSError, ValueError):
         return None
+
+
+@lru_cache(maxsize=32)
+def _cached_image_preview_bytes(path, mtime_ns, size):
+    del mtime_ns, size
+    return _encode_image_preview(path)
+
+
+_IMAGE_PREVIEW_FLIGHTS = {}
+_IMAGE_PREVIEW_FLIGHTS_LOCK = threading.Lock()
+
+
+def image_preview_bytes(path, mtime_ns, size):
+    key = (path, mtime_ns, size)
+    with _IMAGE_PREVIEW_FLIGHTS_LOCK:
+        flight = _IMAGE_PREVIEW_FLIGHTS.get(key)
+        owner = flight is None
+        if owner:
+            flight = {"event": threading.Event(), "value": None, "error": None}
+            _IMAGE_PREVIEW_FLIGHTS[key] = flight
+
+    if owner:
+        try:
+            flight["value"] = _cached_image_preview_bytes(*key)
+        except BaseException as error:  # noqa: BLE001
+            flight["error"] = error
+        finally:
+            with _IMAGE_PREVIEW_FLIGHTS_LOCK:
+                _IMAGE_PREVIEW_FLIGHTS.pop(key, None)
+            flight["event"].set()
+    else:
+        flight["event"].wait()
+
+    if flight["error"] is not None:
+        raise flight["error"]
+    return flight["value"]
+
+
+image_preview_bytes.cache_clear = _cached_image_preview_bytes.cache_clear
+image_preview_bytes.cache_info = _cached_image_preview_bytes.cache_info
+image_preview_bytes.cache_parameters = _cached_image_preview_bytes.cache_parameters
+image_preview_bytes.__wrapped__ = _cached_image_preview_bytes.__wrapped__
 
 
 def enrich_media_reference_metadata(item):

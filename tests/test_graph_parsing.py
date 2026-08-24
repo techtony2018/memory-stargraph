@@ -2246,6 +2246,46 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
             self.assertEqual(first[:4], b"RIFF")
             self.assertEqual(image_preview_bytes.cache_info().hits, 1)
 
+    def test_image_preview_bytes_coalesces_concurrent_cache_misses(self):
+        started = threading.Event()
+        release = threading.Event()
+        call_count = 0
+        call_lock = threading.Lock()
+
+        def encode(_path):
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+            started.set()
+            release.wait(timeout=2)
+            return b"preview"
+
+        image_preview_bytes.cache_clear()
+        with mock.patch("server._encode_image_preview", side_effect=encode):
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(image_preview_bytes, "/large.jpg", 1, 2) for _ in range(8)]
+                self.assertTrue(started.wait(timeout=1))
+                release.set()
+                results = [future.result(timeout=2) for future in futures]
+
+        self.assertEqual(results, [b"preview"] * 8)
+        self.assertEqual(call_count, 1)
+
+    def test_image_preview_bytes_keeps_different_keys_concurrent(self):
+        encode_barrier = threading.Barrier(2)
+
+        def encode(path):
+            encode_barrier.wait(timeout=2)
+            return path.encode()
+
+        image_preview_bytes.cache_clear()
+        with mock.patch("server._encode_image_preview", side_effect=encode):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(image_preview_bytes, "/first.jpg", 1, 2)
+                second = pool.submit(image_preview_bytes, "/second.jpg", 1, 2)
+                self.assertEqual(first.result(timeout=3), b"/first.jpg")
+                self.assertEqual(second.result(timeout=3), b"/second.jpg")
+
     def test_remote_media_url_for_relative_path_encodes_path_segments(self):
         self.assertEqual(
             remote_media_url_for_relative_path("https://example.test/media", "companies/azul systems/Azul Logo.jpg"),

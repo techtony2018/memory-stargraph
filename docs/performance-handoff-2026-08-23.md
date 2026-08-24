@@ -849,6 +849,17 @@ The first-class **View media** workflow now reuses each raster image's display-s
 - Isolated desktop and mobile screenshots retained clear previews, exact original-media links, stable card layout, and no page errors or horizontal overflow.
 - Regression coverage locks preview use inside media cards. The full suite passed 658 tests in 42.934 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Coalesced cold media-preview generation
+
+Concurrent cold requests for the same source-attested image now share one preview encoding flight. Coordination is keyed by source path, nanosecond mtime, and source size, so different images still encode concurrently and completed previews retain the existing bounded 32-entry cache.
+
+- A three-round direction-balanced fresh-process A/B sent eight synchronized requests for the same 10,282,422-byte JPEG on every run.
+- Median additional server RSS fell from 1,035.85 MiB to 122.35 MiB, an 88.2% reduction.
+- Median batch completion changed from 1.570 to 1.586 seconds, a 1.0% tradeoff. Median request time changed from 1.516 to 1.573 seconds, a 3.8% tradeoff within the 10% latency guardrail.
+- Every run returned eight `200` responses with one exact 96,496-byte length and one SHA-256 hash.
+- Regression coverage proves eight same-key misses invoke the encoder exactly once and two distinct keys remain concurrent.
+- The full suite passed 660 tests in 41.067 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Single-range original-media responses
 
 The local media route now honors one HTTP byte range, including bounded, open-ended, and suffix forms. Valid requests return `206`, `Accept-Ranges`, and exact `Content-Range` metadata while retaining the 1 MiB streaming ceiling. Unsatisfiable or multi-range requests fail closed with `416`; ordinary GET and HEAD behavior remains compatible.
