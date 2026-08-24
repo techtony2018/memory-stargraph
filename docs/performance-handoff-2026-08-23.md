@@ -774,6 +774,15 @@ Existing Takes review now shares one 30-second unfiltered snapshot across simple
 - Every response preserved status, total, order, and IDs. After the first complete snapshot, the remaining four holder reads took 1.1-1.7 milliseconds each.
 - Tests verify cross-holder reuse, active filtering, cap-triggered direct fallback, complex-filter preservation, repeated read reuse, write invalidation, and API pagination. The full suite passed 642 tests in 41.234 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Negotiated JSON response compression
+
+Large JSON API responses now use deterministic gzip level 1 when the client advertises gzip support. Responses below 1 KB remain plain, clients that omit or explicitly refuse gzip remain byte-compatible, and compressible responses advertise `Vary: Accept-Encoding`. The lower compression level preserves nearly all of the available size reduction without spending extra server CPU on a local-first application.
+
+- Offline profiles reduced Graph, Search, and Entity payloads by 87.5-88.1% at gzip level 1, with only 0.3-1.0 milliseconds median compression CPU. Level 6 saved about two additional percentage points but took roughly two to three times as long, so it was rejected.
+- A live isolated-server A/B reduced Graph from 152,727 to 15,871 wire bytes, exact Search from 142,671 to 16,257 bytes, natural Search from 152,781 to 17,647 bytes, and Entity from 72,236 to 9,012 bytes. This is an 87-90% transfer reduction across the main graph workflows.
+- Same-host gzip versus plain median latency ranged from a 21% improvement to a 4% regression across those endpoints, with no systematic local-latency penalty. The transfer reduction is especially relevant on the dashboard's remote Tailscale path.
+- Tests verify gzip negotiation, explicit `q=0` refusal, small-response behavior, `Vary`, compressed content length, and lossless decompression. The full suite passed 647 tests in 40.723 seconds; Python compilation and `git diff --check` passed.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:

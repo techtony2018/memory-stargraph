@@ -1,5 +1,7 @@
 import datetime as dt
 import asyncio
+import gzip
+import io
 import json
 import subprocess
 import tempfile
@@ -7,6 +9,7 @@ import threading
 import time
 import types
 import unittest
+from http import HTTPStatus
 from pathlib import Path
 from unittest import mock
 from urllib.request import Request, urlopen
@@ -226,6 +229,43 @@ class ApiEndpointTests(unittest.TestCase):
 
         def read(self):
             return self.payload.encode("utf-8")
+
+    def render_json_response(self, payload, accept_encoding=""):
+        handler = object.__new__(MemoryStargraphHandler)
+        handler.headers = {"Accept-Encoding": accept_encoding}
+        handler.wfile = io.BytesIO()
+        statuses = []
+        headers = {}
+        handler.send_response = statuses.append
+        handler.send_header = lambda key, value: headers.__setitem__(key, value)
+        handler.end_headers = lambda: None
+        handler.end_json(payload)
+        return statuses, headers, handler.wfile.getvalue()
+
+    def test_end_json_compresses_large_payload_when_client_accepts_gzip(self):
+        payload = {"ok": True, "nodes": [{"slug": f"notes/example-{index}", "summary": "memory stargraph " * 20} for index in range(20)]}
+
+        statuses, headers, body = self.render_json_response(payload, "br, gzip")
+
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertEqual(headers["Vary"], "Accept-Encoding")
+        self.assertEqual(headers["Content-Length"], str(len(body)))
+        self.assertEqual(json.loads(gzip.decompress(body)), payload)
+
+    def test_end_json_keeps_small_or_gzip_refused_payloads_plain(self):
+        small_statuses, small_headers, small_body = self.render_json_response({"ok": True}, "gzip")
+        large_payload = {"content": "memory stargraph " * 200}
+        large_statuses, large_headers, large_body = self.render_json_response(large_payload, "gzip;q=0, *;q=1")
+
+        self.assertEqual(small_statuses, [HTTPStatus.OK])
+        self.assertNotIn("Content-Encoding", small_headers)
+        self.assertNotIn("Vary", small_headers)
+        self.assertEqual(json.loads(small_body), {"ok": True})
+        self.assertEqual(large_statuses, [HTTPStatus.OK])
+        self.assertNotIn("Content-Encoding", large_headers)
+        self.assertEqual(large_headers["Vary"], "Accept-Encoding")
+        self.assertEqual(json.loads(large_body), large_payload)
 
     def test_gbrain_call_tool_uses_remote_mcp_instead_of_local_cli(self):
         with tempfile.TemporaryDirectory() as directory:

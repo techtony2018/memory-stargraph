@@ -2,6 +2,7 @@
 import argparse
 import email
 import email.policy
+import gzip
 import hashlib
 import hmac
 import json
@@ -39,6 +40,25 @@ from openclaw_profile_activation import (
 
 APP_NAME = "Memory Stargraph"
 OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS = STATUS_ENDPOINT_BUDGET_SECONDS
+JSON_GZIP_MIN_BYTES = 1024
+
+
+def accepts_gzip_encoding(header):
+    qualities = {}
+    for item in str(header or "").split(","):
+        parts = [part.strip() for part in item.split(";") if part.strip()]
+        if not parts:
+            continue
+        quality = 1.0
+        for parameter in parts[1:]:
+            key, separator, value = parameter.partition("=")
+            if separator and key.strip().lower() == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        qualities[parts[0].lower()] = quality
+    return qualities.get("gzip", qualities.get("*", 0.0)) > 0
 
 
 class MemoryStargraphHTTPServer(ThreadingHTTPServer):
@@ -9206,8 +9226,17 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def end_json(self, payload, status=HTTPStatus.OK):
         body = json.dumps(payload).encode("utf-8")
+        compressible = len(body) >= JSON_GZIP_MIN_BYTES
+        compressed = False
+        if compressible and accepts_gzip_encoding(self.headers.get("Accept-Encoding")):
+            body = gzip.compress(body, compresslevel=1, mtime=0)
+            compressed = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if compressible:
+            self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
