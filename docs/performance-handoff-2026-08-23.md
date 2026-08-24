@@ -572,6 +572,17 @@ Commit `9934ac4` removes the two remaining static radial gradients from the per-
 - The CSS-only static layer changes broad low-contrast gradient pixels: 70.7958% desktop and 36.3974% mobile. Mean RGB deltas remained 3.5969 and 1.6289. Visual inspection retained a rich dark space background, purple/cyan/gold depth, radar, stars, graph hierarchy, labels, and mobile framing.
 - The full suite passed 645 tests in 50.331 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Node layer decoupled from flowing-edge animation
+
+Commit `2635d32` keeps background, clouds, static edges, flowing dashes, particles, and relationship labels on the interactive graph Canvas, but renders nodes and node labels on one pointer-transparent upper Canvas. Dirty interactions and active rotation redraw both layers immediately. When only flow, pulse, or expansion animation remains, the node layer is capped at 15 frames per second while the edge layer retains the browser animation cadence. Responsive sizing applies to both layers at every breakpoint, and the original visual order remains background, edges, then nodes.
+
+- Four same-server browser pages ran in before/after/after/before order on the same 274-node, 139-edge, degree-116 view with 48 animated edges. Each sample executed five synthetic 60-frame batches and forced all Canvas layers to rasterize after each frame.
+- Across all ten per-variant batches, the 60-frame median fell from 5,237.6 to 3,643.0 milliseconds, a 30.4% reduction. Node draws fell from 60 to 14 per batch, a 76.7% reduction.
+- Across 18 forced dirty-frame samples per variant, interaction-frame median fell from 87.0 to 59.2 milliseconds, a 32.0% reduction. Node, edge, focus, and animation counts remained exact, with no page errors or horizontal overflow.
+- A fuller three-layer prototype improved continuous work by 57.1% but initially regressed dirty interaction by 11.6%. Sharing edge sorting removed that regression, but placed flowing particles above nodes. A four-layer correction restored paint order but regressed dirty interaction by 27.1%. Both variants were rejected in favor of the smaller two-layer design.
+- Fixed-time screenshots retained the graph composition and correct edge-under-node order. Desktop and mobile mean RGB deltas were 2.34 and 3.16. The broad changed-pixel percentages, 29.52% and 41.93%, are low-amplitude Canvas composition rounding; direct visual inspection showed aligned nodes, labels, edges, radar, detail overlay, and framing. Both layers were nonblank and pointer hit-testing still selected the top-canvas focus node.
+- The full suite passed 645 tests in 45.931 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Search results released before detail hydration
 
 Natural-language Search now releases its loading state as soon as the result graph and preferred focus are available. The selected graph result is rendered immediately, while direct-neighbor expansion, entity markdown, media, and timeline hydration continue through the existing cancellable entity loader. A newer manual selection increments the selection version and prevents the older background completion from changing feedback or detail state.
