@@ -1905,6 +1905,20 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(fake_tool.call_count, 1)
         self.assertEqual(fake_gbrain.call_count, 2)
 
+    def test_autopilot_findings_tag_fallback_lists_tags_concurrently(self):
+        barrier = threading.Barrier(len(server.AUTOPILOT_FINDING_FALLBACK_TAGS))
+
+        def fake_gbrain(*args, **_kwargs):
+            self.assertEqual(args[:2], ("list", "--tag"))
+            barrier.wait(timeout=1)
+            return "No pages found.\n"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_gbrain):
+            data = server.list_autopilot_findings_from_gbrain_pages({"limit": 1})
+
+        self.assertEqual(data["findings"], [])
+        self.assertEqual(data["checked_tags"], list(server.AUTOPILOT_FINDING_FALLBACK_TAGS))
+
     def test_autopilot_findings_tag_fallback_lists_bounded_pages(self):
         store = server.GraphStore()
         missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")

@@ -2493,13 +2493,21 @@ def list_autopilot_findings_from_gbrain_pages(payload, snapshot_cache=None):
     if snapshot is None:
         rows_by_slug = {}
         checked_tags = []
-        for tag in AUTOPILOT_FINDING_FALLBACK_TAGS:
+
+        def list_tag_rows(tag):
             try:
                 output = run_gbrain("list", "--tag", tag, "-n", str(page_read_budget), timeout=8)
             except Exception:  # noqa: BLE001
+                return tag, None
+            return tag, parse_page_list(output)
+
+        with ThreadPoolExecutor(max_workers=len(AUTOPILOT_FINDING_FALLBACK_TAGS)) as executor:
+            tag_rows = executor.map(list_tag_rows, AUTOPILOT_FINDING_FALLBACK_TAGS)
+        for tag, rows in tag_rows:
+            if rows is None:
                 continue
             checked_tags.append(tag)
-            for row in parse_page_list(output):
+            for row in rows:
                 slug = str(row.get("slug") or "")
                 if slug and slug not in rows_by_slug:
                     rows_by_slug[slug] = row
