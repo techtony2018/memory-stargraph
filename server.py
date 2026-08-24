@@ -3439,6 +3439,8 @@ YODA_SOURCE_CACHE_SECONDS = 30
 YODA_SOURCE_CACHE_MAX_ENTRIES = 64
 YODA_CONTEXT_CACHE_SECONDS = 300
 YODA_CONTEXT_CACHE_MAX_ENTRIES = 8
+AUTOPILOT_FINDINGS_CACHE_SECONDS = 30
+AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES = 16
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
     "optional": ("bounded", "bound"),
@@ -6057,6 +6059,10 @@ class GraphStore:
             ttl_seconds=30,
             max_entries=64,
         )
+        self.autopilot_findings_cache = TimedValueCache(
+            ttl_seconds=AUTOPILOT_FINDINGS_CACHE_SECONDS,
+            max_entries=AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES,
+        )
         self.evidence_list_cache = EvidenceListCache()
 
     def prewarm_search_evidence(
@@ -6107,6 +6113,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.autopilot_findings_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6167,6 +6174,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.autopilot_findings_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6268,6 +6276,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.autopilot_findings_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -7523,6 +7532,10 @@ class GraphStore:
         payload["offset"] = max(0, int(payload.get("offset") or 0))
         if not payload.get("state"):
             payload.pop("state", None)
+        cache_key = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        cached = self.autopilot_findings_cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
         except RuntimeError as exc:
@@ -7541,11 +7554,13 @@ class GraphStore:
         if not isinstance(result, dict):
             return {"findings": [], "total": 0}
         findings = result.get("findings")
-        return {
+        normalized = {
             **result,
             "findings": findings if isinstance(findings, list) else [],
             "total": int(result.get("total") or 0),
         }
+        self.autopilot_findings_cache.put(cache_key, normalized)
+        return normalized
 
     def acknowledge_autopilot_finding(self, finding_id):
         result = gbrain_call_tool(
@@ -7555,6 +7570,7 @@ class GraphStore:
         )
         if not isinstance(result, dict):
             raise RuntimeError("GBrain returned an invalid autopilot finding")
+        self.autopilot_findings_cache.clear()
         return result
 
 
