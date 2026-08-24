@@ -1287,6 +1287,28 @@ def parse_gbrain_query_arguments(args):
     return payload
 
 
+def parse_gbrain_graph_query_arguments(args):
+    if len(args) < 2 or args[0] != "graph-query":
+        raise ValueError("persistent graph-query requires a root slug")
+    payload = {"slug": str(args[1]), "depth": 5, "direction": "out"}
+    option_names = {
+        "--type": ("link_type", str),
+        "--depth": ("depth", int),
+        "--direction": ("direction", str),
+    }
+    index = 2
+    while index < len(args):
+        option = str(args[index])
+        if option not in option_names or index + 1 >= len(args):
+            raise ValueError(f"unsupported persistent graph-query option: {option}")
+        key, parser = option_names[option]
+        payload[key] = parser(args[index + 1])
+        index += 2
+    if payload["direction"] not in {"in", "out", "both"}:
+        raise ValueError(f"invalid graph-query direction: {payload['direction']}")
+    return payload
+
+
 def truncate_utf16(text, max_units):
     encoded = str(text or "").encode("utf-16-le")
     return encoded[: max(0, int(max_units)) * 2].decode("utf-16-le", errors="ignore")
@@ -1310,6 +1332,48 @@ def format_mcp_search_results(rows):
 
 def format_mcp_json(value):
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+
+
+def format_mcp_graph_query(paths, payload):
+    root_slug = str(payload["slug"])
+    direction = str(payload["direction"])
+    if not paths:
+        type_suffix = f" (--type {payload['link_type']})" if payload.get("link_type") else ""
+        return f"No edges found from {root_slug}{type_suffix}.\n"
+
+    by_parent = defaultdict(list)
+    for path in paths:
+        if not isinstance(path, dict):
+            continue
+        parent = path.get("to_slug") if direction == "in" else path.get("from_slug")
+        if parent:
+            by_parent[str(parent)].append(path)
+
+    lines = [f"[depth 0] {root_slug}"]
+    seen = set()
+
+    def walk(parent, indent):
+        if parent in seen:
+            return
+        seen.add(parent)
+        children = sorted(
+            by_parent.get(parent, []),
+            key=lambda item: (int(item.get("depth") or 0), str(item.get("to_slug") or "")),
+        )
+        for child in children:
+            next_slug = child.get("from_slug") if direction == "in" else child.get("to_slug")
+            if not next_slug:
+                continue
+            arrow = "<-" if direction == "in" else "--"
+            tail = "--" if direction == "in" else "->"
+            lines.append(
+                f"{'  ' * (indent + 1)}{arrow}{child.get('link_type') or ''}{tail} "
+                f"{next_slug} (depth {int(child.get('depth') or 0)})"
+            )
+            walk(str(next_slug), indent + 1)
+
+    walk(root_slug, 0)
+    return "\n".join(lines) + "\n"
 
 
 class PersistentGBrainSearch:
@@ -1479,6 +1543,10 @@ class PersistentGBrainSearch:
             tool_name = "get_backlinks"
             payload = {"slug": str(args[1])}
             formatter = format_mcp_json
+        elif command == "graph-query":
+            tool_name = "traverse_graph"
+            payload = parse_gbrain_graph_query_arguments(args)
+            formatter = None
         else:
             raise ValueError(f"unsupported persistent GBrain command: {command}")
         lock_wait = min(0.25, max(0.0, float(timeout)))
@@ -1488,12 +1556,14 @@ class PersistentGBrainSearch:
         try:
             self._start_locked(deadline)
             value = self._call_tool_locked(tool_name, payload, deadline)
-            if command in {"search", "query", "backlinks"} and not isinstance(value, list):
+            if command in {"search", "query", "backlinks", "graph-query"} and not isinstance(value, list):
                 raise RuntimeError(f"persistent GBrain {command} returned invalid rows")
             if command == "get":
                 if not isinstance(value, dict) or not isinstance(value.get("content"), str):
                     raise RuntimeError("persistent GBrain get returned invalid content")
                 return value["content"]
+            if command == "graph-query":
+                return format_mcp_graph_query(value, payload)
             return formatter(value)
         except Exception:
             self._close_locked()
@@ -1554,7 +1624,7 @@ def run_gbrain_subprocess(*args, input_text=None, timeout=20):
 
 def run_gbrain(*args, input_text=None, timeout=20):
     started = time.monotonic()
-    persistent_commands = {"search", "query", "get", "backlinks"}
+    persistent_commands = {"search", "query", "get", "backlinks", "graph-query"}
     if input_text is None and args and args[0] in persistent_commands and PERSISTENT_GBRAIN_SEARCH.active:
         try:
             return PERSISTENT_GBRAIN_SEARCH.read_cli_output(args, timeout)
@@ -6659,7 +6729,11 @@ class GraphStore:
         prompt_started_at = time.perf_counter()
         yoda_depth = clamp_yoda_depth(depth)
         retrieval_question, retrieval_history_used = effective_yoda_retrieval_question(question, history)
-        broad_graph_depth = 1 if is_targeted_relationship_question(retrieval_question) else yoda_depth
+        broad_graph_depth = (
+            1
+            if is_targeted_relationship_question(retrieval_question)
+            else min(yoda_depth, 2)
+        )
         cache_payload = json.dumps({"slug": slug, "depth": broad_graph_depth}, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()
         cache_now = time.time()

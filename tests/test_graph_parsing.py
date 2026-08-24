@@ -51,7 +51,9 @@ from server import (
     safe_upload_filename,
     merge_search_results,
     format_mcp_json,
+    format_mcp_graph_query,
     format_mcp_search_results,
+    parse_gbrain_graph_query_arguments,
     parse_gbrain_query_arguments,
     parse_gbrain_search_arguments,
 )
@@ -230,6 +232,65 @@ class GraphParsingTests(unittest.TestCase):
             '[\n  {\n    "slug": "products/memory-stargraph",\n    "context": "Memory"\n  }\n]\n',
         )
 
+    def test_parse_and_format_persistent_graph_query_matches_cli_tree(self):
+        payload = parse_gbrain_graph_query_arguments(
+            (
+                "graph-query",
+                "products/memory-stargraph",
+                "--direction",
+                "both",
+                "--depth",
+                "2",
+                "--type",
+                "documents",
+            )
+        )
+        paths = [
+            {
+                "from_slug": "products/memory-stargraph",
+                "to_slug": "docs/zeta",
+                "link_type": "documents",
+                "depth": 1,
+            },
+            {
+                "from_slug": "products/memory-stargraph",
+                "to_slug": "docs/alpha",
+                "link_type": "documents",
+                "depth": 1,
+            },
+            {
+                "from_slug": "docs/alpha",
+                "to_slug": "products/memory-stargraph",
+                "link_type": "documented_by",
+                "depth": 1,
+            },
+        ]
+
+        self.assertEqual(
+            payload,
+            {
+                "slug": "products/memory-stargraph",
+                "depth": 2,
+                "direction": "both",
+                "link_type": "documents",
+            },
+        )
+        self.assertEqual(
+            format_mcp_graph_query(paths, payload),
+            "[depth 0] products/memory-stargraph\n"
+            "  --documents-> docs/alpha (depth 1)\n"
+            "    --documented_by-> products/memory-stargraph (depth 1)\n"
+            "  --documents-> docs/zeta (depth 1)\n",
+        )
+        self.assertEqual(
+            format_mcp_graph_query([], payload),
+            "No edges found from products/memory-stargraph (--type documents).\n",
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported persistent graph-query option"):
+            parse_gbrain_graph_query_arguments(
+                ("graph-query", "products/memory-stargraph", "--include-foreign")
+            )
+
     def test_run_gbrain_prefers_active_persistent_search(self):
         persistent = mock.Mock(active=True)
         persistent.read_cli_output.return_value = "[0.90] products/memory-stargraph -- # Memory Stargraph\n"
@@ -313,6 +374,42 @@ class GraphParsingTests(unittest.TestCase):
             [item.args[0] for item in call_tool.call_args_list],
             ["query", "get_page", "get_backlinks"],
         )
+
+    def test_persistent_read_session_formats_graph_query(self):
+        session = PersistentGBrainSearch()
+        with (
+            mock.patch.object(session, "_start_locked"),
+            mock.patch.object(
+                session,
+                "_call_tool_locked",
+                return_value=[
+                    {
+                        "from_slug": "products/memory-stargraph",
+                        "to_slug": "goals/example",
+                        "link_type": "supports",
+                        "depth": 1,
+                    }
+                ],
+            ) as call_tool,
+        ):
+            output = session.read_cli_output(
+                (
+                    "graph-query",
+                    "products/memory-stargraph",
+                    "--direction",
+                    "both",
+                    "--depth",
+                    "1",
+                ),
+                5,
+            )
+
+        self.assertEqual(
+            output,
+            "[depth 0] products/memory-stargraph\n"
+            "  --supports-> goals/example (depth 1)\n",
+        )
+        self.assertEqual(call_tool.call_args.args[0], "traverse_graph")
 
     def test_evidence_record_search_lists_types_concurrently(self):
         barrier = threading.Barrier(4)
@@ -2122,7 +2219,7 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "4", timeout=8),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "2", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What should I know? people/tony-guan", "--no-expand", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("backlinks", "people/tony-guan"),
@@ -2166,7 +2263,7 @@ cover_image: companies/example-inc/logo.jpg
         self.assertNotIn("retrieved context", result["output"])
         self.assertNotIn("prompt", result)
 
-    def test_ask_yoda_prompt_uses_broader_retrieval_at_requested_depth(self):
+    def test_ask_yoda_prompt_caps_broad_graph_but_keeps_requested_retrieval_depth(self):
         store = GraphStore()
         search_output = "[0.92] notes/tai-chi/white-swan -- White Swan notes\n[0.73] people/tony-guan -- Tony"
 
@@ -2194,10 +2291,12 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(result["source"], "openclaw-agent")
         self.assertEqual(result["output"], "agent answer")
         self.assertIn("timings", result)
+        self.assertEqual(result["diagnostics"]["depth"], 5)
+        self.assertEqual(result["diagnostics"]["context_counts"]["broad_graph_depth"], 2)
         run.assert_has_calls(
             [
                 mock.call("get", "people/tony-guan"),
-                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "5", timeout=8),
+                mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "2", timeout=8),
                 mock.call("backlinks", "people/tony-guan"),
                 mock.call("query", "What does White Swan connect to? people/tony-guan", "--no-expand", "--adaptive-return", "true", "--limit", "10", "--relational", "true"),
                 mock.call("get", "notes/tai-chi/white-swan"),
@@ -2416,6 +2515,7 @@ cover_image: companies/example-inc/logo.jpg
 
         self.assertFalse(cold["diagnostics"]["context_cache_hit"])
         self.assertTrue(warm["diagnostics"]["context_cache_hit"])
+        self.assertEqual(cold["diagnostics"]["context_counts"]["broad_graph_depth"], 2)
         self.assertEqual(run.call_count, 5)
         self.assertIn("context_subphases_ms", cold["diagnostics"])
         self.assertEqual(
