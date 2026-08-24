@@ -8377,6 +8377,14 @@ async function loadRouteSelection(options = {}) {
   await loadEntity(slug, { source: "deep-link", recordHistory: false, ...options });
 }
 
+function loadDeferredStartupData() {
+  return Promise.allSettled([
+    prefetchTodoBacklogForSearch(),
+    loadPersistentYodaLogs(),
+    refreshAutopilotFindingsBadge(),
+  ]);
+}
+
 async function init() {
   bindHudTooltipEvents();
   bindEvents();
@@ -8392,15 +8400,13 @@ async function init() {
   updateNavModeState();
   updateCacheSettingsView();
   setZoom(state.zoom);
-  await prefetchTodoBacklogForSearch();
   await fetchHidden();
-  await loadPersistentYodaLogs();
-  await refreshAutopilotFindingsBadge();
   const requestedSlug = requestedSlugFromLocation();
   await fetchGraph("/api/graph", { preferredFocus: requestedSlug || null, skipFocusLoad: Boolean(requestedSlug) });
   if (requestedSlug) {
     await loadRouteSelection();
   }
+  void loadDeferredStartupData();
   if (!state.animationHandle) {
     requestRender();
   }

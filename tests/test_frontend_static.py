@@ -1555,7 +1555,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function prefetchTodoBacklogForSearch", script)
         self.assertIn("function todoBacklogSearchUrl", script)
         self.assertIn("freshTodoBacklogMarkdownForSearch", script)
-        self.assertIn("await prefetchTodoBacklogForSearch()", script)
+        self.assertIn("prefetchTodoBacklogForSearch()", script)
         self.assertIn("todoBacklogMarkdownForSearch(todoId)", script)
         self.assertIn('const baseUrl = `/api/entity-raw/${encodeURIComponent("notes/memory-starmap-todo-list")}`', script)
         self.assertIn('purpose=search&ts=${Date.now()}', script)
@@ -1592,6 +1592,24 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("Some slower evidence ranking timed out", script)
         self.assertIn('id="searchFeedback"', (ROOT / "public/index.html").read_text())
         self.assertIn(".search-feedback", (ROOT / "public/styles.css").read_text())
+
+    def test_startup_defers_noncritical_data_until_after_graph_and_route(self):
+        script = (ROOT / "public/app.js").read_text()
+        init_start = script.index("async function init()")
+        init_end = script.index("void init();", init_start)
+        init_block = script[init_start:init_end]
+        deferred_start = script.index("function loadDeferredStartupData()")
+        deferred_end = script.index("async function init()", deferred_start)
+        deferred_block = script[deferred_start:deferred_end]
+
+        self.assertLess(init_block.index("await fetchHidden()"), init_block.index("await fetchGraph"))
+        self.assertLess(init_block.index("await fetchGraph"), init_block.index("void loadDeferredStartupData()"))
+        self.assertIn("await loadRouteSelection()", init_block)
+        self.assertLess(init_block.index("await loadRouteSelection()"), init_block.index("void loadDeferredStartupData()"))
+        self.assertIn("Promise.allSettled", deferred_block)
+        self.assertIn("prefetchTodoBacklogForSearch()", deferred_block)
+        self.assertIn("loadPersistentYodaLogs()", deferred_block)
+        self.assertIn("refreshAutopilotFindingsBadge()", deferred_block)
 
     def test_console_theme_is_compact_hud_style(self):
         styles = (ROOT / "public" / "styles.css").read_text()
