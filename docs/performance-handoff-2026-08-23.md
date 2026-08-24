@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `6a6dc16`
-- Current performance code commit: `6a6dc16` (`perf: discover optional gbrain tools once`)
-- Previous pushed commit: `d1393d7` (`docs: record rejected deferred badge load`)
+- Current merged and pushed source: `0b7d6fe`
+- Current performance code commit: `0b7d6fe` (`perf: share complete takes snapshots`)
+- Previous pushed commit: `0d29a23` (`docs: record rejected persistent takes read`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 639 tests passed in 42.066 seconds.
+- Latest verification: 642 tests passed in 41.234 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -635,6 +635,15 @@ The local CLI path now discovers four optional read capabilities through one mac
 - After, a cold process spent 1,058.6 milliseconds on the shared manifest; the remaining three decisions took 0.7, 0.5, and 0.5 milliseconds. Total was 1,060.3 milliseconds, a 76.7% reduction.
 - A strict isolated-server A/B used the same four concurrent HTTP reads. Commit `d1393d7` took 4,701.0 milliseconds wall time. The new source took 1,143.9 milliseconds, a 75.7% reduction. Response semantics remained `[502, 200, 502, 200]`, Resolver health still used its local read-only fallback, and Follow-ups still used the GBrain-tag fallback.
 - The immediate repeated HTTP batch took 10.6 milliseconds. Tests cover proven absence without a failed tool call, manifest reuse across all four optional tools, malformed-manifest fallback, existing negative capability caches, and fallback behavior. The full suite passed 639 tests in 42.066 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
+### Complete Takes snapshot reuse
+
+Existing Takes review now shares one 30-second unfiltered snapshot across simple holder, page, kind, and active reads. The snapshot is considered complete only when `takes_list` returns fewer than its 500-row cap. Once completeness is proven, exact filters run locally while preserving source order, and the API keeps its existing pagination and total metadata. A 500-row response, nonzero backend offset, `active=false`, resolved filters, wildcard passed directly to the store, or any unknown filter stays on the previous direct backend path. Existing single/bulk review writes and graph invalidation clear the shared snapshot immediately.
+
+- Current data has 239 active Takes across four holders. Exact holder calls returned 0, 4, or 19 rows but each still took about 1.08-1.14 seconds because fresh CLI startup dominated.
+- A four-process alternating HTTP A/B queried five holders from each cold service. The prior source had an 8,790.0-millisecond median wall time. Shared complete snapshots had a 3,565.6-millisecond median, a 59.4% reduction.
+- Every response preserved status, total, order, and IDs. After the first complete snapshot, the remaining four holder reads took 1.1-1.7 milliseconds each.
+- Tests verify cross-holder reuse, active filtering, cap-triggered direct fallback, complex-filter preservation, repeated read reuse, write invalidation, and API pagination. The full suite passed 642 tests in 41.234 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
 ## Earlier Performance Work
 
