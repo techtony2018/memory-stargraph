@@ -2513,8 +2513,8 @@ function drawNodes() {
     }
 
     ctx.fillStyle = color;
-    ctx.shadowColor = important ? hexToRgba(color, 0.5 + hubGlow * 0.35) : "transparent";
-    ctx.shadowBlur = important ? 4 + hubGlow * 18 : 0;
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
     ctx.beginPath();
     ctx.arc(node.screenX, node.screenY, radius * (1 + hubGlow * 0.1), 0, Math.PI * 2);
     ctx.fill();

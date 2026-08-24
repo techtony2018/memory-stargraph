@@ -198,6 +198,13 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("staticBackgroundGlow.pixelRatio === pixelRatio", script)
         self.assertIn("ctx.drawImage(backgroundGlowCanvas(width, height), 0, 0, width, height)", script)
 
+    def test_important_nodes_do_not_stack_core_shadow_over_radial_glow(self):
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn("const glow = ctx.createRadialGradient", script)
+        self.assertIn('ctx.shadowColor = "transparent"', script)
+        self.assertNotIn("ctx.shadowBlur = important ?", script)
+
     def test_restored_yoda_history_uses_the_same_formatted_chat_renderer(self):
         script = (ROOT / "public" / "app.js").read_text()
 
