@@ -2329,22 +2329,6 @@ function drawEdges() {
     ctx.stroke();
 
     const animated = flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors);
-    if (animated) {
-      ctx.save();
-      ctx.setLineDash([6, 14]);
-      ctx.lineDashOffset = -state.animationTick;
-      ctx.strokeStyle = layer === 2
-        ? `rgba(250, 204, 21, ${Math.min(0.45, baseAlpha + 0.08)})`
-        : `rgba(34, 211, 238, ${Math.min(0.28, baseAlpha + 0.04)})`;
-      ctx.lineWidth = Math.max(0.8, ctx.lineWidth * 0.86);
-      ctx.beginPath();
-      ctx.moveTo(edge.source.screenX, edge.source.screenY);
-      ctx.lineTo(edge.target.screenX, edge.target.screenY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
-
     if (animated && (layer > 0 || isHoveredFocusEdge)) {
       const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
       const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
