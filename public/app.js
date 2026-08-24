@@ -341,7 +341,7 @@ function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   state.viewport.width = rect.width;
   state.viewport.height = rect.height;
-  state.viewport.dpr = Math.max(1, window.devicePixelRatio || 1);
+  state.viewport.dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   [canvas, flowCanvas, nodeCanvas].forEach((layer) => {
     layer.width = Math.round(rect.width * state.viewport.dpr);
     layer.height = Math.round(rect.height * state.viewport.dpr);

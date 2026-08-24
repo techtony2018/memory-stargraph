@@ -801,6 +801,15 @@ The first viewport now loads display-sized derivatives for the navigation logo, 
 - DPR-2 element comparisons against the original assets measured mean RGB deltas of 3.18/255 for the logo, 0.94/255 for the wordmark, and 1.27/255 for Yoda. A smaller 520-pixel wordmark derivative was rejected because its mean delta rose to 4.99/255; the accepted WebP keeps the original dimensions at 19,208 bytes.
 - Real desktop and mobile browser loads reported the exact new paths and byte sizes, preserved the visible brand treatments, and produced no page or console errors. Static tests enforce conservative byte ceilings for every derivative. The full suite passed 650 tests in 42.317 seconds.
 
+### Bounded high-DPR canvas backing stores
+
+The three interactive graph Canvas layers now cap their backing-store device pixel ratio at 2 while preserving the browser's native ratio on DPR 1 and DPR 2 displays. CSS dimensions, graph projection, hit testing, animation timing, and all DOM content remain unchanged.
+
+- A six-page direction-balanced Playwright A/B used a DPR 3 browser, the same `people/tony-guan` focus, 296 nodes, 139 edges, and three forced-raster Canvas layers. Each page ran four 12-frame batches.
+- The aggregate 12-frame median fell from 2,430.0 to 1,703.4 milliseconds, a 29.9% reduction. Mean batch time fell from 2,493.5 to 1,584.0 milliseconds, a 36.5% reduction.
+- At the 850 by 520 desktop graph size, each backing store changed from 2,550 by 1,560 to 1,700 by 1,040 pixels, removing 55.6% of raster pixels per layer. The mobile graph changed from 1,092 by 1,570 to 728 by 1,047 pixels while retaining its 364 by 523 CSS footprint.
+- Desktop and mobile screenshots remained sharp and correctly framed, with the same visible labels, node outlines, glow treatment, controls, and brand assets. All six benchmark pages had exact focus/node/edge parity, no horizontal overflow, and no page or console errors. A static regression test locks the DPR bound.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -844,6 +853,8 @@ Pre-rasterizing the two flowing-particle glow styles as DPR-aware offscreen spri
 Caching the 48 animated particle entries instead of rebuilding the high-degree neighbor set and scanning all 139 drawable edges on every particle callback was rejected without changing source. Four same-server pages drew and force-rasterized exactly the same particles. The current full selection path had a 3.3-millisecond aggregate median and the precomputed `{edge, alpha, layer}` path took 3.2 milliseconds, only 3.0%, with individual samples interleaving. Canvas rasterization remains dominant, so adding another invalidation-sensitive render cache would not be justified.
 
 Changing the built-in server's response protocol from HTTP/1.0 to HTTP/1.1 for persistent connections was rejected without changing source. A short alternating A/B reused one client connection across Health, Graph, Entity, Digest, and Readiness. HTTP/1.0 had a 430.5-millisecond aggregate median and HTTP/1.1 took 441.4 milliseconds, a 2.5% regression, with repeated small responses showing roughly 40-millisecond delayed-ack intervals. The dashboard TLS topology may benefit from connection reuse at another layer, but changing the application server protocol alone did not clear the acceptance gate.
+
+Adding explicit `Cache-Control` headers to first-party static assets was rejected without changing source. Three consecutive real Chrome loads in one browser context showed every repeat HTML, CSS, JavaScript, logo, wordmark, Yoda, and favicon entry at `transferSize=0` and zero-duration resource reuse despite the current absence of that header. Repeat `DOMContentLoaded` remained dominated by ordinary application and backend variance. A new cache policy would therefore add stale-deployment risk without reducing measured repeat transfer.
 
 Reducing the dense-view top-hub glow and label budget from eight to five was rejected without changing source. The 274-node focus had eight important labeled nodes; five of those had degree one or two, making this a plausible paint reduction. In four before/after/after/before pages, aggregated node medians changed from 22.45 to 21.20 milliseconds, only 5.6%, and complete-frame medians changed from 58.95 to 55.20 milliseconds, only 6.4%. The result was below the 15% threshold and would remove useful labels, so dense views retain all eight top hubs.
 

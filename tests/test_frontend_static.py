@@ -1626,6 +1626,14 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("hover for details, or click a node to select", script)
         self.assertIn("tap for details, or long-press a node to select", script)
 
+    def test_canvas_device_pixel_ratio_is_bounded(self):
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn(
+            "state.viewport.dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));",
+            script,
+        )
+
     def test_search_normalization_preserves_unicode_terms(self):
         script = (ROOT / "public/app.js").read_text()
 
