@@ -613,6 +613,15 @@ Natural-language Search now releases its loading state as soon as the result gra
 - With the entity endpoint intentionally delayed by 2 seconds, Search unlocked with the correct focus and loading-details state, then hydrated to the complete six-link entity at 3.132 seconds. The user can search or select another node during that delay.
 - Backend Search time and retrieval semantics are unchanged. This improvement removes avoidable UI serialization after the ranked result already exists.
 
+### High-confidence loaded Search preview
+
+Commit `6ff5fc9` makes natural-language Search preview a uniquely matching loaded node while the authoritative GBrain request continues. The preview is deliberately fail-closed: it requires at least three normalized query terms, every term must occur in the loaded node label or slug, exactly one visible node may satisfy the rule, and the preview does not change the URL or selection history. The final GBrain-ranked response remains authoritative and follows the existing selection-version guard.
+
+- A 30-query read-only quality matrix covered articles, people, AI research, product operations, and title paraphrases. The unconstrained local ranker matched the eventual GBrain top result in only 8/10 initial cases and was rejected. The bounded unique-match rule was eligible in 24 cases and matched the eventual top slug in 24/24, including responses that ended `partial_timeout`.
+- Eligible local matching took about 0.7-2.1 milliseconds in the cold-query matrix. The corresponding remote requests commonly took 6.2-7.0 seconds when the evidence lane exhausted its budget.
+- A strict before/after/after/before browser A/B imposed the same 1,200-millisecond Search response delay on every page. Median time to the first relevant selection fell from 1,269.2 to 68.6 milliseconds, a 94.6% reduction. Final result time remained effectively unchanged at 1,269.4 versus 1,282.9 milliseconds.
+- All four pages ended on the same authoritative slug and URL with one previous-selection entry plus one result entry, and had zero runtime errors. The full suite passed 645 tests in 41.510 seconds; JavaScript syntax and the focused Search contract test also passed.
+
 ### Batched node-cache LRU touches
 
 The browser node/media cache now parses its persisted JSON once into an in-memory store. Cache hits update LRU timestamps in memory and coalesce pure timestamp persistence into one write after 1 second. Cache additions, deletions, invalidations, limit enforcement, and flushes still persist immediately. A cross-tab `storage` listener cancels a pending touch write and reloads the external value, preventing a stale tab from overwriting a newer cache.
@@ -848,6 +857,8 @@ Limiting passive flowing-edge animation to 30 frames per second was rejected. A 
 Raising the newly accepted dense-cloud threshold again from twelve to sixteen nodes was rejected without changing source. It reduced the current 274-node view from seven clouds to four, but four direction-balanced pages showed the cloud-stage median regress from 4.9 to 7.7 milliseconds and the complete dirty-frame median regress from 55.6 to 76.2 milliseconds. As with the rejected distant-node outline change, fewer draw operations did not produce a friendlier Chrome raster stream. Keep the accepted twelve-node threshold rather than removing the 12-14-node media, notes, and posts color fields.
 
 Reducing the seven retained dense-cloud maximum radii from 260 to 220 pixels was also rejected without changing source. It preserved every cloud category, node, edge, and animation, but cloud-stage median regressed from 7.3 to 10.5 milliseconds and complete dirty-frame median regressed from 46.9 to 69.1 milliseconds. Current Chrome gradient raster cost is not monotonic with filled radius in this scene. Do not continue tuning cloud size by intuition; require a new renderer-level hypothesis.
+
+Reducing the accepted high-degree particle budget from 48 to 32 was rejected without changing source. Four same-server pages kept every static edge and varied only the deterministic glowing-particle cap. Aggregate edge-stage median fell from 6.5 to 5.0 milliseconds, a 23.1% component improvement, but complete-frame median moved only from 76.5 to 70.1 milliseconds, or 8.4%. The end-to-end frame result did not clear the 15% acceptance threshold and would remove one third of the remaining motion cues, so the 48-particle budget remains.
 
 Caching the 21 stable cluster-cloud gradients on an offscreen canvas was rejected. It reduced stable-frame gradient creation from 31 to about 10.5 per draw, but six alternating in-page samples showed only a 1% task-time median improvement: 40.82 milliseconds per direct draw versus 40.43 milliseconds per cached draw. Offscreen `drawImage` composition replaced most of the gradient cost instead of removing it, so the cache and its invalidation state were fully reverted.
 
