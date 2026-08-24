@@ -8933,6 +8933,17 @@ def settings_evidence(force=False):
     return payload if payload is not None else load()
 
 
+def cached_settings_evidence_part(part):
+    cache = getattr(STORE, "settings_evidence_cache", None)
+    if cache is None:
+        return None
+    payload = cache.get("week")
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(part)
+    return value if isinstance(value, dict) else None
+
+
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -9077,13 +9088,15 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.end_json(first_run_activation_funnel())
         if parsed.path == "/api/memory-value-digest":
             query = parse_qs(parsed.query)
-            return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))
+            window = (query.get("window") or ["day"])[0]
+            cached_digest = cached_settings_evidence_part("digest") if window == "week" else None
+            return self.end_json(cached_digest or memory_value_digest(window))
         if parsed.path == "/api/settings-evidence":
             query = parse_qs(parsed.query)
             force = (query.get("refresh") or [""])[0].strip().lower() in {"1", "true"}
             return self.end_json(settings_evidence(force=force))
         if parsed.path == "/api/customer-readiness":
-            return self.end_json(customer_readiness())
+            return self.end_json(cached_settings_evidence_part("readiness") or customer_readiness())
         if parsed.path == "/api/graph":
             graph = STORE.get_seed_graph()
             return self.end_json(graph)

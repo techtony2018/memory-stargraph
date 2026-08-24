@@ -2680,6 +2680,29 @@ class ApiEndpointTests(unittest.TestCase):
         digest_read.assert_has_calls([mock.call("week"), mock.call("week")])
         readiness_read.assert_has_calls([mock.call(digest), mock.call(digest)])
 
+    def test_settings_detail_endpoints_reuse_recent_combined_snapshot(self):
+        store = server.GraphStore()
+        digest = {"ok": True, "window": "week", "marker": "cached-digest"}
+        readiness = {"ok": True, "status": "ready", "marker": "cached-readiness"}
+        store.settings_evidence_cache.put("week", {
+            "ok": True,
+            "digest": digest,
+            "readiness": readiness,
+        })
+
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.memory_value_digest", side_effect=AssertionError("duplicate digest read")),
+            mock.patch("server.customer_readiness", side_effect=AssertionError("duplicate readiness read")),
+        ):
+            digest_status, digest_data = self.dispatch_get("/api/memory-value-digest?window=week")
+            readiness_status, readiness_data = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(digest_status, 200)
+        self.assertEqual(readiness_status, 200)
+        self.assertEqual(digest_data, digest)
+        self.assertEqual(readiness_data, readiness)
+
     def test_settings_evidence_coalesces_concurrent_cold_reads(self):
         store = server.GraphStore()
         digest_started = threading.Event()
