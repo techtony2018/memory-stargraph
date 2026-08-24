@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `41c90ce`
-- Current performance code commit: `41c90ce` (`perf: page large backlink responses`)
-- Previous pushed commit: `1d6dfb1` (`docs: record search benchmark calibration`)
+- Current merged and pushed source: `35c8628`
+- Current performance code commit: `35c8628` (`perf: bound accumulated search nodes`)
+- Previous pushed commit: `4907bae` (`docs: record paginated backlinks benchmark`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 622 tests passed in 41.938 seconds.
+- Latest verification: 623 tests passed in 41.769 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -114,6 +114,8 @@ After the Search benchmark product-path calibration, the full suite passed 618 t
 
 After the paginated Backlinks response follow-up, the full suite passed 622 tests in 41.938 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. An isolated Playwright A/B run rendered the same 10-row first page and 443-page count without runtime errors.
 
+After the bounded accumulated-search-node follow-up, the full suite passed 623 tests in 41.769 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. An isolated three-round browser A/B rendered a nonblank graph without runtime errors on both revisions.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -123,6 +125,20 @@ Do not stage, overwrite, revert, or include these unrelated Product Owner files 
 ```
 
 ## Improvements Completed
+
+### Bounded accumulated Search nodes
+
+Commit `35c8628` prevents repeated natural-language searches from permanently accumulating every unselected transient result in the active graph. Before adding the current result set, Search now removes only prior nodes whose sole tag is `lazy-search`, which are unexpanded, unlinked, and absent from the current results. Seed nodes, current results, expanded nodes, linked nodes, and nodes with any durable tag remain intact. Coverage reports the number removed as `search_pruned_stale_nodes`.
+
+A detached-before/current-after comparison started both revisions from the same 284-node local graph cache and replayed six diverse natural-language queries:
+
+- Before, the graph grew to 380 nodes and the final Search response reached 221,041 bytes.
+- After, the graph remained between 239 and 257 nodes and the final response was 152,867 bytes.
+- Final node count was 33.4% lower and response size was 30.8% lower.
+- Each diverse query removed 7-25 stale transient nodes; regression coverage verifies that current results plus expanded, linked, and durably tagged nodes are preserved.
+- Three alternating cold-page rounds reduced median graph-ready time from 1,519 milliseconds to 1,043 milliseconds, a 31.3% reduction.
+
+The detached comparison server, current-source server, and temporary worktree were stopped and removed after measurement. The dashboard-managed service was not restarted or deployed.
 
 ### Paginated high-degree Backlinks responses
 
