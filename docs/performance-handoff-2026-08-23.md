@@ -531,7 +531,8 @@ The fallback now also caches its unfiltered, normalized, sorted page snapshot by
 The two independent read-only fallback tag listings now run concurrently. Detail-page reads remain bounded and sequential, so this removes avoidable list latency without increasing page-read fanout.
 
 - Two alternating serial tag-list samples took 2.172 and 2.185 seconds; concurrent samples took 1.451 and 1.393 seconds with identical output lengths, reducing this phase by 33.6% and 36.3%.
-- Three complete cold badge requests after the change took 2.513, 2.577, and 2.488 seconds, with a 2.513-second median. That is 27.2% below the preceding same-environment 3.452-second serial cold sample.
+- A three-round alternating isolated-server comparison used the same host configuration and a fresh process for every request. The previous commit took 4.842, 5.251, and 5.819 seconds; the concurrent version took 4.201, 4.394, and 6.308 seconds. Median cold API latency fell from 5.251 to 4.394 seconds, a 16.3% reduction. The third round shows the ordinary backend variance and is why the median, not the best sample, is the acceptance result.
+- Direct-import implementation samples, which do not enable the product server's persistent GBrain session, measured a 2.513-second post-change median versus one preceding 3.452-second serial cold sample. This 27.2% sample is retained only as supporting phase evidence, not as the user-facing result.
 - A barrier-based regression test verifies both tag reads overlap. The full fallback tests still cover missing-tool handling, bounded reads, state filtering, and snapshot reuse.
 
 ## Earlier Performance Work
