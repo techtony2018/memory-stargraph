@@ -47,6 +47,8 @@ After the persistent paginated page-list follow-up, the full suite passed 594 te
 
 After the unique exact-label Search follow-up, the full suite passed 596 tests in 42.170 seconds with the same static checks passing.
 
+After the concurrent Ask Yoda retrieval coalescing follow-up, the full suite passed 597 tests in 43.970 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -231,6 +233,14 @@ Search now resolves a query locally when it exactly identifies one untruncated l
 - After: the same queries had a 0.65-millisecond median, a 99.94% improvement, with zero GBrain calls.
 - Correctness: all 5/5 resolved to the same top slug and each returned one unambiguous result.
 
+### Concurrent Ask Yoda retrieval coalescing
+
+Concurrent cold misses for the same normalized Ask Yoda retrieval key now share one owner query through the existing timed-cache single-flight primitive. Failed loads are not cached and still surface as retrieval errors.
+
+- Before: two concurrent identical requests completed in 2.112 and 3.788 seconds, with a 3.789-second wall time and different dynamic outputs.
+- After: both completed in about 1.276 seconds, with a 1.276-second wall time, a 66.3% improvement.
+- Correctness: both callers received identical output from one cache entry, and the regression test verifies exactly one GBrain call.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -288,6 +298,8 @@ A single-process JSON-RPC multiplexing experiment proved that the GBrain MCP ser
 Removing Ask Yoda's `adaptive_return` initially appeared to improve a cache-warmed ten-case matrix from 1.172 seconds to 609 milliseconds. Fresh paraphrases reversed the result: first-query median increased from 1.010 to 1.308 seconds, a 29.5% regression, with one prefix-order change. A narrower no-adaptive `limit=6` variant preserved the adaptive prefix in 10/10 cases but increased fresh-query median from 1.123 to 1.386 seconds, a 23.4% regression. Both were reverted. Stargraph's 90-second exact query cache already serves true repeats without paying the no-adaptive cold-path cost.
 
 The `conservative` primary Search mode produced the same sampled top-ten ordering as `balanced`, but alternating measurements were dominated by second-call backend warmth. Looking only at first calls did not show a conservative-mode advantage. The mode also disables reranking, graph signals, relational recall, and contextual retrieval, so it was rejected without a quality-and-cold-latency win.
+
+Adding an explicit `--limit 10` to primary keyword Search preserved the default top-ten prefix in 10/10 queries, but changed the alternating median from 430 milliseconds to 1.060 seconds and the mean from 552 milliseconds to 1.065 seconds. GBrain's explicit-limit path was slower than its default 20-result path, so the experiment was rejected and no code was changed.
 
 A warm-service phase profile over eight fresh Search queries confirmed that application overhead is no longer the general bottleneck: total median was 1.186 seconds, primary GBrain retrieval 1.164 seconds, evidence ranking 2 milliseconds, loaded-graph matching 3 milliseconds, merge 1 millisecond, and finalize 12 milliseconds.
 

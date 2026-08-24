@@ -6330,18 +6330,27 @@ class GraphStore:
         cached = self.yoda_search_cache.get(cache_key)
         if cached is not None:
             return cached
-        output = run_gbrain(
-            "query",
-            query,
-            "--no-expand",
-            "--adaptive-return",
-            "true",
-            "--limit",
-            "10",
-            "--relational",
-            "true",
-        ) or ""
-        self.yoda_search_cache.put(cache_key, output)
+
+        def load():
+            return run_gbrain(
+                "query",
+                query,
+                "--no-expand",
+                "--adaptive-return",
+                "true",
+                "--limit",
+                "10",
+                "--relational",
+                "true",
+            ) or ""
+
+        output, _load_status = self.yoda_search_cache.load_once(
+            cache_key,
+            load,
+            timeout=20,
+        )
+        if output is None:
+            raise RuntimeError("GBrain Yoda retrieval was unavailable")
         return output
 
     def get_yoda_source_pages(self, slugs):

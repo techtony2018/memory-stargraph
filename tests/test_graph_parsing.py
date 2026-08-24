@@ -954,6 +954,35 @@ class GraphParsingTests(unittest.TestCase):
             "true",
         )
 
+    def test_yoda_search_coalesces_concurrent_cold_loads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+        rows = []
+
+        def slow_query(*_args, **_kwargs):
+            started.set()
+            release.wait(timeout=1)
+            return "[0.99] products/memory-stargraph -- # Memory Stargraph\n"
+
+        def search():
+            rows.append(store.get_yoda_search_output("What changed? products/memory-stargraph"))
+
+        with mock.patch("server.run_gbrain", side_effect=slow_query) as run:
+            first = threading.Thread(target=search)
+            second = threading.Thread(target=search)
+            first.start()
+            self.assertTrue(started.wait(timeout=1))
+            second.start()
+            time.sleep(0.01)
+            release.set()
+            first.join(timeout=1)
+            second.join(timeout=1)
+
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0], rows[1])
+
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
             "title": "Memory Stargraph",
