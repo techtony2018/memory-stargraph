@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `884be03`
-- Current performance code commit: `884be03` (`perf: overlap follow-up tag reads`)
-- Previous pushed commit: `0e08e3b` (`perf: reuse follow-up fallback snapshot`)
+- Current merged and pushed source: `c85584a`
+- Current performance code commit: `c85584a` (`perf: cache repeated settings evidence`)
+- Previous pushed commit: `884be03` (`perf: overlap follow-up tag reads`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 615 tests passed in 40.640 seconds.
+- Latest verification: 616 tests passed in 44.076 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -105,6 +105,8 @@ After the Follow-ups capability-status reuse follow-up, the full suite passed 61
 After the Follow-ups fallback-snapshot reuse follow-up, the full suite passed 614 tests in 40.162 seconds. Python compilation and `git diff --check` also passed.
 
 After the Follow-ups parallel tag-read follow-up, the full suite passed 615 tests in 40.640 seconds with the same static checks passing.
+
+After the repeated Settings evidence cache follow-up, the full suite passed 616 tests in 44.076 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -499,6 +501,12 @@ Settings refreshes now share one in-flight browser Promise. This removes the dup
 - The first attempted detached-worktree comparison was discarded because that checkout lacked current host-local runtime state and produced invalid 404/502 behavior. Its timings are not included in the result.
 - Initial system selection still loads entity and media immediately. Timeline remains immediate for manual, Search, history, and deep-link selection, and explicit Timeline opens bypass the deferred badge path.
 
+The combined Settings endpoint now caches its complete read-only snapshot for 10 seconds and coalesces simultaneous cold requests. This is shorter than the existing 15-second auto-refresh interval. Manual refresh sends `refresh=1`, and graph force-refresh or invalidation clears the snapshot immediately.
+
+- Before, three repeated isolated-server requests took 1.257, 1.168, and 1.132 seconds, with a 1.168-second median and identical 17,073-byte payloads.
+- After, the cold request took 1.285 seconds; the next two requests took 2.5 and 3.4 milliseconds, about 99.7% below the uncached median.
+- A manual forced refresh took 1.696 seconds, confirming that the explicit refresh command was not served stale. Tests also verify two concurrent cold callers share one digest and readiness construction.
+
 The same low-priority startup gate now waits while any foreground busy operation is active, polling at 100-millisecond intervals. This prevents initial timeline-badge and TODO/Yoda/Follow-ups prefetches from entering the GBrain lane during Search, View, relationship, history, or other explicitly requested work. The callback runs as soon as foreground work and any Settings snapshot settle.
 
 - Three matched-pattern fresh startup Search samples before the general gate were 6.495, 4.309, and 3.572 seconds; median was 4.309 seconds.
@@ -573,6 +581,8 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 - One alternating run favored the flag: 1.661-second median versus 1.820 seconds.
 - The reverse-order run favored the default: 1.715-second median versus 1.794 seconds.
 - The contradictory result indicates ordinary backend/process variance, not a measured improvement.
+
+Reducing primary Search from the default 20 results to 10 was not implemented. With the supported persistent-session `--limit 10` option, top-ten prefix order matched the default in 8/8 sampled queries, but median transport latency regressed from 0.295 to 1.052 seconds. An earlier `-n 10` attempt was discarded because that unsupported persistent option correctly fell back to the CLI and did not limit results.
 
 Changing all non-targeted broad graph retrieval from depth 2 to depth 1 was not implemented. In the alternating ten-case provider-down matrix, depth 1 preserved measured grounding and slightly lowered the mean, but regressed median cold prompt construction from 7.192 to 7.751 seconds. It also removes second-hop evidence globally, so the mixed latency result did not justify the quality risk.
 
