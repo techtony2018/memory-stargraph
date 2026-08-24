@@ -2482,44 +2482,56 @@ def normalize_autopilot_finding_from_page(row, markdown):
     }
 
 
-def list_autopilot_findings_from_gbrain_pages(payload):
+def list_autopilot_findings_from_gbrain_pages(payload, snapshot_cache=None):
     limit = max(1, min(AUTOPILOT_FINDINGS_MAX_LIMIT, int(payload.get("limit") or 50)))
     offset = max(0, int(payload.get("offset") or 0))
     state_filter = str(payload.get("state") or "").strip().lower()
     page_read_budget = max(limit + offset, 20)
     page_read_budget = min(AUTOPILOT_FINDINGS_MAX_LIMIT, page_read_budget)
-    rows_by_slug = {}
-    checked_tags = []
-    for tag in AUTOPILOT_FINDING_FALLBACK_TAGS:
-        try:
-            output = run_gbrain("list", "--tag", tag, "-n", str(page_read_budget), timeout=8)
-        except Exception:  # noqa: BLE001
-            continue
-        checked_tags.append(tag)
-        for row in parse_page_list(output):
-            slug = str(row.get("slug") or "")
-            if slug and slug not in rows_by_slug:
-                rows_by_slug[slug] = row
-    findings = []
-    for row in rows_by_slug.values():
-        try:
-            markdown = run_gbrain("get", row["slug"], timeout=8)
-        except Exception:  # noqa: BLE001
-            continue
-        finding = normalize_autopilot_finding_from_page(row, markdown)
-        if not finding:
-            continue
-        if state_filter and finding["state"] != state_filter:
-            continue
-        findings.append(finding)
-    findings.sort(key=lambda item: (item.get("state") == "resolved", item.get("severity") == "info", item.get("check_name") or ""))
+    snapshot_key = f"autopilot_findings:fallback:{page_read_budget}"
+    snapshot = snapshot_cache.get(snapshot_key) if snapshot_cache is not None else None
+    if snapshot is None:
+        rows_by_slug = {}
+        checked_tags = []
+        for tag in AUTOPILOT_FINDING_FALLBACK_TAGS:
+            try:
+                output = run_gbrain("list", "--tag", tag, "-n", str(page_read_budget), timeout=8)
+            except Exception:  # noqa: BLE001
+                continue
+            checked_tags.append(tag)
+            for row in parse_page_list(output):
+                slug = str(row.get("slug") or "")
+                if slug and slug not in rows_by_slug:
+                    rows_by_slug[slug] = row
+        snapshot_findings = []
+        for row in rows_by_slug.values():
+            try:
+                markdown = run_gbrain("get", row["slug"], timeout=8)
+            except Exception:  # noqa: BLE001
+                continue
+            finding = normalize_autopilot_finding_from_page(row, markdown)
+            if finding:
+                snapshot_findings.append(finding)
+        snapshot_findings.sort(
+            key=lambda item: (
+                item.get("state") == "resolved",
+                item.get("severity") == "info",
+                item.get("check_name") or "",
+            )
+        )
+        snapshot = {"findings": snapshot_findings, "checked_tags": checked_tags}
+        if snapshot_cache is not None:
+            snapshot_cache.put(snapshot_key, snapshot)
+    findings = snapshot["findings"]
+    if state_filter:
+        findings = [finding for finding in findings if finding["state"] == state_filter]
     page = findings[offset:offset + limit]
     return {
         "findings": page,
         "total": len(findings),
         "backend_status": "gbrain_tag_fallback",
         "backend_message": "Autopilot findings tool unavailable; using supported GBrain tag fallback.",
-        "checked_tags": checked_tags,
+        "checked_tags": snapshot["checked_tags"],
         "filters": payload,
     }
 
@@ -7539,7 +7551,10 @@ class GraphStore:
         capability_key = "autopilot_findings_list:capability"
         tool_supported = self.autopilot_findings_cache.get(capability_key)
         if tool_supported is False:
-            result = list_autopilot_findings_from_gbrain_pages(payload)
+            result = list_autopilot_findings_from_gbrain_pages(
+                payload,
+                snapshot_cache=self.autopilot_findings_cache,
+            )
         else:
             try:
                 result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
@@ -7557,7 +7572,10 @@ class GraphStore:
                 if not missing_operation:
                     raise
                 self.autopilot_findings_cache.put(capability_key, False)
-                result = list_autopilot_findings_from_gbrain_pages(payload)
+                result = list_autopilot_findings_from_gbrain_pages(
+                    payload,
+                    snapshot_cache=self.autopilot_findings_cache,
+                )
         if not isinstance(result, dict):
             return {"findings": [], "total": 0}
         findings = result.get("findings")

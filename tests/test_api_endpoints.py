@@ -1890,7 +1890,7 @@ class ApiEndpointTests(unittest.TestCase):
             fake_gbrain.mock_calls,
         )
 
-    def test_autopilot_findings_reuses_missing_tool_capability_across_filters(self):
+    def test_autopilot_findings_reuses_missing_tool_capability_and_fallback_snapshot(self):
         store = server.GraphStore()
         missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")
         with (
@@ -1903,7 +1903,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(first["backend_status"], "gbrain_tag_fallback")
         self.assertEqual(second["backend_status"], "gbrain_tag_fallback")
         self.assertEqual(fake_tool.call_count, 1)
-        self.assertEqual(fake_gbrain.call_count, 4)
+        self.assertEqual(fake_gbrain.call_count, 2)
 
     def test_autopilot_findings_tag_fallback_lists_bounded_pages(self):
         store = server.GraphStore()
@@ -1932,9 +1932,10 @@ class ApiEndpointTests(unittest.TestCase):
 
         with (
             mock.patch("server.gbrain_call_tool", side_effect=missing_tool),
-            mock.patch("server.run_gbrain", side_effect=fake_gbrain),
+            mock.patch("server.run_gbrain", side_effect=fake_gbrain) as run_gbrain,
         ):
             data = store.list_autopilot_findings({"state": "blocked", "limit": 5, "offset": 0})
+            resolved = store.list_autopilot_findings({"state": "resolved", "limit": 5, "offset": 0})
 
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["findings"][0]["slug"], "notes/autopilot/finding-one")
@@ -1943,6 +1944,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["findings"][0]["repair_attempts"], 1)
         self.assertEqual(data["findings"][0]["postcondition_failures"], 2)
         self.assertEqual(data["findings"][0]["backend_source"], "gbrain_tag_fallback")
+        self.assertEqual(resolved["total"], 0)
+        self.assertEqual(run_gbrain.call_count, 3)
 
     def test_autopilot_findings_preserves_non_tool_backend_errors(self):
         store = server.GraphStore()
