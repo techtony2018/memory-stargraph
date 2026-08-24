@@ -9,6 +9,7 @@ from unittest import mock
 
 from server import (
     DEFAULT_CONFIG,
+    EVIDENCE_SEARCH_TYPES,
     EvidenceListCache,
     GraphStore,
     PersistentGBrainSearch,
@@ -801,6 +802,42 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(len(search_calls), 1)
         self.assertEqual(first["source"]["coverage"]["search_primary_cache_status"], "miss")
         self.assertEqual(second["source"]["coverage"]["search_primary_cache_status"], "hit")
+
+    def test_search_resolves_unique_exact_prewarmed_evidence_title_locally(self):
+        store = GraphStore()
+        seed_graph = finalize_graph(
+            {
+                "title": "Evidence title test",
+                "source": {"coverage": {}},
+                "nodes": [{"slug": "index", "id": "index", "label": "Index", "type": "root", "links": []}],
+                "edge_types": [],
+            }
+        )
+        for page_type in EVIDENCE_SEARCH_TYPES:
+            rows = []
+            if page_type == "run":
+                rows = [
+                    {
+                        "slug": "runs/memory-stargraph-product-owner-daily-review-2026-08-23",
+                        "title": "Memory Stargraph Product Owner Daily Review - 2026-08-23",
+                    }
+                ]
+            store.evidence_list_cache.put(page_type, 40, rows)
+
+        with (
+            mock.patch.object(store, "get_seed_graph", return_value=seed_graph),
+            mock.patch("server.run_gbrain") as run,
+        ):
+            result = store.search("  memory stargraph product owner daily review 2026 08 23 ")
+
+        coverage = result["source"]["coverage"]
+        self.assertEqual(
+            coverage["search_slugs"],
+            ["runs/memory-stargraph-product-owner-daily-review-2026-08-23"],
+        )
+        self.assertTrue(coverage["search_exact_evidence_title"])
+        self.assertEqual(coverage["search_primary_cache_status"], "skipped_exact_evidence_title")
+        run.assert_not_called()
 
     def test_primary_search_coalesces_concurrent_cold_loads(self):
         cache = TimedValueCache(ttl_seconds=30, stale_seconds=300, max_entries=2)
