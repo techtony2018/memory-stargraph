@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `e1e6d27`
-- Current performance code commit: `e1e6d27` (`perf: retain follow-up capability status`)
-- Previous pushed commit: `c85584a` (`perf: cache repeated settings evidence`)
+- Current merged and pushed source: `a0f3419`
+- Current performance code commit: `a0f3419` (`perf: align search benchmark with product path`)
+- Previous pushed commit: `e1e6d27` (`perf: retain follow-up capability status`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 617 tests passed in 41.265 seconds.
+- Latest verification: 618 tests passed in 40.646 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -110,6 +110,8 @@ After the repeated Settings evidence cache follow-up, the full suite passed 616 
 
 After the retained Follow-ups capability-status follow-up, the full suite passed 617 tests in 41.265 seconds with the same static checks passing.
 
+After the Search benchmark product-path calibration, the full suite passed 618 tests in 40.646 seconds. Python compilation and `git diff --check` also passed.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -119,6 +121,15 @@ Do not stage, overwrite, revert, or include these unrelated Product Owner files 
 ```
 
 ## Improvements Completed
+
+### Product-path Search benchmark calibration
+
+The full Search benchmark now defaults to the same persistent GBrain read session and four-type evidence prewarm used by the product server. `--transport cli` retains the cold subprocess comparison explicitly, and every receipt records transport readiness and evidence-prewarm coverage.
+
+- The previous default measured an unrepresentative CLI/evidence-cold path at a 2.428-second median; its first case took 5.073 seconds while populating evidence.
+- The product-path benchmark reported `persistent_ready=true`, evidence types ready `4/4`, three complete cold primary searches in 402-579 milliseconds, and a 543-millisecond median.
+- An explicit CLI single-case comparison took 4.035 seconds with `persistent_ready=false` and evidence types ready `0`, confirming the old path remains available without contaminating the default product measurement.
+- This is a benchmark correction, not a 77.6% product speed claim. A regression test locks the preparation contract.
 
 ### Persistent GBrain search session
 
