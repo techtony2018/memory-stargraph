@@ -6142,7 +6142,8 @@ class GraphStore:
             return {slug: futures[slug].result() for slug in ordered_slugs}
 
     def get_yoda_search_output(self, query):
-        cache_key = hashlib.sha256(str(query or "").encode("utf-8")).hexdigest()
+        normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
+        cache_key = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
         cached = self.yoda_search_cache.get(cache_key)
         if cached is not None:
             return cached

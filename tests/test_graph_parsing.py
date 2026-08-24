@@ -821,6 +821,32 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(len(store.yoda_search_cache.entries), 2)
         self.assertEqual(len(store.yoda_source_cache.entries), 1)
 
+    def test_yoda_search_reuses_whitespace_equivalent_query(self):
+        store = GraphStore()
+        output = "[0.99] products/memory-stargraph -- # Memory Stargraph"
+
+        with mock.patch("server.run_gbrain", return_value=output) as run:
+            first = store.get_yoda_search_output(
+                "What changed? products/memory-stargraph"
+            )
+            second = store.get_yoda_search_output(
+                "  What   changed?   products/memory-stargraph  "
+            )
+
+        self.assertEqual(first, output)
+        self.assertEqual(second, output)
+        run.assert_called_once_with(
+            "query",
+            "What changed? products/memory-stargraph",
+            "--no-expand",
+            "--adaptive-return",
+            "true",
+            "--limit",
+            "10",
+            "--relational",
+            "true",
+        )
+
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
             "title": "Memory Stargraph",

@@ -35,6 +35,8 @@ After the exact-slug Search follow-up, the full suite passed 588 tests in 40.715
 
 After the whitespace-equivalent Search cache follow-up, the full suite passed 588 tests in 42.631 seconds with the same static checks passing.
 
+After the whitespace-equivalent Ask Yoda retrieval cache follow-up, the full suite passed 589 tests in 44.957 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -162,6 +164,16 @@ Five real query pairs measured before and after using one normal-space query fol
 - Before: every variant was a cache miss; variant median 2.006 seconds, with another GBrain search for all 5/5 pairs.
 - After: every variant was a cache hit; variant median 0.058 milliseconds, greater than 99.99% median improvement.
 - Correctness: cached result ordering matched the first query in 5/5 pairs, and the second query triggered zero additional GBrain calls.
+
+### Whitespace-equivalent Ask Yoda retrieval cache keys
+
+Ask Yoda's question-specific GBrain retrieval cache now collapses internal whitespace while preserving the original question in the assembled prompt and the first backend request. Equivalent follow-up inputs therefore reuse one evidence snapshot instead of issuing another dynamic hybrid query.
+
+Five real question-and-slug pairs measured before and after using normal and doubled internal spaces:
+
+- Before: variant median 2.412 seconds; all five variants performed another GBrain query, and dynamic result text differed in 5/5 pairs.
+- After: variant median 0.088 milliseconds, greater than 99.99% median improvement; all five variants were cache hits.
+- Correctness: cached output matched the first query in 5/5 pairs, with zero additional GBrain calls.
 
 ## Earlier Performance Work
 
