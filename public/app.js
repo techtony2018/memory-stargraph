@@ -397,13 +397,42 @@ function cacheLimitBytes() {
   return NODE_CACHE_DEFAULT_BYTES;
 }
 
+let nodeCacheMemoryStore = null;
+let nodeCacheTouchSaveTimer = null;
+
 function cacheStore() {
-  return safeJsonParse(window.localStorage?.getItem(NODE_CACHE_STORAGE_KEY) || "", { entries: {} });
+  if (nodeCacheMemoryStore === null) {
+    nodeCacheMemoryStore = safeJsonParse(window.localStorage?.getItem(NODE_CACHE_STORAGE_KEY) || "", { entries: {} });
+  }
+  return nodeCacheMemoryStore;
 }
 
 function saveCacheStore(store) {
+  nodeCacheMemoryStore = store;
+  if (nodeCacheTouchSaveTimer !== null) {
+    window.clearTimeout(nodeCacheTouchSaveTimer);
+    nodeCacheTouchSaveTimer = null;
+  }
   window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, JSON.stringify(store));
 }
+
+function scheduleCacheTouchSave(store) {
+  nodeCacheMemoryStore = store;
+  if (nodeCacheTouchSaveTimer !== null) return;
+  nodeCacheTouchSaveTimer = window.setTimeout(() => {
+    nodeCacheTouchSaveTimer = null;
+    window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, JSON.stringify(nodeCacheMemoryStore || { entries: {} }));
+  }, 1000);
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== NODE_CACHE_STORAGE_KEY) return;
+  if (nodeCacheTouchSaveTimer !== null) {
+    window.clearTimeout(nodeCacheTouchSaveTimer);
+    nodeCacheTouchSaveTimer = null;
+  }
+  nodeCacheMemoryStore = safeJsonParse(event.newValue || "", { entries: {} });
+});
 
 function cacheableGetUrl(url) {
   return /^\/api\/entity(?:-raw|-media)?\/[^?]+$/.test(String(url || ""));
@@ -457,7 +486,7 @@ function cacheGet(url) {
   const entry = store.entries?.[url];
   if (!entry) return null;
   entry.lastAccessed = Date.now();
-  saveCacheStore(store);
+  scheduleCacheTouchSave(store);
   return { ok: true, status: 200, data: entry.data, cached: true };
 }
 

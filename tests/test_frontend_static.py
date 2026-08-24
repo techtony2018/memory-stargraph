@@ -1009,6 +1009,18 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("state.relationshipPages", script)
         self.assertIn("state.backlinkPages", script)
 
+    def test_node_cache_keeps_hits_in_memory_and_batches_lru_touch_persistence(self):
+        script = (ROOT / "public/app.js").read_text()
+
+        self.assertIn("let nodeCacheMemoryStore = null", script)
+        self.assertIn("let nodeCacheTouchSaveTimer = null", script)
+        self.assertIn("scheduleCacheTouchSave(store)", script)
+        self.assertIn("window.setTimeout(() =>", script)
+        self.assertIn('window.addEventListener("storage"', script)
+        cache_get = script[script.index("function cacheGet"):script.index("function enforceCacheLimit")]
+        self.assertIn("scheduleCacheTouchSave(store)", cache_get)
+        self.assertNotIn("saveCacheStore(store)", cache_get)
+
     def test_graph_render_uses_dirty_idle_loop_and_culls_hidden_nodes(self):
         script = (ROOT / "public/app.js").read_text()
 
