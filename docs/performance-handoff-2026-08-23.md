@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `e8225e8`
-- Current performance code commit: `e8225e8` (`perf: coalesce node cache content writes`)
-- Previous pushed commit: `aa3e5f0` (`perf: reuse node cache serialization`)
+- Current merged and pushed source: `d07f07e`
+- Current performance code commit: `d07f07e` (`perf: overlap settings evidence reads`)
+- Previous pushed commit: `e8225e8` (`perf: coalesce node cache content writes`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 610 tests passed in 45.931 seconds.
+- Latest verification: 612 tests passed in 42.917 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -89,6 +89,8 @@ After the batched node-cache touch follow-up, the full suite passed 610 tests in
 After the node-cache serialization reuse follow-up, the full suite passed 610 tests in 46.764 seconds with the same focused and static checks passing.
 
 After the node-cache content-write coalescing follow-up, the full suite passed 610 tests in 45.931 seconds with JavaScript syntax and `git diff --check` passing.
+
+After the Settings evidence overlap follow-up, the full suite passed 612 tests in 42.917 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. The Settings/readiness Playwright parity smoke passed against the isolated source server, including initial load, manual refresh, auto refresh, API/UI parity, and privacy checks.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -455,6 +457,17 @@ Entity and media cache additions now share a 500-millisecond content-persistence
 - An alternating 4 MB two-add benchmark reduced median synchronous work from 178.4 to 105.0 milliseconds, a 41.1% reduction. Mean fell from 160.4 to 115.0 milliseconds, a 28.3% reduction.
 - A real deep-link load initially wrote the 4 MB cache twice because entity and media arrived 406 milliseconds apart. The accepted 500-millisecond window wrote once, and final readback contained both the entity and media entries in the 4.32 MB payload.
 - The delay affects only reconstructible browser cache persistence. In-memory responses are available immediately, and authoritative product or GBrain data is never delayed or mutated.
+
+### Overlapped Settings evidence reads
+
+The weekly Settings digest now runs its independent resolver-health read alongside weekly outcome evidence collection. Customer readiness reuses the resolver and deployment-attestation evidence already carried by that digest instead of reading both a second time. Missing or legacy digest fields retain the previous bounded fallback reads.
+
+- Before, the isolated weekly digest took about 2.5-2.6 seconds: resolver health consumed 1.1-1.2 seconds and weekly outcomes another 1.3-1.5 seconds in series.
+- Before the change, three concurrent Settings API pairs completed in 3.185, 3.223, and 3.304 seconds, for a 3.223-second median wall time.
+- After the change, five pairs completed in 3.646 seconds cold and 1.706-2.051 seconds thereafter. Overall median wall time was 1.889 seconds, a 41.4% reduction from the baseline median.
+- Deliberately running multiple browser and direct benchmarks together still saturated the local GBrain backend and produced 6-10 second samples. This is contention evidence, not a steady-state latency claim; request-level coalescing remains a candidate if concurrent Settings consumers become common.
+- Tests require resolver and outcome reads to overlap and fail if customer readiness repeats resolver or deployment reads when complete weekly evidence is present.
+- The API remains read-only. No service, resolver, GBrain, deployment, or production data was mutated.
 
 ## Earlier Performance Work
 
