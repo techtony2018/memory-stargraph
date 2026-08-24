@@ -4296,8 +4296,7 @@ function renderCustomerReadinessCard(data) {
 
 let settingsEvidenceRequestId = 0;
 let settingsEvidenceRefreshTimer = null;
-const SETTINGS_DIGEST_TIMEOUT_MS = 45000;
-const SETTINGS_READINESS_TIMEOUT_MS = 60000;
+const SETTINGS_EVIDENCE_TIMEOUT_MS = 60000;
 const SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS = 15000;
 
 function clearSettingsEvidenceAutoRefresh() {
@@ -4409,10 +4408,11 @@ async function refreshSettingsEvidenceCards(_options = {}) {
   clearSettingsEvidenceAutoRefresh();
   const requestId = ++settingsEvidenceRequestId;
   renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
-  const [digestResponse, readinessResponse] = await Promise.all([
-    withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/memory-value-digest?window=week", requestId)), "Weekly outcomes", SETTINGS_DIGEST_TIMEOUT_MS),
-    withSettingsEvidenceTimeout(apiGet(settingsEvidenceUrl("/api/customer-readiness", requestId)), "Customer readiness", SETTINGS_READINESS_TIMEOUT_MS),
-  ]);
+  const evidenceResponse = await withSettingsEvidenceTimeout(
+    apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId)),
+    "Settings evidence",
+    SETTINGS_EVIDENCE_TIMEOUT_MS,
+  );
   if (settingsFlyout?.hidden && _options.forceVisible) {
     state.settingsPinned = true;
     showFloatingPanel(settingsFlyout, navSettingsButton);
@@ -4423,15 +4423,17 @@ async function refreshSettingsEvidenceCards(_options = {}) {
   settingsEvidenceCards.dataset.requestId = String(requestId);
   settingsEvidenceCards.dataset.refreshedAt = new Date(refreshedAt).toISOString();
   settingsEvidenceCards.appendChild(renderSettingsEvidenceToolbar(requestId, refreshedAt));
-  if (digestResponse.ok) {
-    settingsEvidenceCards.appendChild(renderVerifiedMemoryOutcomesCard(digestResponse.data || {}));
+  const digest = evidenceResponse.data?.digest;
+  const readiness = evidenceResponse.data?.readiness;
+  if (evidenceResponse.ok && digest) {
+    settingsEvidenceCards.appendChild(renderVerifiedMemoryOutcomesCard(digest));
   } else {
-    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("digest", `Weekly outcomes / Memory value digest unavailable: ${digestResponse.data?.error || digestResponse.status}`));
+    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("digest", `Weekly outcomes / Memory value digest unavailable: ${evidenceResponse.data?.error || evidenceResponse.status}`));
   }
-  if (readinessResponse.ok) {
-    settingsEvidenceCards.appendChild(renderCustomerReadinessCard(readinessResponse.data || {}));
+  if (evidenceResponse.ok && readiness) {
+    settingsEvidenceCards.appendChild(renderCustomerReadinessCard(readiness));
   } else {
-    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("readiness", `Customer readiness unavailable: ${readinessResponse.data?.error || readinessResponse.status}`));
+    settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("readiness", `Customer readiness unavailable: ${evidenceResponse.data?.error || evidenceResponse.status}`));
   }
   scheduleSettingsEvidenceAutoRefresh();
 }

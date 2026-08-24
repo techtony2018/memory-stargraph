@@ -40,16 +40,17 @@ const settingsResponses = new Map();
 
 page.on("response", async (response) => {
   const url = response.url();
-  if (!url.includes("/api/memory-value-digest") && !url.includes("/api/customer-readiness")) return;
+  if (!url.includes("/api/settings-evidence")) return;
   if (!url.includes("settings_request=")) return;
   try {
     const parsed = new URL(url);
     const requestId = parsed.searchParams.get("settings_request") || "";
     if (!requestId) return;
-    const kind = parsed.pathname.includes("memory-value-digest") ? "digest" : "readiness";
-    const current = settingsResponses.get(requestId) || {};
-    current[kind] = await response.json();
-    settingsResponses.set(requestId, current);
+    const payload = await response.json();
+    settingsResponses.set(requestId, {
+      digest: payload.digest,
+      readiness: payload.readiness,
+    });
   } catch {
     // Ignore unrelated or malformed responses; the final assertion requires both payloads.
   }

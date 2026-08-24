@@ -7876,7 +7876,7 @@ def configured_target_readiness():
     return attestation["status"], attestation, attestation["summary"]
 
 
-def customer_readiness():
+def customer_readiness(weekly_digest=None):
     graph = STORE.get_health_graph()
     source = graph.get("source") if graph else {}
     stats = graph.get("stats") if graph else None
@@ -7888,14 +7888,17 @@ def customer_readiness():
     except Exception as exc:  # noqa: BLE001
         model_config = {}
         model_error = str(exc)
-    try:
-        weekly_digest = memory_value_digest("week")
-        weekly = weekly_digest.get("verified_memory_outcomes") or {}
+    if weekly_digest is None:
+        try:
+            weekly_digest = memory_value_digest("week")
+            weekly_error = ""
+        except Exception as exc:  # noqa: BLE001
+            weekly_digest = {}
+            weekly_error = str(exc)
+    else:
         weekly_error = ""
-    except Exception as exc:  # noqa: BLE001
-        weekly_digest = {}
-        weekly = {}
-        weekly_error = str(exc)
+    weekly = weekly_digest.get("verified_memory_outcomes") if isinstance(weekly_digest, dict) else {}
+    weekly = weekly or {}
     sre_numeric = weekly.get("sre_numeric_evidence") if isinstance(weekly, dict) else {}
     sre_numeric_error = ""
     if not isinstance(sre_numeric, dict) or not sre_numeric:
@@ -8779,6 +8782,17 @@ def memory_value_digest(window="day"):
     return digest
 
 
+def settings_evidence():
+    digest = memory_value_digest("week")
+    return {
+        "ok": True,
+        "read_only": True,
+        "ui_version": UI_VERSION,
+        "digest": digest,
+        "readiness": customer_readiness(digest),
+    }
+
+
 class MemoryStargraphHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PUBLIC_DIR), **kwargs)
@@ -8924,6 +8938,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/memory-value-digest":
             query = parse_qs(parsed.query)
             return self.end_json(memory_value_digest((query.get("window") or ["day"])[0]))
+        if parsed.path == "/api/settings-evidence":
+            return self.end_json(settings_evidence())
         if parsed.path == "/api/customer-readiness":
             return self.end_json(customer_readiness())
         if parsed.path == "/api/graph":

@@ -2566,6 +2566,22 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(checks["configured_targets"]["status"], "ready")
         self.assertEqual(data["target_evidence"]["configured_remote"]["verified_target_count"], 1)
 
+    def test_settings_evidence_builds_one_digest_for_both_cards(self):
+        digest = {"ok": True, "verified_memory_outcomes": {"status": "pass"}}
+        readiness = {"ok": True, "status": "ready"}
+        with (
+            mock.patch("server.memory_value_digest", return_value=digest) as digest_read,
+            mock.patch("server.customer_readiness", return_value=readiness) as readiness_read,
+        ):
+            status, data = self.dispatch_get("/api/settings-evidence")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["read_only"])
+        self.assertEqual(data["digest"], digest)
+        self.assertEqual(data["readiness"], readiness)
+        digest_read.assert_called_once_with("week")
+        readiness_read.assert_called_once_with(digest)
+
     def test_customer_readiness_reports_degraded_missing_partial_and_no_activity(self):
         fake_store = FakeStore()
         weekly = {
