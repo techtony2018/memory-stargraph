@@ -2965,6 +2965,50 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(counts["current_todo_rows"], 1)
         self.assertEqual(counts["operational_state_rows"], 1)
 
+    def test_yoda_prompt_builds_direct_and_targeted_context_concurrently_in_order(self):
+        store = GraphStore()
+        barrier = threading.Barrier(2, timeout=1)
+
+        def load_direct(_slugs):
+            barrier.wait()
+            return {"reports/source": "# DIRECT SOURCE"}
+
+        def load_targeted(*_args, **_kwargs):
+            barrier.wait()
+            return {"text": "TARGETED CONTEXT", "counts": {"targeted_entities": 1}}
+
+        with (
+            mock.patch.object(store, "build_yoda_current_todo_context", return_value={"text": "", "counts": {}}),
+            mock.patch.object(store, "build_yoda_operational_remediation_context", return_value={"text": "", "counts": {}}),
+            mock.patch.object(
+                store,
+                "get_yoda_search_output",
+                return_value="[0.90] reports/source -- # Source",
+            ),
+            mock.patch.object(store, "get_yoda_source_pages", side_effect=load_direct),
+            mock.patch.object(store, "build_yoda_targeted_context", side_effect=load_targeted),
+        ):
+            trace = {}
+            counts = {}
+            prompt = store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "How is Source related?",
+                stable_context={
+                    "selected_node": "# Memory Stargraph",
+                    "graph": "",
+                    "backlinks": "",
+                    "timings": {},
+                },
+                trace=trace,
+                counts=counts,
+            )
+
+        self.assertLess(prompt.index("# DIRECT SOURCE"), prompt.index("TARGETED CONTEXT"))
+        self.assertIn("direct_reads", trace)
+        self.assertIn("targeted_relationships", trace)
+        self.assertEqual(counts["direct_reads"], 1)
+        self.assertEqual(counts["targeted_entities"], 1)
+
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
 

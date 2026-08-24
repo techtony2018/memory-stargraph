@@ -7006,22 +7006,35 @@ class GraphStore:
         likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
         counts["search_results"] = len(search_slugs)
         counts["direct_reads"] = len(likely_slugs)
-        phase_started = time.perf_counter()
+
+        def load_direct_pages():
+            started = time.perf_counter()
+            pages = self.get_yoda_source_pages(likely_slugs) if likely_slugs else {}
+            return pages, int((time.perf_counter() - started) * 1000)
+
+        def load_targeted_context():
+            started = time.perf_counter()
+            context = self.build_yoda_targeted_context(
+                effective_question,
+                excluded_slugs={slug, *likely_slugs},
+            )
+            return context, int((time.perf_counter() - started) * 1000)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            direct_pages_future = executor.submit(load_direct_pages)
+            targeted_context_future = executor.submit(load_targeted_context)
+            candidate_pages, direct_reads_ms = direct_pages_future.result()
+            targeted_context, targeted_relationships_ms = targeted_context_future.result()
+
         if likely_slugs:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
-            candidate_pages = self.get_yoda_source_pages(likely_slugs)
             for candidate in likely_slugs:
                 candidate_raw = candidate_pages.get(candidate)
                 if candidate_raw is None:
                     candidate_raw = f"Unable to read {candidate}"
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
-        trace["direct_reads"] = int((time.perf_counter() - phase_started) * 1000)
-        phase_started = time.perf_counter()
-        targeted_context = self.build_yoda_targeted_context(
-            effective_question,
-            excluded_slugs={slug, *likely_slugs},
-        )
+        trace["direct_reads"] = direct_reads_ms
         targeted_text = targeted_context.get("text") or ""
         if targeted_text:
             lines.extend(
@@ -7033,7 +7046,7 @@ class GraphStore:
                 ]
             )
         counts.update(targeted_context.get("counts") or {})
-        trace["targeted_relationships"] = int((time.perf_counter() - phase_started) * 1000)
+        trace["targeted_relationships"] = targeted_relationships_ms
         phase_started = time.perf_counter()
         prompt = "\n".join(lines)
         trace["assembly"] = int((time.perf_counter() - phase_started) * 1000)
