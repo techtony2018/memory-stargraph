@@ -4068,6 +4068,38 @@ def exact_slug_search_results(raw_graph, query):
     ], "gbrain_get"
 
 
+def exact_loaded_label_search_results(raw_graph, query):
+    identity = normalized_search_identity(query)
+    if len(identity.split()) < 2:
+        return None
+    matches = []
+    for node in raw_graph.get("nodes") or []:
+        slug = str(node.get("slug") or "").strip()
+        label = str(node.get("label") or "").strip()
+        if (
+            slug
+            and label
+            and not label.endswith("...")
+            and normalized_search_identity(label) == identity
+        ):
+            matches.append(node)
+    if len(matches) != 1:
+        return None
+    node = matches[0]
+    slug = str(node["slug"])
+    summary = str(node.get("summary") or "")
+    return [
+        {
+            "slug": slug,
+            "score": 100.0,
+            "label": str(node.get("label") or make_label(slug)),
+            "preview": summary
+            if summary and summary != "No summary available."
+            else "Exact unique loaded graph label match.",
+        }
+    ]
+
+
 def extract_question_entities(question, limit=3):
     text = str(question or "")
     matches = re.findall(
@@ -5562,6 +5594,11 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
         if exact_todo_results is None
         else (None, "")
     )
+    exact_label_results = (
+        exact_loaded_label_search_results(raw_graph, query)
+        if exact_todo_results is None and exact_slug_results is None
+        else None
+    )
     if exact_todo_results is not None:
         primary_results = exact_todo_results
         primary_status = "complete" if exact_todo_status == "complete" else "timeout"
@@ -5578,6 +5615,14 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
         sentinel_results = []
         evidence_status = "skipped_exact_slug"
         evidence_cache_status = "skipped_exact_slug"
+    elif exact_label_results is not None:
+        primary_results = exact_label_results
+        primary_status = "complete"
+        primary_cache_status = "skipped_exact_loaded_label"
+        evidence_results = []
+        sentinel_results = []
+        evidence_status = "skipped_exact_loaded_label"
+        evidence_cache_status = "skipped_exact_loaded_label"
     else:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -5611,7 +5656,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
             query,
             existing_slugs=[result["slug"] for result in evidence_results + primary_results],
         )
-    loaded_results = [] if exact_todo_results is not None or exact_slug_results is not None else loaded_graph_search_results(
+    loaded_results = [] if exact_todo_results is not None or exact_slug_results is not None or exact_label_results is not None else loaded_graph_search_results(
         raw_graph,
         query,
         existing_slugs=[result["slug"] for result in sentinel_results + evidence_results + primary_results],
@@ -5648,6 +5693,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
         "skipped_no_terms",
         "skipped_exact_todo_id",
         "skipped_exact_slug",
+        "skipped_exact_loaded_label",
     }
     coverage["search_status"] = "complete" if primary_status == "complete" and evidence_complete else "partial_timeout"
     coverage["search_primary_status"] = primary_status
@@ -5660,6 +5706,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
         coverage.pop("search_exact_todo_id_status", None)
     coverage["search_exact_slug"] = exact_slug_results is not None
     coverage["search_exact_slug_source"] = exact_slug_source
+    coverage["search_exact_loaded_label"] = exact_label_results is not None
     source.update(
         {
             "mode": "gbrain",

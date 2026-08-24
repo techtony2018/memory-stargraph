@@ -45,6 +45,8 @@ After the repeated relationship-type cache follow-up, the full suite passed 591 
 
 After the persistent paginated page-list follow-up, the full suite passed 594 tests in 42.077 seconds with the same static checks passing.
 
+After the unique exact-label Search follow-up, the full suite passed 596 tests in 42.170 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -218,7 +220,16 @@ The persistent GBrain read session now maps read-only `list` calls to MCP `list_
 - Before: five representative CLI list calls had a 1.193-second median and each returned the default 50 rows because GBrain 0.46.28 no longer recognizes the caller's `-n` shorthand.
 - After: the same calls had a 29.6-millisecond median, a 97.5% improvement; the 140-row seed request returned 140 rows and each evidence request returned exactly 40.
 - Seed impact: fresh seed collection fell from 1.407 seconds with 75 discovered nodes to 137 milliseconds with 165 nodes, while keeping `root_index_loaded=true`.
+- Evidence impact: concurrent startup prewarm completed all four 40-row learning/TODO/report/Run lists in 124 milliseconds with no fallback and an idle persistent lane afterward.
 - Unsupported options and persistent-session failures retain the existing fail-closed CLI fallback.
+
+### Unique exact-label Search fast path
+
+Search now resolves a query locally when it exactly identifies one untruncated loaded label containing at least two words. Ambiguous labels, single-word categories, truncated labels, and broader queries retain the complete live Search path.
+
+- Before: five representative exact-title queries had a 1.179-second median; the correct node ranked first in 5/5 cases among 21-35 results.
+- After: the same queries had a 0.65-millisecond median, a 99.94% improvement, with zero GBrain calls.
+- Correctness: all 5/5 resolved to the same top slug and each returned one unambiguous result.
 
 ## Earlier Performance Work
 

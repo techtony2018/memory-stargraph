@@ -21,6 +21,7 @@ from server import (
     extract_openclaw_answer,
     effective_yoda_retrieval_question,
     evidence_record_search_results,
+    exact_loaded_label_search_results,
     expand_raw_graph,
     finalize_graph,
     friendly_label,
@@ -1175,6 +1176,65 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(coverage["search_primary_cache_status"], "skipped_exact_slug")
         self.assertEqual(coverage["search_slugs"], ["docs/gbrain-attachment-runbook"])
 
+    def test_search_raw_graph_resolves_unique_exact_loaded_label_without_live_search(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "products/memory-stargraph",
+                    "id": "product",
+                    "label": "Memory Stargraph",
+                    "type": "product",
+                    "summary": "Local-first knowledge operating system.",
+                    "tags": [],
+                    "links": [],
+                },
+                {
+                    "slug": "runs/example",
+                    "id": "run",
+                    "label": "Memory Stargraph...",
+                    "type": "run",
+                    "summary": "Truncated label must not create ambiguity.",
+                    "tags": [],
+                    "links": [],
+                },
+            ],
+            "edge_types": [],
+        }
+
+        with mock.patch("server.run_gbrain") as run:
+            graph = search_raw_graph(raw_graph, "  MEMORY   STARGRAPH  ")
+
+        coverage = graph["source"]["coverage"]
+        run.assert_not_called()
+        self.assertTrue(coverage["search_exact_loaded_label"])
+        self.assertEqual(
+            coverage["search_primary_cache_status"],
+            "skipped_exact_loaded_label",
+        )
+        self.assertEqual(
+            coverage["search_evidence_status"],
+            "skipped_exact_loaded_label",
+        )
+        self.assertEqual(coverage["search_slugs"], ["products/memory-stargraph"])
+        self.assertEqual(coverage["search_results"], 1)
+
+    def test_exact_loaded_label_search_rejects_ambiguous_single_and_broader_queries(self):
+        raw_graph = {
+            "nodes": [
+                {"slug": "people/tony-guan", "label": "Tony Guan"},
+                {"slug": "profiles/tony-guan", "label": "Tony Guan"},
+                {"slug": "products/gbrain", "label": "Gbrain"},
+            ]
+        }
+
+        self.assertIsNone(exact_loaded_label_search_results(raw_graph, "Tony Guan"))
+        self.assertIsNone(exact_loaded_label_search_results(raw_graph, "Gbrain"))
+        self.assertIsNone(
+            exact_loaded_label_search_results(raw_graph, "Tony Guan publications")
+        )
+
     def test_search_raw_graph_does_not_use_loaded_slug_fast_path_for_broader_query(self):
         raw_graph = {
             "title": "Memory Stargraph",
@@ -1304,14 +1364,14 @@ class GraphParsingTests(unittest.TestCase):
         }
 
         def fake_run_gbrain(*args, **_kwargs):
-            if args == ("search", "memory stargraph"):
+            if args == ("search", "memory stargraph product"):
                 raise TimeoutError(args)
             if args[0] == "list":
                 raise TimeoutError(args)
             raise AssertionError(args)
 
         with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
-            graph = search_raw_graph(raw_graph, "memory stargraph")
+            graph = search_raw_graph(raw_graph, "memory stargraph product")
 
         coverage = graph["source"]["coverage"]
         self.assertEqual(coverage["search_status"], "partial_timeout")
