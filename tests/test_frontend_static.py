@@ -793,6 +793,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('id="selectionMediaPreview"', markup)
         self.assertIn('id="selectionMediaSlug"', markup)
         self.assertIn("function renderSelectionMediaPreview", script)
+        self.assertIn("if (options.preview && item?.preview_url) return item.preview_url", script)
+        self.assertIn("{ eager: true, preview: true }", script)
         self.assertIn("apiGet(`/api/entity-media/${encodeURIComponent(slug)}`)", script)
         self.assertIn('selectionMediaPreview.textContent = "loading media.."', script)
         self.assertIn('selectionMediaPreview.classList.add("is-loading")', script)

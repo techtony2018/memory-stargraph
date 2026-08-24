@@ -818,6 +818,16 @@ The three interactive graph Canvas layers now cap their backing-store device pix
 - At the 850 by 520 desktop graph size, each backing store changed from 2,550 by 1,560 to 1,700 by 1,040 pixels, removing 55.6% of raster pixels per layer. The mobile graph changed from 1,092 by 1,570 to 728 by 1,047 pixels while retaining its 364 by 523 CSS footprint.
 - Desktop and mobile screenshots remained sharp and correctly framed, with the same visible labels, node outlines, glow treatment, controls, and brand assets. All six benchmark pages had exact focus/node/edge parity, no horizontal overflow, and no page or console errors. A static regression test locks the DPR bound.
 
+### Display-sized local media previews
+
+Large local raster images now expose a read-only `preview_url` and byte size through the existing entity-media response. The selection panel uses that preview URL while the first-class **View media** workflow keeps the original served URL. A bounded 640-pixel WebP encoder caches 32 source-attested previews by path, nanosecond mtime, and source size. Unsupported formats, missing Pillow, and decode failures fail closed to the original media route.
+
+- The representative `products/memory-stargraph` selection previously transferred a 1,645,179-byte, 1480 by 1030 PNG into a 272-pixel desktop panel and 70-pixel mobile panel. Its accepted preview is a 29,832-byte, 640 by 445 WebP, a 98.19% transfer reduction.
+- A three-round direction-balanced Chrome A/B at 5 Mbps and 80 milliseconds reduced selection-media completion median from 3,190.8 to 230.0 milliseconds, a 92.8% improvement. The media-resource median fell from 3,113.6 to 145.7 milliseconds.
+- Cold preview generation took 174.3 milliseconds through the isolated HTTP server; the immediate cached request took 1.9 milliseconds and returned byte-identical output. The original media endpoint remained unchanged.
+- Desktop and mobile preview crops retained exact layout dimensions with 32.35 dB and 35.83 dB PSNR respectively. Both viewports had no page errors or horizontal overflow. Opening **View media** still requested the original 1,645,179-byte PNG at 1480 by 1030 pixels.
+- Tests cover metadata enrichment, traversal-safe preview resolution, WebP resizing, in-process cache reuse, frontend preview selection, and validated Brotli source attestation. The full suite passed 657 tests in 46.413 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -849,6 +859,8 @@ Notable earlier measurements:
 - Startup evidence prewarm first Search: 6.056 seconds to 3.577 seconds.
 
 ## Rejected Experiment
+
+Normalizing uncached Search cache keys to Unicode NFC was rejected without changing source. Only three of five composed/decomposed query pairs returned exact top-ten slug order. The Jose and Lu-with-diaeresis samples changed ranking between canonically equivalent spellings, so sharing cache entries would silently substitute one backend interpretation for another. Keep Search cache keys byte-sensitive beyond the already accepted whitespace and terminal-punctuation rules until GBrain itself guarantees canonical-equivalence parity.
 
 Caching explicit missing-page results from bounded `gbrain get` reads for 30 seconds was rejected. A targeted profile initially found one missing Settings evidence slug consuming 1,413.6 milliseconds inside a 1,619.2-millisecond forced refresh, so the experiment cached only explicit `page_not_found` failures while preserving local-file precedence, transient-error retries, and invalidation on graph writes. A strict four-process alternating A/B then used two isolated worktrees at the same `96e860c` commit and issued two forced Settings evidence requests per fresh process. The repeated-request median changed from 423.2 to 398.2 milliseconds, only 5.9% better and below the 15% acceptance threshold. First-request timings were also highly variable, confirming that the one-off profile did not represent a stable request bottleneck. The cache, invalidation hooks, and tests were fully reverted; keep explicit missing-page reads uncached unless a broader same-source benchmark demonstrates material repeated cost.
 

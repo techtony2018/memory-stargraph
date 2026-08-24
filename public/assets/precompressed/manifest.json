@@ -1,9 +1,9 @@
 {
   "assets": {
     "app.js": {
-      "brotli_size": 64839,
-      "source_sha256": "e54e368eb58a5a56d1496381c18fdfc05dcef70681ee098f5c83e11183fd5c37",
-      "source_size": 343198
+      "brotli_size": 64863,
+      "source_sha256": "7a9cd53b742f0ccd90b263df7c4619e144268f0eb460ff2389c604e76bd3a807",
+      "source_size": 343305
     },
     "index.html": {
       "brotli_size": 5133,

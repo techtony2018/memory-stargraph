@@ -21,6 +21,7 @@ from server import (
     compact_backlink_page,
     collect_seed_graph,
     ensure_media_references_available,
+    image_preview_bytes,
     extract_openclaw_answer,
     effective_yoda_retrieval_question,
     evidence_record_search_results,
@@ -44,6 +45,7 @@ from server import (
     remote_media_url_for_relative_path,
     relationship_matches_question,
     resolve_media_file_path,
+    resolve_media_preview_file_path,
     run_openclaw_agent,
     run_gbrain,
     search_raw_graph,
@@ -2204,6 +2206,45 @@ profile_image: people/witty-wang/witty-wang-profile.jpg
                 self.assertTrue(enriched[0]["served_available"])
                 self.assertEqual(enriched[0]["materialized_from"], str(source.resolve()))
                 self.assertEqual((media_root / "people/witty-wang/witty-wang-profile.jpg").read_bytes(), b"fake jpg")
+
+    def test_large_local_image_exposes_cached_preview_metadata(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            image_path = root / "products" / "memory-stargraph" / "hero.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"png" + b"0" * (512 * 1024))
+            with mock.patch("server.MEDIA_ROOTS", [root]), mock.patch("server.Image", object()):
+                media = parse_media_references("![Hero](products/memory-stargraph/hero.png)")
+                enriched = ensure_media_references_available(media)
+
+            self.assertEqual(enriched[0]["size_bytes"], image_path.stat().st_size)
+            self.assertEqual(enriched[0]["preview_url"], "/media-preview/products/memory-stargraph/hero.png")
+            with mock.patch("server.MEDIA_ROOTS", [root]), mock.patch("server.Image", None):
+                fallback = ensure_media_references_available(media)
+            self.assertNotIn("preview_url", fallback[0])
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                self.assertEqual(
+                    resolve_media_preview_file_path("/media-preview/products/memory-stargraph/hero.png"),
+                    image_path.resolve(),
+                )
+                self.assertIsNone(resolve_media_preview_file_path("/media-preview/../secret.png"))
+
+    def test_image_preview_bytes_resizes_and_caches_webp(self):
+        image_module = image_preview_bytes.__wrapped__.__globals__["Image"]
+        if image_module is None:
+            self.skipTest("Pillow is unavailable")
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "large.png"
+            image_module.new("RGB", (1200, 800), "#143047").save(path)
+            stat = path.stat()
+            image_preview_bytes.cache_clear()
+            first = image_preview_bytes(str(path), stat.st_mtime_ns, stat.st_size)
+            second = image_preview_bytes(str(path), stat.st_mtime_ns, stat.st_size)
+
+            self.assertEqual(first, second)
+            self.assertLess(len(first), stat.st_size)
+            self.assertEqual(first[:4], b"RIFF")
+            self.assertEqual(image_preview_bytes.cache_info().hits, 1)
 
     def test_remote_media_url_for_relative_path_encodes_path_segments(self):
         self.assertEqual(

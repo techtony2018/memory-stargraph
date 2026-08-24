@@ -32,6 +32,12 @@ from urllib.parse import parse_qs, urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+try:
+    from PIL import Image, ImageOps
+except ImportError:  # Preview requests safely fall back to the original media.
+    Image = None
+    ImageOps = None
+
 from openclaw_profile_activation import (
     ActivationConflict,
     ActivationError,
@@ -395,6 +401,9 @@ MEDIA_EXTENSIONS = {
     "audio": {".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav", ".webm"},
     "document": {".doc", ".docx", ".odt", ".pdf", ".rtf", ".rtfd", ".zip"},
 }
+MEDIA_PREVIEW_EXTENSIONS = {".avif", ".jpeg", ".jpg", ".png", ".webp"}
+MEDIA_PREVIEW_MIN_BYTES = 512 * 1024
+MEDIA_PREVIEW_MAX_SIZE = (640, 640)
 
 
 DEMO_GRAPH = {
@@ -4812,6 +4821,59 @@ def resolve_media_file_path(request_path):
     return None
 
 
+def media_preview_url_for_served_url(served_url):
+    text = str(served_url or "")
+    if not text.startswith("/media/"):
+        return None
+    return "/media-preview/" + text.split("/media/", 1)[1]
+
+
+def resolve_media_preview_file_path(request_path):
+    text = str(request_path or "")
+    if not text.startswith("/media-preview/"):
+        return None
+    return resolve_media_file_path("/media/" + text.split("/media-preview/", 1)[1])
+
+
+@lru_cache(maxsize=32)
+def image_preview_bytes(path, mtime_ns, size):
+    del mtime_ns, size
+    if Image is None or ImageOps is None:
+        return None
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(MEDIA_PREVIEW_MAX_SIZE, Image.Resampling.LANCZOS)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+            output = io.BytesIO()
+            image.save(output, "WEBP", quality=80, method=4)
+            return output.getvalue()
+    except (OSError, ValueError):
+        return None
+
+
+def enrich_media_reference_metadata(item):
+    enriched = dict(item)
+    served_url = enriched.get("served_url")
+    file_path = resolve_media_file_path(served_url) if served_url else None
+    if not file_path:
+        return enriched
+    try:
+        size_bytes = file_path.stat().st_size
+    except OSError:
+        return enriched
+    enriched["size_bytes"] = size_bytes
+    if (
+        Image is not None
+        and enriched.get("kind") == "image"
+        and file_path.suffix.lower() in MEDIA_PREVIEW_EXTENSIONS
+        and size_bytes >= MEDIA_PREVIEW_MIN_BYTES
+    ):
+        enriched["preview_url"] = media_preview_url_for_served_url(served_url)
+    return enriched
+
+
 def media_destination_for_relative_path(relative_path):
     if not MEDIA_ROOTS:
         return None
@@ -5040,7 +5102,7 @@ def gbrain_file_url_for_relative_path(base_url, relative_path):
 def ensure_media_reference_available(item):
     served_url = item.get("served_url")
     if not served_url or item.get("served_available"):
-        return item
+        return enrich_media_reference_metadata(item)
     relative_path = safe_media_relative_path(str(served_url).split("/media/", 1)[1] if "/media/" in served_url else item.get("url"))
     if not relative_path:
         return item
@@ -5086,7 +5148,7 @@ def ensure_media_reference_available(item):
         item = dict(item)
         item["served_available"] = result["served_available"]
         item["materialized_from"] = result["source"]
-    return item
+    return enrich_media_reference_metadata(item)
 
 
 def ensure_media_references_available(items):
@@ -9419,6 +9481,24 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if not head_only:
             self.wfile.write(file_path.read_bytes())
 
+    def serve_media_preview(self, request_path, head_only=False):
+        file_path = resolve_media_preview_file_path(request_path)
+        if not file_path or file_path.suffix.lower() not in MEDIA_PREVIEW_EXTENSIONS:
+            original_path = "/media/" + str(request_path or "").split("/media-preview/", 1)[-1]
+            return self.serve_media_file(original_path, head_only=head_only)
+        stat = file_path.stat()
+        body = image_preview_bytes(str(file_path), stat.st_mtime_ns, stat.st_size)
+        if body is None:
+            original_path = "/media/" + str(request_path or "").split("/media-preview/", 1)[-1]
+            return self.serve_media_file(original_path, head_only=head_only)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/webp")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(body)
+
     def serve_gbrain_file(self, request_path, head_only=False):
         relative_text = unquote(str(request_path or "").split("/gbrain-files/", 1)[1] if "/gbrain-files/" in str(request_path or "") else "")
         relative_path = safe_media_relative_path(relative_text)
@@ -9434,6 +9514,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/media-preview/"):
+            return self.serve_media_preview(parsed.path, head_only=True)
         if parsed.path.startswith("/media/"):
             return self.serve_media_file(parsed.path, head_only=True)
         if parsed.path.startswith("/gbrain-files/"):
@@ -9442,6 +9524,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/media-preview/"):
+            return self.serve_media_preview(parsed.path)
         if parsed.path.startswith("/media/"):
             return self.serve_media_file(parsed.path)
         if parsed.path.startswith("/gbrain-files/"):

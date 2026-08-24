@@ -2778,7 +2778,8 @@ function mediaDisplayUrl(url) {
   return `/media/${value.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function mediaItemDisplayUrl(item) {
+function mediaItemDisplayUrl(item, options = {}) {
+  if (options.preview && item?.preview_url) return item.preview_url;
   if (item?.served_url) return item.served_url;
   return mediaDisplayUrl(item?.url || "");
 }
@@ -2787,7 +2788,7 @@ function renderSingleMediaPreview(container, item, options = {}) {
   if (!container) return false;
   container.innerHTML = "";
   if (!item) return false;
-  const displayUrl = mediaItemDisplayUrl(item);
+  const displayUrl = mediaItemDisplayUrl(item, options);
   if (!displayUrl) return false;
   const canEmbed = Boolean(item.embeddable || item.served_available || item.served_url);
   let element = null;
@@ -2825,7 +2826,7 @@ function renderSelectionMediaPreview(items = [], slug = state.focusSlug || "") {
     setHudTooltip(selectionMediaSlug, slug || "");
   }
   const first = [...items].find((item) => item && (item.served_url || item.url));
-  const rendered = renderSingleMediaPreview(selectionMediaPreview, first, { eager: true });
+  const rendered = renderSingleMediaPreview(selectionMediaPreview, first, { eager: true, preview: true });
   selectionMediaPreview.hidden = !rendered;
   selectionMediaPreview.closest(".selection-blueprint")?.classList.toggle("has-media", rendered);
 }
