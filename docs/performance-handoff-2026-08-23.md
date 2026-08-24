@@ -16,11 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `750b2cc`
-- Current performance code commit: `750b2cc` (`perf: resolve unique exact labels locally`)
-- Previous pushed commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
+- Current merged and pushed source: `a3c2e0d`
+- Current performance code commit: `a3c2e0d` (`perf: coalesce concurrent Yoda context`)
+- Previous pushed commit: `381ca92` (`perf: coalesce concurrent Yoda source reads`)
+- Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 596 tests passed in 42.170 seconds.
+- Latest verification: 600 tests passed in 43.176 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -50,6 +51,8 @@ After the unique exact-label Search follow-up, the full suite passed 596 tests i
 After the concurrent Ask Yoda retrieval coalescing follow-up, the full suite passed 597 tests in 43.970 seconds with the same static checks passing.
 
 After the concurrent Ask Yoda source-page coalescing follow-up, the full suite passed 598 tests in 42.759 seconds with the same static checks passing.
+
+After the concurrent Ask Yoda stable-context coalescing follow-up, the full suite passed 600 tests in 43.176 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -250,6 +253,15 @@ Question-specific source pages now single-flight cold loads per slug while prese
 - Before: two concurrent four-page requests completed with a 177-millisecond wall time.
 - After: both completed in 111-112 milliseconds with a 112-millisecond wall time, a 36.7% improvement.
 - Correctness: both callers received all 4/4 pages with identical 25,125-byte output, and tests verify one underlying read per slug.
+
+### Concurrent Ask Yoda stable-context coalescing
+
+Ask Yoda's five-minute stable selected-node, broad-graph, and backlink context cache now uses the shared timed-cache single-flight primitive. Concurrent cold requests for the same slug and bounded graph depth share one complete context build. Force refresh and invalidation still clear the cache by generation, expired entries are pruned, and the cache remains bounded to eight contexts.
+
+- Before: two concurrent direct stable-context builds completed in 5.804 and 7.783 seconds, with a 7.783-second wall time. Both independently returned the same 2,323-byte selected node, 4,116,508-byte graph, and 1,764,474-byte backlink payload.
+- After: both callers completed in 4.017 seconds with a 4.018-second wall time, a 48.4% reduction. The owner reported `miss`; the waiter reported `coalesced_hit` and reused the owner's result.
+- Correctness: both callers received the same complete payload, the waiter launched no duplicate backend build, and regression tests cover coalescing, expiry pruning, capacity bounds, cache invalidation, and warm follow-up reuse.
+- The benchmark invoked no model and caused no product-service, GBrain-data, resolver, or deployment mutation.
 
 ## Earlier Performance Work
 
