@@ -37,6 +37,8 @@ After the whitespace-equivalent Search cache follow-up, the full suite passed 58
 
 After the whitespace-equivalent Ask Yoda retrieval cache follow-up, the full suite passed 589 tests in 44.957 seconds with the same static checks passing.
 
+After the bounded direct-relationship traversal follow-up, the full suite passed 591 tests in 59.892 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -174,6 +176,17 @@ Five real question-and-slug pairs measured before and after using normal and dou
 - Before: variant median 2.412 seconds; all five variants performed another GBrain query, and dynamic result text differed in 5/5 pairs.
 - After: variant median 0.088 milliseconds, greater than 99.99% median improvement; all five variants were cache hits.
 - Correctness: cached output matched the first query in 5/5 pairs, with zero additional GBrain calls.
+
+### Bounded direct-relationship traversal
+
+Entity detail loading now obtains outbound relationship types through the existing depth-one `graph-query` surface and still merges inbound relationship types from `backlinks`. This replaces the unbounded legacy `graph` command while retaining both relationship directions.
+
+Three representative nodes measured on the same host:
+
+- Before: `graph` exceeded its 20-second timeout for all 3/3 nodes before backlinks could complete.
+- After: complete outbound-plus-inbound relationship type reads finished in 51-345 milliseconds, with a 103-millisecond median; median improvement is greater than 99.4% against the timeout floor.
+- Coverage: the three reads returned 199, 332, and 4,037 distinct edges, with 253, 445, and 4,369 relationship types respectively.
+- The new parser accepts only depth-one outbound tree rows; backlinks remain the authoritative inbound supplement, and either source still fails independently without blocking the other.
 
 ## Earlier Performance Work
 

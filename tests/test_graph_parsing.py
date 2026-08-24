@@ -29,6 +29,7 @@ from server import (
     parse_backlinks,
     parse_frontmatter,
     extract_summary_from_markdown_body,
+    parse_graph_query_link_types,
     parse_link_types,
     materialize_local_media_for_slug,
     parse_multipart_form,
@@ -1405,6 +1406,54 @@ class GraphParsingTests(unittest.TestCase):
         edge_types = parse_link_types(output, "people/tony-guan")
 
         self.assertEqual(edge_types[("people/tony-guan", "universities/changan-university")], {"studied in"})
+
+    def test_parse_graph_query_link_types_reads_depth_one_outbound_relationships(self):
+        output = """[depth 0] people/tony-guan
+  --member_of-> categories/people (depth 1)
+  --authored-> collections/tony-guan-publications (depth 1)
+    --has_member-> posts/example (depth 2)
+"""
+        edge_types = parse_graph_query_link_types(output, "people/tony-guan")
+
+        self.assertEqual(
+            edge_types[("categories/people", "people/tony-guan")],
+            {"member_of"},
+        )
+        self.assertEqual(
+            edge_types[("collections/tony-guan-publications", "people/tony-guan")],
+            {"authored"},
+        )
+        self.assertNotIn(("people/tony-guan", "posts/example"), edge_types)
+
+    def test_direct_relationship_types_uses_bounded_outbound_query_and_backlinks(self):
+        store = GraphStore()
+
+        def fake_run(*args, **_kwargs):
+            if args == (
+                "graph-query",
+                "people/tony-guan",
+                "--direction",
+                "out",
+                "--depth",
+                "1",
+            ):
+                return "[depth 0] people/tony-guan\n  --member_of-> categories/people (depth 1)\n"
+            if args == ("backlinks", "people/tony-guan"):
+                return '[{"from_slug":"posts/example","to_slug":"people/tony-guan","link_type":"authored_by"}]'
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            edge_types = store.direct_relationship_types("people/tony-guan")
+
+        self.assertEqual(
+            edge_types[("categories/people", "people/tony-guan")],
+            {"member_of"},
+        )
+        self.assertEqual(
+            edge_types[("people/tony-guan", "posts/example")],
+            {"authored_by"},
+        )
+        self.assertEqual(run.call_count, 2)
 
     def test_parse_neighbors_ignores_unrelated_neighbor_edges_in_depth_one_json(self):
         output = """  Schema version 1 → 119 (114 migration(s) pending)

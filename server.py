@@ -4891,6 +4891,20 @@ def parse_link_types(raw_text, center_slug):
     return edge_types
 
 
+def parse_graph_query_link_types(raw_text, center_slug):
+    edge_types = defaultdict(set)
+    pattern = re.compile(r"^\s*--(?P<link_type>.+?)->\s+(?P<slug>\S+)\s+\(depth\s+1\)\s*$")
+    for line in str(raw_text or "").splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        target = match.group("slug").strip()
+        link_type = match.group("link_type").strip()
+        if target and target != center_slug and link_type:
+            edge_types[edge_key(center_slug, target)].add(link_type)
+    return edge_types
+
+
 def parse_backlinks(raw_text, center_slug):
     edges = set()
     backlinks = extract_json_list(raw_text)
@@ -6064,8 +6078,15 @@ class GraphStore:
     def direct_relationship_types(self, slug):
         edge_types = defaultdict(set)
         try:
-            graph_output = run_gbrain("graph", slug, "--depth", str(GRAPH_DEPTH))
-            merge_edge_types(edge_types, parse_link_types(graph_output, slug))
+            graph_output = run_gbrain(
+                "graph-query",
+                slug,
+                "--direction",
+                "out",
+                "--depth",
+                "1",
+            )
+            merge_edge_types(edge_types, parse_graph_query_link_types(graph_output, slug))
         except Exception:  # noqa: BLE001
             pass
         try:
