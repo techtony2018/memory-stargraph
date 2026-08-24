@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `a0f3419`
-- Current performance code commit: `a0f3419` (`perf: align search benchmark with product path`)
-- Previous pushed commit: `e1e6d27` (`perf: retain follow-up capability status`)
+- Current merged and pushed source: `41c90ce`
+- Current performance code commit: `41c90ce` (`perf: page large backlink responses`)
+- Previous pushed commit: `1d6dfb1` (`docs: record search benchmark calibration`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 618 tests passed in 40.646 seconds.
+- Latest verification: 622 tests passed in 41.938 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -112,6 +112,8 @@ After the retained Follow-ups capability-status follow-up, the full suite passed
 
 After the Search benchmark product-path calibration, the full suite passed 618 tests in 40.646 seconds. Python compilation and `git diff --check` also passed.
 
+After the paginated Backlinks response follow-up, the full suite passed 622 tests in 41.938 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. An isolated Playwright A/B run rendered the same 10-row first page and 443-page count without runtime errors.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -121,6 +123,20 @@ Do not stage, overwrite, revert, or include these unrelated Product Owner files 
 ```
 
 ## Improvements Completed
+
+### Paginated high-degree Backlinks responses
+
+Commit `41c90ce` adds an opt-in compact, server-paginated Backlinks response for the first-class UI while preserving the legacy full-output API contract. The server projects only the three fields rendered by the UI, caches that projection for the existing 30-second relationship window, returns one 10-row page at a time, and clamps out-of-range page requests. Unstructured backend output still falls back to the legacy response.
+
+For `people/tony-guan`, the current graph returned 4,421 backlinks. The previous UI response sent all records, including large context and origin metadata, even though the modal displayed only 10 rows. With the new path:
+
+- First-page response size fell from 1,973,531 bytes to 1,484 bytes, a 99.92% reduction.
+- Three alternating isolated-browser rounds reduced median modal-ready time from 1,194 milliseconds to 788 milliseconds, a 34.0% reduction.
+- A separate cold comparison measured 1,870 milliseconds before and 712 milliseconds after.
+- Cached compact endpoint requests completed in 1.4-3.1 milliseconds; later pages remained server-paginated and returned the same 10-row presentation.
+- The isolated browser verified page 1 and page 2, the 443-page total, and zero runtime errors.
+
+The benchmark used the same local configuration and graph cache for detached before/after source servers on ports 8800 and 8799. Both temporary servers and the detached worktree were removed after verification. No dashboard-managed service was deployed or restarted.
 
 ### Product-path Search benchmark calibration
 
