@@ -2689,6 +2689,39 @@ def takes_filters_from_query(query):
     return payload, holder, limit, offset
 
 
+def takes_complete_snapshot_compatible(payload):
+    allowed = {"active", "holder", "kind", "limit", "offset", "page_slug"}
+    if set(payload) - allowed:
+        return False
+    if payload.get("active") is False or parse_nonnegative_int(payload.get("offset"), 0) != 0:
+        return False
+    return not holder_filter_is_wildcard(payload.get("holder"))
+
+
+def filter_complete_take_snapshot(snapshot, payload):
+    normalized = normalize_take_collection(snapshot, "takes")
+    rows = normalized.get("takes") or []
+    exact_filters = {
+        key: str(payload.get(key) or "").strip().lower()
+        for key in ("page_slug", "holder", "kind")
+        if payload.get(key)
+    }
+    filtered = []
+    for row in rows:
+        if any(
+            str(row.get(key) or "").strip().lower() != expected
+            for key, expected in exact_filters.items()
+        ):
+            continue
+        if payload.get("active") is True and row.get("active") is not True:
+            continue
+        filtered.append(row)
+    result = dict(normalized)
+    result["takes"] = filtered
+    result["filters"] = dict(payload)
+    return result
+
+
 def take_review_action_payload(proposal_id, action, payload):
     raw_payload = payload if isinstance(payload, dict) else {}
     idempotency_key = str(raw_payload.get("idempotency_key") or "").strip()
@@ -7819,6 +7852,23 @@ class GraphStore:
     def list_takes(self, filters=None):
         payload = dict(filters or {})
         payload["limit"] = max(1, min(TAKES_VIEW_FETCH_LIMIT, int(payload.get("limit") or TAKES_VIEW_FETCH_LIMIT)))
+        complete_cache_key = "takes:complete"
+        if takes_complete_snapshot_compatible(payload):
+            cached_snapshot = self.take_review_cache.get(complete_cache_key)
+            if cached_snapshot is not None:
+                snapshot, complete = cached_snapshot
+                if complete:
+                    return filter_complete_take_snapshot(snapshot, payload)
+            else:
+                snapshot_payload = {"limit": TAKES_VIEW_FETCH_LIMIT, "offset": 0}
+                snapshot = normalize_take_collection(
+                    gbrain_call_tool("takes_list", snapshot_payload, timeout=30),
+                    "takes",
+                )
+                complete = len(snapshot.get("takes") or []) < TAKES_VIEW_FETCH_LIMIT
+                self.take_review_cache.put(complete_cache_key, (snapshot, complete))
+                if complete:
+                    return filter_complete_take_snapshot(snapshot, payload)
         cache_key = "takes:" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
         cached = self.take_review_cache.get(cache_key)
         if cached is not None:

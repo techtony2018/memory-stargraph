@@ -3103,13 +3103,71 @@ class ApiEndpointTests(unittest.TestCase):
 
     def test_takes_reuses_successful_result_cache(self):
         store = server.GraphStore()
-        result = {"takes": [{"id": 1, "claim": "Existing take"}]}
+        result = {
+            "takes": [
+                {
+                    "id": 1,
+                    "claim": "Existing take",
+                    "holder": "people/tony-guan",
+                    "active": True,
+                }
+            ]
+        }
         with mock.patch("server.gbrain_call_tool", return_value=result) as fake_tool:
             first = store.list_takes({"holder": "people/tony-guan", "limit": 500})
             second = store.list_takes({"holder": "people/tony-guan", "limit": 500})
 
         self.assertEqual(second, first)
         self.assertEqual(fake_tool.call_count, 1)
+
+    def test_takes_reuses_complete_snapshot_across_holder_filters(self):
+        store = server.GraphStore()
+        result = {
+            "takes": [
+                {"id": 1, "holder": "people/tony-guan", "active": True},
+                {"id": 2, "holder": "world", "active": True},
+                {"id": 3, "holder": "people/tony-guan", "active": False},
+            ]
+        }
+        with mock.patch("server.gbrain_call_tool", return_value=result) as fake_tool:
+            tony = store.list_takes({"holder": "people/tony-guan", "active": True, "limit": 500})
+            world = store.list_takes({"holder": "world", "limit": 500})
+
+        self.assertEqual([row["id"] for row in tony["takes"]], [1])
+        self.assertEqual([row["id"] for row in world["takes"]], [2])
+        fake_tool.assert_called_once_with(
+            "takes_list",
+            {"limit": server.TAKES_VIEW_FETCH_LIMIT, "offset": 0},
+            timeout=30,
+        )
+
+    def test_takes_falls_back_when_complete_snapshot_reaches_limit(self):
+        store = server.GraphStore()
+        full = [
+            {"id": index, "holder": "world", "active": True}
+            for index in range(server.TAKES_VIEW_FETCH_LIMIT)
+        ]
+        filtered = [{"id": "target", "holder": "people/tony-guan", "active": True}]
+        with mock.patch(
+            "server.gbrain_call_tool",
+            side_effect=[full, filtered],
+        ) as fake_tool:
+            result = store.list_takes({"holder": "people/tony-guan", "limit": 500})
+
+        self.assertEqual(result["takes"], filtered)
+        self.assertEqual(fake_tool.call_count, 2)
+        self.assertEqual(fake_tool.call_args_list[-1].args[:2], (
+            "takes_list",
+            {"holder": "people/tony-guan", "limit": 500},
+        ))
+
+    def test_takes_keeps_resolved_filter_on_direct_backend_path(self):
+        store = server.GraphStore()
+        payload = {"holder": "world", "resolved": False, "limit": 500}
+        with mock.patch("server.gbrain_call_tool", return_value={"takes": []}) as fake_tool:
+            store.list_takes(payload)
+
+        fake_tool.assert_called_once_with("takes_list", payload, timeout=30)
 
     def test_take_review_writes_invalidate_cached_lists(self):
         store = server.GraphStore()
