@@ -6041,6 +6041,10 @@ class GraphStore:
             ttl_seconds=30,
             max_entries=64,
         )
+        self.timeline_cache = TimedValueCache(
+            ttl_seconds=30,
+            max_entries=64,
+        )
         self.evidence_list_cache = EvidenceListCache()
 
     def prewarm_search_evidence(
@@ -6088,6 +6092,7 @@ class GraphStore:
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.relationship_type_cache.clear()
+            self.timeline_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6145,6 +6150,7 @@ class GraphStore:
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.relationship_type_cache.clear()
+            self.timeline_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6234,6 +6240,7 @@ class GraphStore:
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
             self.relationship_type_cache.clear()
+            self.timeline_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -7409,7 +7416,12 @@ class GraphStore:
         return run_gbrain("history", slug)
 
     def timeline(self, slug):
-        return run_gbrain("timeline", slug)
+        cached = self.timeline_cache.get(slug)
+        if cached is not None:
+            return cached
+        output = run_gbrain("timeline", slug)
+        self.timeline_cache.put(slug, output)
+        return output
 
     def refresh_embedding(self, slug):
         run_gbrain("embed", slug)

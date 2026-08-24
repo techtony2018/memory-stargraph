@@ -1735,6 +1735,30 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(dict(cached_edge_types), dict(edge_types))
 
+    def test_timeline_caches_successful_reads_and_invalidates_after_write(self):
+        store = GraphStore()
+
+        with mock.patch(
+            "server.run_gbrain",
+            side_effect=["No timeline entries.", None, "2026-08-23: Added event"],
+        ) as run:
+            first = store.timeline("products/memory-stargraph")
+            second = store.timeline("products/memory-stargraph")
+            store.add_timeline_event(
+                "products/memory-stargraph",
+                "2026-08-23",
+                "Added event",
+            )
+            refreshed = store.timeline("products/memory-stargraph")
+
+        self.assertEqual(first, "No timeline entries.")
+        self.assertEqual(second, first)
+        self.assertEqual(refreshed, "2026-08-23: Added event")
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(run.call_args_list[0].args, ("timeline", "products/memory-stargraph"))
+        self.assertEqual(run.call_args_list[1].args[:2], ("timeline-add", "products/memory-stargraph"))
+        self.assertEqual(run.call_args_list[2].args, ("timeline", "products/memory-stargraph"))
+
     def test_expand_entity_reuses_relationship_types_for_immediate_detail(self):
         store = GraphStore()
         graph = {
