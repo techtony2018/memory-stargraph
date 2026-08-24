@@ -1629,6 +1629,39 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["media"][0]["kind"], "image")
         self.assertIn(("get_entity_media", "people/tony-guan"), fake_store.calls)
 
+    def test_media_file_streams_original_bytes_in_bounded_chunks(self):
+        class RecordingWriter:
+            def __init__(self):
+                self.parts = []
+
+            def write(self, data):
+                self.parts.append(bytes(data))
+                return len(data)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            media_path = root / "products" / "memory-stargraph" / "large.png"
+            media_path.parent.mkdir(parents=True)
+            expected = b"x" * (server.MEDIA_STREAM_CHUNK_BYTES * 2 + 37)
+            media_path.write_bytes(expected)
+            handler = object.__new__(MemoryStargraphHandler)
+            handler.wfile = RecordingWriter()
+            handler.send_response = mock.Mock()
+            handler.send_header = mock.Mock()
+            handler.end_headers = mock.Mock()
+
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                handler.serve_media_file("/media/products/memory-stargraph/large.png")
+
+            self.assertEqual(b"".join(handler.wfile.parts), expected)
+            self.assertEqual(len(handler.wfile.parts), 3)
+            self.assertLessEqual(max(map(len, handler.wfile.parts)), server.MEDIA_STREAM_CHUNK_BYTES)
+
+            handler.wfile.parts.clear()
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                handler.serve_media_file("/media/products/memory-stargraph/large.png", head_only=True)
+            self.assertEqual(handler.wfile.parts, [])
+
     def test_entity_timeline_view_endpoint_is_read_only(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

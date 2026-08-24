@@ -404,6 +404,7 @@ MEDIA_EXTENSIONS = {
 MEDIA_PREVIEW_EXTENSIONS = {".avif", ".jpeg", ".jpg", ".png", ".webp"}
 MEDIA_PREVIEW_MIN_BYTES = 512 * 1024
 MEDIA_PREVIEW_MAX_SIZE = (640, 640)
+MEDIA_STREAM_CHUNK_BYTES = 1024 * 1024
 
 
 DEMO_GRAPH = {
@@ -9479,7 +9480,8 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         if not head_only:
-            self.wfile.write(file_path.read_bytes())
+            with file_path.open("rb") as source:
+                shutil.copyfileobj(source, self.wfile, length=MEDIA_STREAM_CHUNK_BYTES)
 
     def serve_media_preview(self, request_path, head_only=False):
         file_path = resolve_media_preview_file_path(request_path)

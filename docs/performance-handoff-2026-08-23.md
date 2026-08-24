@@ -829,6 +829,15 @@ Large local raster images now expose a read-only `preview_url` and byte size thr
 - A follow-up 20-image cold-cache endpoint A/B reduced WebP generation-and-response median from 195.75 to 145.14 milliseconds by using Pillow's lowest encoding effort, a 25.9% improvement; mean fell 22.6%. Preview bytes increased 18.3% across that intentionally large-image sample but remained a small fraction of the originals. On the representative UI crop, low-effort versus original PSNR was 32.26 dB desktop and 32.22 dB mobile, effectively identical to the prior encoder's 32.27 and 32.23 dB. Low- versus higher-effort previews had 44.74 and 50.95 dB mutual PSNR.
 - Tests cover metadata enrichment, traversal-safe preview resolution, WebP resizing, in-process cache reuse, frontend preview selection, and validated Brotli source attestation. After the low-effort encoder follow-up, the full suite passed 657 tests in 44.440 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Bounded original-media streaming
+
+Original `/media/` responses now stream files in fixed 1 MiB blocks instead of reading the complete file into each request thread before writing. Content type, content length, cache policy, HEAD behavior, source bytes, and the separate display-preview route remain unchanged.
+
+- A controlled eight-request slow-sink model used the 10,282,422-byte hiking image. Whole-file writes peaked at 78.51 MiB of traced Python allocations; 1 MiB blocks peaked at 14.06 MiB, an 82.1% reduction, while median completion changed from 0.521 to 0.564 seconds, an 8.3% tradeoff within the 10% guardrail.
+- A fresh-process HTTP A/B repeated the same eight concurrent downloads with slow receiving clients. Whole-file server RSS increased 78.80 MiB; streaming RSS increased 12.06 MiB, an 84.7% reduction. Completion improved slightly from 2.068 to 2.044 seconds, and all 8/8 responses contained the exact 10,282,422 source bytes.
+- A separate full-speed local HTTP A/B transferred 82,259,376 bytes per batch. Three direction-balanced rounds had 420.7- versus 363.2-millisecond median batch wall time and 340.2- versus 259.7-millisecond median request time, confirming no throughput regression.
+- Regression coverage verifies the 1 MiB write ceiling, exact byte reconstruction, and zero-body HEAD behavior. The full suite passed 658 tests in 41.144 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
