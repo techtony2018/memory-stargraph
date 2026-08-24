@@ -797,11 +797,13 @@ class GraphParsingTests(unittest.TestCase):
         ):
             first = store.search("memory stargraph")
             second = store.search("  MEMORY   STARGRAPH  ")
+            punctuated = store.search("Memory Stargraph?")
 
         search_calls = [call for call in run.call_args_list if call.args[0] == "search"]
         self.assertEqual(len(search_calls), 1)
         self.assertEqual(first["source"]["coverage"]["search_primary_cache_status"], "miss")
         self.assertEqual(second["source"]["coverage"]["search_primary_cache_status"], "hit")
+        self.assertEqual(punctuated["source"]["coverage"]["search_primary_cache_status"], "hit")
 
     def test_search_resolves_unique_exact_prewarmed_evidence_title_locally(self):
         store = GraphStore()

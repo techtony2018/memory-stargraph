@@ -5595,6 +5595,7 @@ def live_primary_search_results(query, timeout):
 
 def cached_primary_search_results(query, timeout, cache=None):
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    normalized_query = re.sub(r"[?!.]+$", "", normalized_query).rstrip()
     cache_key = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
     cached = cache.get(cache_key) if cache is not None else None
     if cached is not None:
