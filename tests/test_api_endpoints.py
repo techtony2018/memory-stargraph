@@ -3008,6 +3008,65 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual([row["id"] for row in result], [1, 2])
 
+    def test_take_proposals_reuses_successful_result_cache(self):
+        store = server.GraphStore()
+        result = {"proposals": [{"id": 1}], "counts": {"pending": 1}}
+        with mock.patch("server.gbrain_call_tool", return_value=result) as fake_tool:
+            first = store.list_take_proposals({"status": "pending", "limit": 20})
+            second = store.list_take_proposals({"status": "pending", "limit": 20})
+
+        self.assertEqual(second, first)
+        self.assertEqual(fake_tool.call_count, 1)
+
+    def test_take_proposals_reuses_explicit_missing_tool_capability(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError(
+            "GBrain backend does not expose take_proposals_list: Unknown tool: take_proposals_list"
+        )
+        with mock.patch("server.gbrain_call_tool", side_effect=missing_tool) as fake_tool:
+            with self.assertRaisesRegex(RuntimeError, "take_proposals_list"):
+                store.list_take_proposals({"status": "pending", "limit": 20})
+            with self.assertRaisesRegex(RuntimeError, "take_proposals_list"):
+                store.list_take_proposals({"status": "accepted", "limit": 20})
+
+        self.assertEqual(fake_tool.call_count, 1)
+
+    def test_take_proposals_does_not_cache_transient_failures(self):
+        store = server.GraphStore()
+        transient = RuntimeError("GBrain remote request timed out")
+        with mock.patch("server.gbrain_call_tool", side_effect=transient) as fake_tool:
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                store.list_take_proposals({"status": "pending", "limit": 20})
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                store.list_take_proposals({"status": "pending", "limit": 20})
+
+        self.assertEqual(fake_tool.call_count, 2)
+
+    def test_takes_reuses_successful_result_cache(self):
+        store = server.GraphStore()
+        result = {"takes": [{"id": 1, "claim": "Existing take"}]}
+        with mock.patch("server.gbrain_call_tool", return_value=result) as fake_tool:
+            first = store.list_takes({"holder": "people/tony-guan", "limit": 500})
+            second = store.list_takes({"holder": "people/tony-guan", "limit": 500})
+
+        self.assertEqual(second, first)
+        self.assertEqual(fake_tool.call_count, 1)
+
+    def test_take_review_writes_invalidate_cached_lists(self):
+        store = server.GraphStore()
+        store.take_review_cache.put("proposals:test", {"proposals": [{"id": 1}]})
+        store.take_review_cache.put("takes:test", {"takes": [{"id": 2}]})
+        with mock.patch("server.gbrain_call_tool", return_value={"status": "accepted"}):
+            store.review_take_proposal("1", "accept", {})
+
+        self.assertEqual(len(store.take_review_cache), 0)
+
+        store.take_review_cache.put("proposals:test", {"proposals": [{"id": 1}]})
+        with mock.patch("server.gbrain_call_tool", return_value={"results": []}):
+            store.bulk_review_take_proposals({"action": "reject", "ids": ["1"]})
+
+        self.assertEqual(len(store.take_review_cache), 0)
+
     def test_yoda_system_prompt_api_persists_and_resets_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)

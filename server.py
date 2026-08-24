@@ -3462,6 +3462,9 @@ YODA_CONTEXT_CACHE_MAX_ENTRIES = 8
 AUTOPILOT_FINDINGS_CACHE_SECONDS = 30
 AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES = 16
 AUTOPILOT_FINDINGS_CAPABILITY_CACHE_SECONDS = 300
+TAKE_REVIEW_CACHE_SECONDS = 30
+TAKE_REVIEW_CACHE_MAX_ENTRIES = 32
+TAKE_REVIEW_CAPABILITY_CACHE_SECONDS = 300
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
@@ -6144,6 +6147,14 @@ class GraphStore:
             ttl_seconds=AUTOPILOT_FINDINGS_CAPABILITY_CACHE_SECONDS,
             max_entries=1,
         )
+        self.take_review_cache = TimedValueCache(
+            ttl_seconds=TAKE_REVIEW_CACHE_SECONDS,
+            max_entries=TAKE_REVIEW_CACHE_MAX_ENTRIES,
+        )
+        self.take_review_capability_cache = TimedValueCache(
+            ttl_seconds=TAKE_REVIEW_CAPABILITY_CACHE_SECONDS,
+            max_entries=1,
+        )
         self.settings_evidence_cache = TimedValueCache(
             ttl_seconds=SETTINGS_EVIDENCE_CACHE_SECONDS,
             max_entries=1,
@@ -6199,6 +6210,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.take_review_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6261,6 +6273,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.take_review_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6364,6 +6377,7 @@ class GraphStore:
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.autopilot_findings_cache.clear()
+            self.take_review_cache.clear()
             self.settings_evidence_cache.clear()
             self.evidence_list_cache.clear()
 
@@ -7592,10 +7606,30 @@ class GraphStore:
     def list_take_proposals(self, filters=None):
         payload = dict(filters or {})
         payload["limit"] = clamp_take_review_limit(payload.get("limit"))
-        result = gbrain_call_tool("take_proposals_list", payload, timeout=30)
+        cache_key = "proposals:" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        cached = self.take_review_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        capability_key = "take_proposals_list:capability"
+        if self.take_review_capability_cache.get(capability_key) is False:
+            raise RuntimeError("GBrain backend does not expose take_proposals_list")
+        try:
+            result = gbrain_call_tool("take_proposals_list", payload, timeout=30)
+            self.take_review_capability_cache.put(capability_key, True)
+        except RuntimeError as exc:
+            message = str(exc)
+            missing_operation = (
+                "GBrain backend does not expose take_proposals_list" in message
+                or "Unknown tool: take_proposals_list" in message
+                or ("unknown_operation" in message and "take_proposals_list" in message)
+            )
+            if missing_operation:
+                self.take_review_capability_cache.put(capability_key, False)
+            raise
         normalized = normalize_take_collection(result, "proposals")
         normalized.setdefault("filters", payload)
         normalized.setdefault("counts", {})
+        self.take_review_cache.put(cache_key, normalized)
         return normalized
 
     def review_take_proposal(self, proposal_id, action, payload=None):
@@ -7604,6 +7638,7 @@ class GraphStore:
             raise ValueError("action must be accept, reject, or defer")
         review_payload = take_review_action_payload(proposal_id, normalized_action, payload or {})
         result = gbrain_call_tool(f"take_proposals_{normalized_action}", review_payload, timeout=45)
+        self.take_review_cache.clear()
         if isinstance(result, dict):
             return {"ok": True, "action": normalized_action, "proposal_id": str(proposal_id), **result}
         return {"ok": True, "action": normalized_action, "proposal_id": str(proposal_id), "result": result}
@@ -7611,6 +7646,7 @@ class GraphStore:
     def bulk_review_take_proposals(self, payload=None):
         review_payload = take_review_bulk_payload(payload or {})
         result = gbrain_call_tool("take_proposals_bulk", review_payload, timeout=60)
+        self.take_review_cache.clear()
         if isinstance(result, dict):
             return {"ok": True, **result}
         return {"ok": True, "results": result}
@@ -7618,9 +7654,14 @@ class GraphStore:
     def list_takes(self, filters=None):
         payload = dict(filters or {})
         payload["limit"] = max(1, min(TAKES_VIEW_FETCH_LIMIT, int(payload.get("limit") or TAKES_VIEW_FETCH_LIMIT)))
+        cache_key = "takes:" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        cached = self.take_review_cache.get(cache_key)
+        if cached is not None:
+            return cached
         result = gbrain_call_tool("takes_list", payload, timeout=30)
         normalized = normalize_take_collection(result, "takes")
         normalized.setdefault("filters", payload)
+        self.take_review_cache.put(cache_key, normalized)
         return normalized
 
     def list_autopilot_findings(self, filters=None):
