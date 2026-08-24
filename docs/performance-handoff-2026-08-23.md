@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `1ff4256`
-- Current performance code commit: `1ff4256` (`perf: bound dense flowing edge animation`)
+- Current merged and pushed source: `6559df8`
+- Current performance code commit: `6559df8` (`perf: avoid full-canvas background texture copy`)
 - Previous pushed commit: `0d29a23` (`docs: record rejected persistent takes read`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 645 tests passed in 53.413 seconds.
+- Latest verification: 645 tests passed in 40.628 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -507,6 +507,8 @@ The canvas renderer no longer gives every direct neighbor an expensive radial gl
 
 Commit `c445b1b` renders the two viewport-sized, visually static nebula/glow gradients once into a single offscreen Canvas and reuses that image on subsequent frames. The cache identity includes logical viewport width, height, and device pixel ratio, so resize and DPR changes rebuild the correctly sized texture. Canvas clearing, rotating radar rays, radar rings, twinkling stars, graph projection, clouds, edges, nodes, labels, and interactions remain on their existing live draw paths.
 
+This implementation was later superseded by `6559df8` after the current Chrome raster path made the full-viewport texture copy substantially slower than direct gradients. The measurements below remain the truthful result from the earlier runtime; see “Direct background gradients on current Chrome” for the current source and replacement evidence.
+
 - A forced-rasterization phase profile on the 314-node, 225-edge `people/tony-guan` view identified background drawing at a 12.5-millisecond median, versus clouds at 9.3 milliseconds, nodes at 8.1 milliseconds, edges at 2.4 milliseconds, and projection at 0.3 milliseconds.
 - In a four-page same-server alternating browser A/B, the forced background-phase median fell from 8.25 to 1.60 milliseconds, an 80.6% reduction.
 - The same benchmark's complete forced-frame median fell from 54.30 to 19.40 milliseconds, a 64.3% reduction. Graph parity held at 314 nodes, 225 edges, and the same selected focus with no page or console errors.
@@ -547,6 +549,16 @@ Commit `1ff4256` keeps every static graph edge but limits the animated dashed ov
 - A degree-24 `index` focus animated all 139 eligible edges in both revisions and produced no high-degree budget, verifying that lower-degree views are unchanged.
 - Fixed-time Canvas screenshots changed 3.7387% of desktop pixels and 7.5009% of mobile pixels. Mean RGB deltas were only 0.2013 and 0.5046; visual inspection retained a clear 48-edge flow field, all nodes and static edges, focus hierarchy, labels, and framing.
 - Desktop and mobile checks reported no page errors or horizontal overflow. The full suite passed 645 tests in 53.413 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
+### Direct background gradients on current Chrome
+
+Commit `6559df8` removes the full-viewport offscreen texture and draws the same two nebula/glow radial gradients directly on the live Canvas. This reverses the older `c445b1b` implementation only after new profiling showed that the current Chrome software raster path spends most background time copying the large texture. Radar rings, rotating rays, stars, colors, gradient stops, graph layers, and interactions are unchanged.
+
+- Isolated component profiling measured the current cached background at 94.4 milliseconds. Omitting only the texture reduced it to 2.8 milliseconds, while omitting radar or stars still took 87.5 and 92.1 milliseconds. The full-viewport `drawImage`, not the dynamic overlays, was the dominant cost.
+- Four same-server pages ran in before/after/after/before order with 274 nodes, 139 edges, a degree-116 focus, and 48 flowing edges in every sample. Aggregated background medians fell from 93.3 to 14.7 milliseconds, an 84.2% reduction.
+- Aggregated complete-frame medians fell from 123.0 to 65.4 milliseconds, a 46.9% reduction. Direction-balanced samples are retained because the software raster distributions remain noisy.
+- Fixed-time Canvas screenshots changed 1.4750% of desktop pixels and 2.4788% of mobile pixels. Mean RGB deltas were 0.1105 and 0.1690; visual inspection found the composition, nebula, glow, radar, stars, nodes, edges, labels, and focus hierarchy effectively unchanged.
+- Desktop and mobile retained exact node/edge/animation counts, no page errors, and no horizontal overflow. The full suite passed 645 tests in 40.628 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
 ### Search results released before detail hydration
 
