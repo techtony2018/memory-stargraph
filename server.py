@@ -6037,6 +6037,10 @@ class GraphStore:
             ttl_seconds=YODA_SOURCE_CACHE_SECONDS,
             max_entries=YODA_SOURCE_CACHE_MAX_ENTRIES,
         )
+        self.entity_raw_cache = TimedValueCache(
+            ttl_seconds=30,
+            max_entries=128,
+        )
         self.relationship_type_cache = TimedValueCache(
             ttl_seconds=30,
             max_entries=64,
@@ -6091,6 +6095,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
@@ -6149,6 +6154,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
@@ -6239,6 +6245,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
@@ -6260,7 +6267,9 @@ class GraphStore:
         if not should_fetch:
             return node
         try:
-            page_output = run_gbrain("get", slug, timeout=fetch_timeout)
+            page_output = self.get_entity_raw(slug, timeout=fetch_timeout)
+            if page_output is None:
+                raise RuntimeError("Page detail was unavailable")
             meta, body = parse_frontmatter(page_output)
             if meta.get("title"):
                 node["label"] = friendly_label(slug, str(meta["title"]))
@@ -6393,11 +6402,22 @@ class GraphStore:
             "source": graph["source"],
         }
 
-    def get_entity_raw(self, slug):
-        try:
-            return run_gbrain("get", slug)
-        except Exception:  # noqa: BLE001
-            return None
+    def get_entity_raw(self, slug, timeout=None):
+        cached = self.entity_raw_cache.get(slug)
+        if cached is not None:
+            return cached
+
+        def load():
+            if timeout is None:
+                return run_gbrain("get", slug)
+            return run_gbrain("get", slug, timeout=timeout)
+
+        raw, _load_status = self.entity_raw_cache.load_once(
+            slug,
+            load,
+            timeout=max(1, timeout or 20),
+        )
+        return raw
 
     def get_entities_raw(self, slugs, max_workers=4):
         ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))

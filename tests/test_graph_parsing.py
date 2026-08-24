@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
@@ -691,6 +692,7 @@ class GraphParsingTests(unittest.TestCase):
         store.primary_search_cache.put("query", (({"slug": "cached"},), "complete"))
         store.yoda_search_cache.put("question", "cached search")
         store.yoda_source_cache.put("source", "cached source")
+        store.entity_raw_cache.put("people/tony-guan", "cached raw page")
         store.relationship_type_cache.put("people/tony-guan", (("edge",),))
 
         store.invalidate()
@@ -699,6 +701,7 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIsNone(store.primary_search_cache.get("query"))
         self.assertIsNone(store.yoda_search_cache.get("question"))
         self.assertIsNone(store.yoda_source_cache.get("source"))
+        self.assertIsNone(store.entity_raw_cache.get("people/tony-guan"))
         self.assertIsNone(store.relationship_type_cache.get("people/tony-guan"))
         self.assertEqual(store.yoda_context_cache.entries, {})
 
@@ -1758,6 +1761,29 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args, ("timeline", "products/memory-stargraph"))
         self.assertEqual(run.call_args_list[1].args[:2], ("timeline-add", "products/memory-stargraph"))
         self.assertEqual(run.call_args_list[2].args, ("timeline", "products/memory-stargraph"))
+
+    def test_entity_raw_coalesces_concurrent_reads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_run(*args, **_kwargs):
+            self.assertEqual(args, ("get", "products/memory-stargraph"))
+            started.set()
+            release.wait(timeout=1)
+            return "# Memory Stargraph\n\nCached once."
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                owner = executor.submit(store.get_entity_raw, "products/memory-stargraph")
+                self.assertTrue(started.wait(timeout=1))
+                waiter = executor.submit(store.get_entity_raw, "products/memory-stargraph")
+                release.set()
+                owner_output = owner.result(timeout=1)
+                waiter_output = waiter.result(timeout=1)
+
+        self.assertEqual(owner_output, waiter_output)
+        self.assertEqual(run.call_count, 1)
 
     def test_expand_entity_reuses_relationship_types_for_immediate_detail(self):
         store = GraphStore()
