@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `6559df8`
-- Current performance code commit: `6559df8` (`perf: avoid full-canvas background texture copy`)
+- Current merged and pushed source: `9934ac4`
+- Current performance code commit: `9934ac4` (`perf: use CSS graph background depth`)
 - Previous pushed commit: `0d29a23` (`docs: record rejected persistent takes read`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 645 tests passed in 40.628 seconds.
+- Latest verification: 645 tests passed in 50.331 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -554,11 +554,23 @@ Commit `1ff4256` keeps every static graph edge but limits the animated dashed ov
 
 Commit `6559df8` removes the full-viewport offscreen texture and draws the same two nebula/glow radial gradients directly on the live Canvas. This reverses the older `c445b1b` implementation only after new profiling showed that the current Chrome software raster path spends most background time copying the large texture. Radar rings, rotating rays, stars, colors, gradient stops, graph layers, and interactions are unchanged.
 
+This intermediate implementation was then superseded by `9934ac4` after confirming that the existing `#graphCanvas` CSS already supplied four static gradient layers. The measurements below remain the direct-gradient evidence that removed the texture-copy regression; see “CSS-owned static graph depth” for the current source.
+
 - Isolated component profiling measured the current cached background at 94.4 milliseconds. Omitting only the texture reduced it to 2.8 milliseconds, while omitting radar or stars still took 87.5 and 92.1 milliseconds. The full-viewport `drawImage`, not the dynamic overlays, was the dominant cost.
 - Four same-server pages ran in before/after/after/before order with 274 nodes, 139 edges, a degree-116 focus, and 48 flowing edges in every sample. Aggregated background medians fell from 93.3 to 14.7 milliseconds, an 84.2% reduction.
 - Aggregated complete-frame medians fell from 123.0 to 65.4 milliseconds, a 46.9% reduction. Direction-balanced samples are retained because the software raster distributions remain noisy.
 - Fixed-time Canvas screenshots changed 1.4750% of desktop pixels and 2.4788% of mobile pixels. Mean RGB deltas were 0.1105 and 0.1690; visual inspection found the composition, nebula, glow, radar, stars, nodes, edges, labels, and focus hierarchy effectively unchanged.
 - Desktop and mobile retained exact node/edge/animation counts, no page errors, and no horizontal overflow. The full suite passed 645 tests in 40.628 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
+### CSS-owned static graph depth
+
+Commit `9934ac4` removes the two remaining static radial gradients from the per-frame Canvas draw because the canvas element already has four CSS background gradients. The Canvas stays transparent after clearing and draws only dynamic radar rings, rotating rays, stars, clouds, edges, nodes, and labels. No CSS or DOM layer was added.
+
+- Four same-server browser pages ran in before/after/after/before order on the same 274-node, 139-edge, degree-116 view with 48 flowing edges. Aggregated background medians fell from 18.0 to 1.85 milliseconds, an 89.7% reduction.
+- Aggregated complete-frame medians fell from 128.9 to 90.2 milliseconds, a 30.0% reduction despite wide software-raster tails.
+- Desktop and mobile retained exact node, edge, focus, and animation counts with no runtime errors or horizontal overflow.
+- The CSS-only static layer changes broad low-contrast gradient pixels: 70.7958% desktop and 36.3974% mobile. Mean RGB deltas remained 3.5969 and 1.6289. Visual inspection retained a rich dark space background, purple/cyan/gold depth, radar, stars, graph hierarchy, labels, and mobile framing.
+- The full suite passed 645 tests in 50.331 seconds; Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
 ### Search results released before detail hydration
 
