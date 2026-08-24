@@ -15,7 +15,8 @@
 - Resumed performance code commit: `47bc335` (`perf: reuse persistent GBrain search session`)
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
-- Current merged and pushed source: `d20d7fd` (includes concurrent remote MCP activation fix `69baafc`)
+- Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
+- Current merged and pushed source: `592fbef` (includes concurrent remote MCP activation fix `69baafc`)
 - Current performance code commit: `8509431` (`perf: coalesce concurrent primary searches`)
 - Previous pushed commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
@@ -27,6 +28,8 @@ After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. 
 After the persistent read-session follow-up, the full suite passed 582 tests in 68.913 seconds with the same static checks passing.
 
 After the graph-context follow-up, the full suite passed 584 tests in 62.608 seconds with the same static checks passing.
+
+After the read-lane follow-up, the full suite passed 584 tests in 40.152 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -100,6 +103,13 @@ The current ten-case privacy-safe Ask Yoda context matrix measured:
 - Mean grounding recall: 1.0; warm cache hits: 10/10; degraded cold cases: zero.
 - One optional graph timeout remained, from the benchmark's deliberately forced slow-graph case.
 
+Commit `592fbef` lets short `get`, `backlinks`, and `graph-query` calls wait up to two seconds for the persistent lane instead of falling back after 250 milliseconds. External `search` and `query` calls retain the 250-millisecond limit. In the same warm-database ten-case matrix:
+
+- Cold context median: 1.550 seconds to 1.172 seconds.
+- Cold context p95: 2.911 seconds to 1.902 seconds.
+- Backlinks median/p95: 266/1772 milliseconds to 216/851 milliseconds.
+- Mean grounding recall remained 1.0; degraded cases remained zero.
+
 ### Repeated primary search cache
 
 Commit `395cb22` caches complete primary `gbrain search` results for 30 seconds.
@@ -171,7 +181,9 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
-Ask Yoda context is still materially slower than Search, but the current ten-case median is 4.186 seconds rather than 12.572 seconds. Profile the ten-case subphase distribution again before the next implementation; likely candidates are hybrid `query` execution and repeated operational/TODO context reads, not process startup.
+Ask Yoda context is still materially slower than Search. Its first fresh-session ten-case median is 4.186 seconds rather than 12.572 seconds, while the subsequent warm-database median is 1.172 seconds. The remaining candidate is hybrid `query`, not process startup or repeated operational/TODO reads.
+
+In a subsequent warm-database profile, hybrid `query` was the remaining dominant phase at a 934-millisecond median. A `detail=low` experiment preserved slug order in 10/10 microbenchmark cases, but its full-matrix median/p95 were 1.221/2.029 seconds versus 1.172/1.902 seconds without the flag. The experiment was rejected as ordinary variance and was not committed. Do not replace hybrid query with plain search: its mean result-set overlap was only 0.447 in the same matrix.
 
 The installed GBrain remains `0.46.28.0`. The dashboard's current local config selects the local GBrain binary, so the persistent stdio child uses the same configured identity and data source as the existing Search subprocess. The concurrent `69baafc` change separately routes profile activation through configured remote MCP when that surface is present; it was merged and verified with this performance change.
 
