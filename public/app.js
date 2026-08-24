@@ -139,8 +139,10 @@ const state = {
 };
 
 const canvas = document.getElementById("graphCanvas");
+const flowCanvas = document.getElementById("graphFlowCanvas");
 const nodeCanvas = document.getElementById("graphNodeCanvas");
 let ctx = canvas.getContext("2d");
+const flowCtx = flowCanvas.getContext("2d");
 const nodeCtx = nodeCanvas.getContext("2d");
 const workspace = document.querySelector(".workspace");
 const graphCanvasWrap = document.querySelector(".graph-canvas-wrap");
@@ -338,7 +340,7 @@ function resizeCanvas() {
   state.viewport.width = rect.width;
   state.viewport.height = rect.height;
   state.viewport.dpr = Math.max(1, window.devicePixelRatio || 1);
-  [canvas, nodeCanvas].forEach((layer) => {
+  [canvas, flowCanvas, nodeCanvas].forEach((layer) => {
     layer.width = Math.round(rect.width * state.viewport.dpr);
     layer.height = Math.round(rect.height * state.viewport.dpr);
     layer.getContext("2d").setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
@@ -2313,10 +2315,26 @@ function flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors = null) {
     || isLinkedToFocus(edge.target);
 }
 
-function drawEdges() {
+function drawFlowingParticle(edge, alpha, layer, now) {
+  const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
+  const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
+  const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
+  ctx.save();
+  ctx.globalAlpha = Math.min(0.86, 0.28 + alpha * 0.58);
+  ctx.fillStyle = layer === 2 ? "rgba(250, 204, 21, 0.95)" : "rgba(34, 211, 238, 0.86)";
+  ctx.shadowColor = ctx.fillStyle;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(particleX, particleY, layer === 2 ? 2.4 : 1.7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawEdges(options = {}) {
   const now = performance.now();
   const highDegreeFocusNeighbors = animatedFocusNeighborSlugs();
-  drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
+  const orderedEdges = options.edges || drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right));
+  orderedEdges.forEach((edge) => {
     const alpha = edgeAlpha(edge);
     if (alpha <= 0) return;
     const layer = edgeLayer(edge);
@@ -2325,6 +2343,11 @@ function drawEdges() {
       && edge.source.slug !== edge.target.slug
       && ((edge.source.slug === state.focusSlug && edge.target.slug === state.hoverSlug)
         || (edge.target.slug === state.focusSlug && edge.source.slug === state.hoverSlug));
+    const animated = flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors);
+    if (options.particlesOnly) {
+      if (animated && (layer > 0 || isHoveredFocusEdge)) drawFlowingParticle(edge, alpha, layer, now);
+      return;
+    }
     const depthAlpha = Math.max(0.28, Math.min(1, (edge.source.depthScale + edge.target.depthScale) / 2));
     const screenDistance = Math.hypot(edge.source.screenX - edge.target.screenX, edge.source.screenY - edge.target.screenY);
     const nearFactor = Math.max(0.25, 1 - screenDistance / Math.max(420, state.viewport.width * 0.55));
@@ -2345,20 +2368,8 @@ function drawEdges() {
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
     ctx.stroke();
 
-    const animated = flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors);
-    if (animated && (layer > 0 || isHoveredFocusEdge)) {
-      const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
-      const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
-      const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
-      ctx.save();
-      ctx.globalAlpha = Math.min(0.86, 0.28 + alpha * 0.58);
-      ctx.fillStyle = layer === 2 ? "rgba(250, 204, 21, 0.95)" : "rgba(34, 211, 238, 0.86)";
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(particleX, particleY, layer === 2 ? 2.4 : 1.7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+    if (!options.omitParticles && animated && (layer > 0 || isHoveredFocusEdge)) {
+      drawFlowingParticle(edge, alpha, layer, now);
     }
 
     const linkTypes = isHoveredFocusEdge ? relationshipTypes(edge.source.slug, edge.target.slug) : [];
@@ -2615,12 +2626,20 @@ function render(frameTimestamp = performance.now()) {
     || Math.abs(state.rotation.vy) > 0.00002;
   state.renderDirty = false;
   state.animationTick = (state.animationTick + 0.7) % 1000;
-  drawBackground();
   tick();
-  drawClusterClouds();
-  drawEdges();
   const staticFrameDue = frameTimestamp - state.staticGraphLastRenderedAt >= STATIC_GRAPH_FRAME_INTERVAL_MS;
-  if (renderWasDirty || projectionMoving || staticFrameDue) {
+  const staticLayersDue = renderWasDirty || projectionMoving || staticFrameDue;
+  const orderedEdges = drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right));
+  if (staticLayersDue) {
+    drawBackground();
+    drawClusterClouds();
+    drawEdges({ edges: orderedEdges, omitParticles: true });
+  }
+  withCanvasContext(flowCtx, () => {
+    flowCtx.clearRect(0, 0, state.viewport.width, state.viewport.height);
+    drawEdges({ edges: orderedEdges, particlesOnly: true });
+  });
+  if (staticLayersDue) {
     withCanvasContext(nodeCtx, () => {
       nodeCtx.clearRect(0, 0, state.viewport.width, state.viewport.height);
       drawNodes();

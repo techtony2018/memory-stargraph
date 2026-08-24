@@ -623,8 +623,12 @@ h2 {
   -webkit-touch-callout: none;
 }
 
-#graphNodeCanvas {
+#graphFlowCanvas {
   z-index: 2;
+}
+
+#graphNodeCanvas {
+  z-index: 3;
 }
 
 .canvas-overlay {
