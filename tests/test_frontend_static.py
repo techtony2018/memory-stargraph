@@ -29,7 +29,7 @@ class ActionableControlParser(HTMLParser):
 
 
 class FrontendStaticTests(unittest.TestCase):
-    def test_slug_deep_links_setup_diagnostics_and_single_canvas_background_are_wired(self):
+    def test_slug_deep_links_setup_diagnostics_and_layered_canvas_background_are_wired(self):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public" / "app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
@@ -48,7 +48,13 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('id="settingsDiagnosticsButton"', markup)
         self.assertIn("/api/setup-diagnostics", script)
         self.assertIn("openSetupDiagnosticsWindow", script)
-        self.assertEqual(styles.count("#graphCanvas {\n  background:"), 1)
+        self.assertIn('id="graphCanvas" class="graph-canvas-layer"', markup)
+        self.assertIn('id="graphNodeCanvas" class="graph-canvas-layer graph-canvas-underlay"', markup)
+        self.assertEqual(markup.count('class="graph-canvas-layer'), 2)
+        self.assertEqual(styles.count(".graph-canvas-wrap {\n  background:"), 1)
+        self.assertIn("#graphCanvas {\n  position: relative;\n  z-index: 1", styles)
+        self.assertIn("#graphNodeCanvas {\n  z-index: 2", styles)
+        self.assertNotIn(".graph-canvas-wrap,\n  #graphCanvas", styles)
 
     def test_canvas_supports_mobile_safari_touch_drag_tap_hint_and_pinch_zoom(self):
         styles = (ROOT / "public" / "styles.css").read_text()
@@ -1081,12 +1087,17 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("flowingEdgeIsAnimated", script)
         self.assertIn("const HIGH_DEGREE_FOCUS_THRESHOLD = 80", script)
         self.assertIn("const HIGH_DEGREE_ANIMATED_EDGE_LIMIT = 48", script)
+        self.assertIn("const STATIC_GRAPH_FRAME_INTERVAL_MS = 1000 / 15", script)
         self.assertIn("function animatedFocusNeighborSlugs()", script)
         self.assertIn("(focused.degree || 0) <= HIGH_DEGREE_FOCUS_THRESHOLD", script)
         self.assertIn(".slice(0, HIGH_DEGREE_ANIMATED_EDGE_LIMIT)", script)
         self.assertIn("const highDegreeFocusNeighbors = animatedFocusNeighborSlugs()", script)
         self.assertIn("const animated = flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors)", script)
         self.assertEqual(script.count("flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors)"), 1)
+        self.assertIn("function withCanvasContext(targetContext, draw)", script)
+        self.assertIn("const staticFrameDue = frameTimestamp - state.staticGraphLastRenderedAt >= STATIC_GRAPH_FRAME_INTERVAL_MS", script)
+        self.assertIn("drawEdges()", script)
+        self.assertIn("withCanvasContext(nodeCtx", script)
         self.assertIn("isImportantNodeForLod", script)
         self.assertIn("(focused?.degree || 0) <= 80", script)
         self.assertIn("(node.degree || 0) >= 5 || state.zoom >= 1.65", script)

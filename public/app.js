@@ -12,6 +12,7 @@ const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
 const HIGH_DEGREE_FOCUS_THRESHOLD = 80;
 const HIGH_DEGREE_ANIMATED_EDGE_LIMIT = 48;
+const STATIC_GRAPH_FRAME_INTERVAL_MS = 1000 / 15;
 const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 const PLANNED_PLAYBACK_KEY = "memory-stargraph.planned-playback.v1";
 const ACTIVATION_PROGRESS_KEY = "memory-stargraph.activation-progress.v1";
@@ -43,6 +44,7 @@ const state = {
   visibleLabelSlugs: [],
   animationHandle: null,
   renderDirty: true,
+  staticGraphLastRenderedAt: 0,
   isRefreshing: false,
   lastRefreshAt: null,
   pendingSettings: null,
@@ -137,7 +139,9 @@ const state = {
 };
 
 const canvas = document.getElementById("graphCanvas");
-const ctx = canvas.getContext("2d");
+const nodeCanvas = document.getElementById("graphNodeCanvas");
+let ctx = canvas.getContext("2d");
+const nodeCtx = nodeCanvas.getContext("2d");
 const workspace = document.querySelector(".workspace");
 const graphCanvasWrap = document.querySelector(".graph-canvas-wrap");
 const detailPanel = document.querySelector(".detail-panel");
@@ -334,9 +338,12 @@ function resizeCanvas() {
   state.viewport.width = rect.width;
   state.viewport.height = rect.height;
   state.viewport.dpr = Math.max(1, window.devicePixelRatio || 1);
-  canvas.width = Math.round(rect.width * state.viewport.dpr);
-  canvas.height = Math.round(rect.height * state.viewport.dpr);
-  ctx.setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
+  [canvas, nodeCanvas].forEach((layer) => {
+    layer.width = Math.round(rect.width * state.viewport.dpr);
+    layer.height = Math.round(rect.height * state.viewport.dpr);
+    layer.getContext("2d").setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
+  });
+  state.staticGraphLastRenderedAt = 0;
   requestRender();
 }
 
@@ -2586,18 +2593,39 @@ function drawNodes() {
   state.visibleLabelSlugs = visibleLabelSlugs;
 }
 
-function render() {
+function withCanvasContext(targetContext, draw) {
+  const previousContext = ctx;
+  ctx = targetContext;
+  try {
+    draw();
+  } finally {
+    ctx = previousContext;
+  }
+}
+
+function render(frameTimestamp = performance.now()) {
   state.animationHandle = null;
   if (!state.renderDirty && !shouldAnimateContinuously()) {
     return;
   }
+  const renderWasDirty = state.renderDirty;
+  const projectionMoving = state.drag.active
+    || Math.abs(state.rotation.vx) > 0.00002
+    || Math.abs(state.rotation.vy) > 0.00002;
   state.renderDirty = false;
   state.animationTick = (state.animationTick + 0.7) % 1000;
   drawBackground();
   tick();
   drawClusterClouds();
   drawEdges();
-  drawNodes();
+  const staticFrameDue = frameTimestamp - state.staticGraphLastRenderedAt >= STATIC_GRAPH_FRAME_INTERVAL_MS;
+  if (renderWasDirty || projectionMoving || staticFrameDue) {
+    withCanvasContext(nodeCtx, () => {
+      nodeCtx.clearRect(0, 0, state.viewport.width, state.viewport.height);
+      drawNodes();
+    });
+    state.staticGraphLastRenderedAt = frameTimestamp;
+  }
   if (!shouldAnimateContinuously()) {
     state.animationHandle = null;
     return;
