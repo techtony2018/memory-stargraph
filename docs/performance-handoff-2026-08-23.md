@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `5d21fee`
-- Current performance code commit: `5d21fee` (`perf: share settings evidence snapshot`)
-- Previous pushed commit: `d07f07e` (`perf: overlap settings evidence reads`)
+- Current merged and pushed source: `d02dca5`
+- Current performance code commit: `d02dca5` (`perf: prioritize interactive settings evidence`)
+- Previous pushed commit: `5d21fee` (`perf: share settings evidence snapshot`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 613 tests passed in 61.334 seconds.
+- Latest verification: 613 tests passed in 45.534 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -93,6 +93,8 @@ After the node-cache content-write coalescing follow-up, the full suite passed 6
 After the Settings evidence overlap follow-up, the full suite passed 612 tests in 42.917 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed. The Settings/readiness Playwright parity smoke passed against the isolated source server, including initial load, manual refresh, auto refresh, API/UI parity, and privacy checks.
 
 After the shared Settings evidence snapshot follow-up, the full suite passed 613 tests in 61.334 seconds with the same static checks passing. The isolated Playwright parity smoke again passed initial load, manual refresh, auto refresh, API/UI parity, and privacy checks using the combined endpoint.
+
+After the interactive Settings priority follow-up, the full suite passed 613 tests in 45.534 seconds with the same static checks passing. The Settings parity smoke passed and its initial settled request id was `1`, confirming hover and click shared one in-flight request.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -477,6 +479,15 @@ The Settings panel now requests one `/api/settings-evidence` snapshot instead of
 - This is another 34.7% median reduction from the preceding two-request 1.889-second result and a cumulative 61.7% reduction from the original 3.223-second Settings baseline.
 - The response carried both complete card payloads in 17,076 bytes. UI/API parity held for all visible gate counts, readiness counts, statuses, and configured-target evidence.
 - The endpoint test requires exactly one digest construction and verifies that readiness receives the same digest object. Existing standalone endpoints retain their prior behavior.
+
+Settings refreshes now share one in-flight browser Promise. This removes the duplicate request caused when pointer hover opens the flyout immediately before its click handler pins it. Low-priority initial timeline-badge and deferred startup reads wait at least 2 seconds; if Settings evidence is then active, they wait for that user-requested snapshot to settle. Explicit Timeline opens and non-system selections keep their existing immediate reads.
+
+- A same-server alternating Playwright comparison intercepted only `app.js`, so both variants used the same current workspace, GBrain, graph data, server process, and machine state.
+- Baseline click-to-cards samples were 5.546, 6.332, and 7.255 seconds with two Settings requests each.
+- Prioritized samples were 2.556, 3.654, and 4.289 seconds with one Settings request each.
+- Median click-to-cards time fell from 6.332 to 3.654 seconds, a 42.3% reduction; request count fell 50%.
+- The first attempted detached-worktree comparison was discarded because that checkout lacked current host-local runtime state and produced invalid 404/502 behavior. Its timings are not included in the result.
+- Initial system selection still loads entity and media immediately. Timeline remains immediate for manual, Search, history, and deep-link selection, and explicit Timeline opens bypass the deferred badge path.
 
 ## Earlier Performance Work
 
