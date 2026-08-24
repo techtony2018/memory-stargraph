@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `343bcfd`
-- Current performance code commit: `343bcfd` (`perf: bound high-degree graph glows`)
-- Previous pushed commit: `a4a3cc4` (`perf: reuse expanded relationship outputs`)
+- Current merged and pushed source: `8ca1f13`
+- Current performance code commit: `8ca1f13` (`perf: release search results before details`)
+- Previous pushed commit: `343bcfd` (`perf: bound high-degree graph glows`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 609 tests passed in 44.742 seconds.
+- Latest verification: 609 tests passed in 47.081 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -81,6 +81,8 @@ After the raw entity-read coalescing follow-up, the full suite passed 609 tests 
 After the expanded relationship-output reuse follow-up, the full suite passed 609 tests in 40.315 seconds. Python compilation and `git diff --check` also passed.
 
 After the high-degree graph-glow follow-up, the full suite passed 609 tests in 44.742 seconds. JavaScript syntax and `git diff --check` also passed. An isolated browser run rendered a nonblank 276-node, 139-edge canvas with no runtime errors.
+
+After the Search result-release follow-up, the full suite passed 609 tests in 47.081 seconds. JavaScript syntax, the 71 focused frontend tests, and `git diff --check` also passed after the final stale-selection guard.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -418,6 +420,16 @@ The canvas renderer no longer gives every direct neighbor an expensive radial gl
 - A browser pixel check found 587,594 nontransparent canvas pixels and 516,916 bright pixels. The 276-node, 139-edge graph, selection details, focus treatment, and labels remained visible with no page errors.
 - The change does not lower graph data, hide nodes or edges, disable flowing-edge animation, or alter lower-degree focus views. It only bounds the most expensive glow tier at the default zoom.
 
+### Search results released before detail hydration
+
+Natural-language Search now releases its loading state as soon as the result graph and preferred focus are available. The selected graph result is rendered immediately, while direct-neighbor expansion, entity markdown, media, and timeline hydration continue through the existing cancellable entity loader. A newer manual selection increments the selection version and prevents the older background completion from changing feedback or detail state.
+
+- Before: three browser searches remained loading for another 270, 518, and 636 milliseconds after `/api/search` returned.
+- After: the same result-ready tail was 8, 14, and 19 milliseconds. Median post-result wait fell from 518 to 14 milliseconds, a 97.3% reduction.
+- Complete details still arrived 116-307 milliseconds after the result-ready state in the ordinary samples.
+- With the entity endpoint intentionally delayed by 2 seconds, Search unlocked with the correct focus and loading-details state, then hydrated to the complete six-link entity at 3.132 seconds. The user can search or select another node during that delay.
+- Backend Search time and retrieval semantics are unchanged. This improvement removes avoidable UI serialization after the ranked result already exists.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -465,7 +477,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, concurrent raw page consumers single-flight, and high-degree graph views bound their expensive glow tier. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all warm-service latency.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, concurrent raw page consumers single-flight, high-degree graph views bound their expensive glow tier, and Search no longer waits for detail hydration after ranked results arrive. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all result-ready latency.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
@@ -493,6 +505,8 @@ Switching uncached primary Search from the default balanced mode to `tokenmax` w
 Skipping passive 3D reprojection after rotation fell below its animation threshold was rejected. The change removed about 1,104 projection sine/cosine calls per frame on the 276-node high-degree view, but fixed-frame task time did not improve: the accepted glow baseline was 92.67 milliseconds per draw, while the no-reprojection samples were 96-104 milliseconds per draw. Canvas gradient filling remained dominant, so the theoretical arithmetic reduction was reverted rather than presented as a user-visible win.
 
 Caching the 21 stable cluster-cloud gradients on an offscreen canvas was rejected. It reduced stable-frame gradient creation from 31 to about 10.5 per draw, but six alternating in-page samples showed only a 1% task-time median improvement: 40.82 milliseconds per direct draw versus 40.43 milliseconds per cached draw. Offscreen `drawImage` composition replaced most of the gradient cost instead of removing it, so the cache and its invalidation state were fully reverted.
+
+Restricting high-degree flowing-edge animation to direct focus edges was not implemented. The measured 116-link view animated only 23 second-ring edges beyond its 116 direct edges. Those 23 extra dashed strokes were about 4% of the 569 total canvas strokes per frame, below the acceptance threshold before accounting for unchanged nodes, clouds, and background work.
 
 A warm-service phase profile over eight fresh Search queries confirmed that application overhead is no longer the general bottleneck: total median was 1.186 seconds, primary GBrain retrieval 1.164 seconds, evidence ranking 2 milliseconds, loaded-graph matching 3 milliseconds, merge 1 millisecond, and finalize 12 milliseconds.
 
