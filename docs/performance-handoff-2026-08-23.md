@@ -514,6 +514,17 @@ Commit `c445b1b` renders the two viewport-sized, visually static nebula/glow gra
 - Desktop and mobile screenshots remained nonblank and correctly framed. The DPR2 mobile texture was allocated at exactly twice the logical viewport dimensions, and neither viewport had horizontal overflow.
 - The full suite passed 643 tests in 41.235 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Removed redundant node core shadows
+
+Commit `6332d43` removes the second blurred shadow from important node cores. Important nodes still receive the existing degree-aware radial gradient, solid colored core, focus/neighbor/search stroke, labels, media markers, and hub highlight. Nonimportant nodes already used zero blur, so their rendering is unchanged. A static contract test prevents the expensive core `shadowBlur` from being stacked back on top of the retained radial glow.
+
+- Four alternating same-server browser samples used the same 314-node, 225-edge `people/tony-guan` focus and forced Canvas rasterization after every sample.
+- The direct node-stage median fell from 8.90 to 7.10 milliseconds, a 20.2% reduction.
+- The complete-frame median fell from 40.60 to 19.40 milliseconds, a 52.2% reduction; after samples were also substantially tighter than the baseline's delayed-rasterization tail.
+- Fixed-time, fixed-rotation pixel comparisons changed 1.680% of desktop pixels and 3.397% of mobile pixels. Mean RGB deltas were 0.0456 and 0.0817, with maximum deltas of 26 and 29 localized to the removed core blur. Desktop and mobile screenshots retained the visible radial hierarchy, focus treatment, labels, and nonblank graph.
+- Both viewports had no horizontal overflow, page errors, or console errors. Graph node/edge/focus parity held in every timing sample.
+- The full suite passed 644 tests in 40.768 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Search results released before detail hydration
 
 Natural-language Search now releases its loading state as soon as the result graph and preferred focus are available. The selected graph result is rendered immediately, while direct-neighbor expansion, entity markdown, media, and timeline hydration continue through the existing cancellable entity loader. A newer manual selection increments the selection version and prevents the older background completion from changing feedback or detail state.
