@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `a4a3cc4`
-- Current performance code commit: `a4a3cc4` (`perf: reuse expanded relationship outputs`)
-- Previous pushed commit: `a5abb72` (`perf: coalesce raw entity reads`)
+- Current merged and pushed source: `343bcfd`
+- Current performance code commit: `343bcfd` (`perf: bound high-degree graph glows`)
+- Previous pushed commit: `a4a3cc4` (`perf: reuse expanded relationship outputs`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 609 tests passed in 40.315 seconds.
+- Latest verification: 609 tests passed in 44.742 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -79,6 +79,8 @@ After the repeated timeline-read cache follow-up, the full suite passed 608 test
 After the raw entity-read coalescing follow-up, the full suite passed 609 tests in 46.912 seconds. Python compilation and `git diff --check` also passed.
 
 After the expanded relationship-output reuse follow-up, the full suite passed 609 tests in 40.315 seconds. Python compilation and `git diff --check` also passed.
+
+After the high-degree graph-glow follow-up, the full suite passed 609 tests in 44.742 seconds. JavaScript syntax and `git diff --check` also passed. An isolated browser run rendered a nonblank 276-node, 139-edge canvas with no runtime errors.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -406,6 +408,16 @@ Lazy expansion now retains the successful raw `graph-query --direction out --dep
 - After expansion, Relationships returned the same 2,300 bytes in 16 microseconds and Backlinks returned the same 183,013 bytes in 20 microseconds. Warm repeats took 12 and 4 microseconds, greater than 99.99% reductions from the uncached samples.
 - Tests verify expansion makes exactly the original two backend calls, then both modal reads reuse the exact raw outputs without another call. The 32-entry bound limits memory exposure from large backlink payloads.
 
+### Bounded high-degree graph glows
+
+The canvas renderer no longer gives every direct neighbor an expensive radial glow when the focused node is a high-degree hub. Focus, hover, visible top hubs, globally high-degree nodes, and direct neighbors with degree at least 5 retain the glow at normal zoom. All direct neighbors retain it for focused nodes with degree 80 or lower, and zooming to 165% restores it for detailed inspection.
+
+- On the 116-link `people/tony-guan` view, a fixed 20-frame benchmark reduced radial gradients from 141 to 31 per frame, a 78.0% reduction.
+- The same forced-frame sequence fell from 2.303 seconds to 1.763 seconds, a 23.4% reduction.
+- Chrome task time per draw fell from 120.45 milliseconds to 92.67 milliseconds, a 23.1% reduction in the same isolated software-rendering environment.
+- A browser pixel check found 587,594 nontransparent canvas pixels and 516,916 bright pixels. The 276-node, 139-edge graph, selection details, focus treatment, and labels remained visible with no page errors.
+- The change does not lower graph data, hide nodes or edges, disable flowing-edge animation, or alter lower-degree focus views. It only bounds the most expensive glow tier at the default zoom.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -453,7 +465,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, and concurrent raw page consumers single-flight. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all warm-service latency.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, concurrent raw page consumers single-flight, and high-degree graph views bound their expensive glow tier. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all warm-service latency.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
