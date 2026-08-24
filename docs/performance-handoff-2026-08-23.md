@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `9ccef04`
-- Current performance code commit: `9ccef04` (`perf: cache resolver review reads`)
-- Previous pushed commit: `2894b9d` (`docs: record take review cache benchmark`)
+- Current merged and pushed source: `6a6dc16`
+- Current performance code commit: `6a6dc16` (`perf: discover optional gbrain tools once`)
+- Previous pushed commit: `d1393d7` (`docs: record rejected deferred badge load`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 636 tests passed in 45.133 seconds.
+- Latest verification: 639 tests passed in 42.066 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -626,6 +626,15 @@ Resolver review health and proposal-list reads now use the same bounded freshnes
 - After one 2,264.1-millisecond cold process probe, five repeated parallel loads took 8.1, 9.0, 6.7, 7.6, and 4.9 milliseconds; median was 7.6 milliseconds, a 99.47% reduction from the repeated pre-change median. Statuses remained `[200, 502]`.
 - After the 30-second result TTL expired but within the five-minute capability TTL, the next read took 68.4 milliseconds and the immediate repeat took 7.8 milliseconds. Local health evidence was reread without repeating known-unsupported remote probes.
 - Cache keys include the active GBrain caller and local ledger paths so test, configuration, and source-context changes cannot reuse incompatible evidence. Tests verify success reuse, explicit capability reuse, result-expiry behavior, transient-error retries, write invalidation, and the complete resolver generate/review/apply/impact lifecycle. The full suite passed 636 tests in 45.133 seconds.
+
+### Shared optional GBrain tool discovery
+
+The local CLI path now discovers four optional read capabilities through one machine-readable `gbrain --tools-json` manifest instead of launching four known-failing `gbrain call` processes. Manifest loads are single-flight across concurrent requests and reusable for five minutes. Cache identity includes the resolved GBrain binary, binary mtime and size, GBrain config environment, and caller identity. Remote MCP remains on its existing direct-call path. A missing, malformed, incomplete, or timed-out manifest fails open to the previous per-tool probe, while a valid manifest can only short-circuit tools it proves absent.
+
+- Before, direct sequential probes for `take_proposals_list`, `resolver_feedback_health`, `resolver_proposals_list`, and `autopilot_findings_list` took 1,099.8, 1,088.9, 1,217.1, and 1,144.5 milliseconds, or 4,550.4 milliseconds total.
+- After, a cold process spent 1,058.6 milliseconds on the shared manifest; the remaining three decisions took 0.7, 0.5, and 0.5 milliseconds. Total was 1,060.3 milliseconds, a 76.7% reduction.
+- A strict isolated-server A/B used the same four concurrent HTTP reads. Commit `d1393d7` took 4,701.0 milliseconds wall time. The new source took 1,143.9 milliseconds, a 75.7% reduction. Response semantics remained `[502, 200, 502, 200]`, Resolver health still used its local read-only fallback, and Follow-ups still used the GBrain-tag fallback.
+- The immediate repeated HTTP batch took 10.6 milliseconds. Tests cover proven absence without a failed tool call, manifest reuse across all four optional tools, malformed-manifest fallback, existing negative capability caches, and fallback behavior. The full suite passed 639 tests in 42.066 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
 ## Earlier Performance Work
 
