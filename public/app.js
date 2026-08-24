@@ -2196,7 +2196,7 @@ function drawClusterClouds() {
   if (!state.cloudMode || !state.filteredSlugs.size) return;
   const groups = new Map();
   const cloudNodes = drawableNodes();
-  const minimumCloudNodes = cloudNodes.length > 240 ? 8 : 4;
+  const minimumCloudNodes = cloudNodes.length > 240 ? 12 : 4;
   cloudNodes.forEach((node) => {
     if (isClusterHidden(node) || isHiddenByHubConnection(node)) return;
     const alpha = nodeAlpha(node);

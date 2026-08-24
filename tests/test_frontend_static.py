@@ -216,7 +216,7 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public" / "app.js").read_text()
 
         self.assertIn("const cloudNodes = drawableNodes()", script)
-        self.assertIn("const minimumCloudNodes = cloudNodes.length > 240 ? 8 : 4", script)
+        self.assertIn("const minimumCloudNodes = cloudNodes.length > 240 ? 12 : 4", script)
         self.assertIn("if (nodes.length < minimumCloudNodes) return", script)
 
     def test_restored_yoda_history_uses_the_same_formatted_chat_renderer(self):
