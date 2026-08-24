@@ -5482,7 +5482,7 @@ def graph_to_raw_payload(graph):
     }
 
 
-def expand_raw_graph(raw_graph, center_slug, relationship_types_out=None):
+def expand_raw_graph(raw_graph, center_slug, relationship_types_out=None, relationship_outputs_out=None):
     nodes = {}
     edge_set = set()
     edge_types = defaultdict(set)
@@ -5525,6 +5525,8 @@ def expand_raw_graph(raw_graph, center_slug, relationship_types_out=None):
         "--depth",
         str(GRAPH_DEPTH),
     )
+    if relationship_outputs_out is not None:
+        relationship_outputs_out["graph_query"] = graph_output
     outbound_types = parse_graph_query_link_types(graph_output, center_slug)
     if relationship_types_out is not None:
         merge_edge_types(relationship_types_out, outbound_types)
@@ -5532,6 +5534,8 @@ def expand_raw_graph(raw_graph, center_slug, relationship_types_out=None):
     discovered_edges = set(graph_edges)
     merge_edge_types(edge_types, outbound_types)
     backlinks_output = run_gbrain("backlinks", center_slug)
+    if relationship_outputs_out is not None:
+        relationship_outputs_out["backlinks"] = backlinks_output
     backlink_edges = parse_backlinks(backlinks_output, center_slug)
     backlink_types = parse_backlink_types(backlinks_output, center_slug)
     if relationship_types_out is not None:
@@ -6045,6 +6049,10 @@ class GraphStore:
             ttl_seconds=30,
             max_entries=64,
         )
+        self.relationship_output_cache = TimedValueCache(
+            ttl_seconds=30,
+            max_entries=32,
+        )
         self.timeline_cache = TimedValueCache(
             ttl_seconds=30,
             max_entries=64,
@@ -6097,6 +6105,7 @@ class GraphStore:
             self.yoda_source_cache.clear()
             self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
+            self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6156,6 +6165,7 @@ class GraphStore:
             self.yoda_source_cache.clear()
             self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
+            self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
@@ -6213,8 +6223,17 @@ class GraphStore:
             return graph
         raw_graph = graph_to_raw_payload(graph)
         relationship_types = defaultdict(set)
-        payload = finalize_graph(expand_raw_graph(raw_graph, slug, relationship_types))
+        relationship_outputs = {}
+        payload = finalize_graph(expand_raw_graph(raw_graph, slug, relationship_types, relationship_outputs))
         self.cache_relationship_types(slug, relationship_types)
+        self.relationship_output_cache.put(
+            ("graph-query", slug, "", "out", str(GRAPH_DEPTH)),
+            relationship_outputs["graph_query"],
+        )
+        self.relationship_output_cache.put(
+            ("backlinks", slug),
+            relationship_outputs["backlinks"],
+        )
         write_cache(payload)
         with self.condition:
             self.graph = payload
@@ -6247,6 +6266,7 @@ class GraphStore:
             self.yoda_source_cache.clear()
             self.entity_raw_cache.clear()
             self.relationship_type_cache.clear()
+            self.relationship_output_cache.clear()
             self.timeline_cache.clear()
             self.evidence_list_cache.clear()
 
@@ -7263,9 +7283,20 @@ class GraphStore:
         }
 
     def backlinks(self, slug):
-        return run_gbrain("backlinks", slug)
+        cache_key = ("backlinks", slug)
+        cached = self.relationship_output_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        output = run_gbrain("backlinks", slug)
+        self.relationship_output_cache.put(cache_key, output)
+        return output
 
     def graph_query(self, slug, link_type="", direction="both", depth="1"):
+        normalized_direction = {"outgoing": "out", "incoming": "in"}.get(direction, direction)
+        cache_key = ("graph-query", slug, link_type, normalized_direction, str(depth))
+        cached = self.relationship_output_cache.get(cache_key)
+        if cached is not None:
+            return cached
         command = ["graph-query", slug]
         if link_type:
             command.extend(["--type", link_type])
@@ -7274,7 +7305,9 @@ class GraphStore:
         if depth:
             command.extend(["--depth", str(depth)])
         try:
-            return run_gbrain(*command)
+            output = run_gbrain(*command)
+            self.relationship_output_cache.put(cache_key, output)
+            return output
         except RuntimeError as exc:
             message = str(exc)
             if "database_url is missing" not in message and "No database URL" not in message:

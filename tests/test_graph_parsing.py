@@ -694,6 +694,7 @@ class GraphParsingTests(unittest.TestCase):
         store.yoda_source_cache.put("source", "cached source")
         store.entity_raw_cache.put("people/tony-guan", "cached raw page")
         store.relationship_type_cache.put("people/tony-guan", (("edge",),))
+        store.relationship_output_cache.put(("backlinks", "people/tony-guan"), "cached backlinks")
 
         store.invalidate()
 
@@ -703,6 +704,7 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIsNone(store.yoda_source_cache.get("source"))
         self.assertIsNone(store.entity_raw_cache.get("people/tony-guan"))
         self.assertIsNone(store.relationship_type_cache.get("people/tony-guan"))
+        self.assertIsNone(store.relationship_output_cache.get(("backlinks", "people/tony-guan")))
         self.assertEqual(store.yoda_context_cache.entries, {})
 
     def test_timed_value_cache_expires_and_bounds_entries(self):
@@ -1818,6 +1820,12 @@ class GraphParsingTests(unittest.TestCase):
         ):
             expanded = store.expand_entity("people/tony-guan")
             cached_edge_types = store.direct_relationship_types("people/tony-guan")
+            cached_graph_output = store.graph_query(
+                "people/tony-guan",
+                direction="outgoing",
+                depth="1",
+            )
+            cached_backlinks_output = store.backlinks("people/tony-guan")
 
         self.assertEqual(run.call_count, 2)
         self.assertEqual(
@@ -1828,6 +1836,8 @@ class GraphParsingTests(unittest.TestCase):
             cached_edge_types[("organizations/erfa", "people/tony-guan")],
             {"led_by"},
         )
+        self.assertEqual(cached_graph_output, graph_output)
+        self.assertEqual(cached_backlinks_output, backlinks_output)
         center = next(node for node in expanded["nodes"] if node["slug"] == "people/tony-guan")
         self.assertTrue(center["expanded"])
 
