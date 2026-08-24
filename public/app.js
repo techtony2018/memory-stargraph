@@ -10,6 +10,8 @@ const NODE_CACHE_MAX_BYTES = 20 * 1024 * 1024;
 const NODE_CACHE_STORAGE_KEY = "memory-stargraph.node-cache.v1";
 const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
+const HIGH_DEGREE_FOCUS_THRESHOLD = 80;
+const HIGH_DEGREE_ANIMATED_EDGE_LIMIT = 48;
 const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 const PLANNED_PLAYBACK_KEY = "memory-stargraph.planned-playback.v1";
 const ACTIVATION_PROGRESS_KEY = "memory-stargraph.activation-progress.v1";
@@ -2292,18 +2294,38 @@ function isImportantNodeForLod(node, topHubs = new Set()) {
   return (focused?.degree || 0) <= 80 || (node.degree || 0) >= 5 || state.zoom >= 1.65;
 }
 
-function flowingEdgeIsAnimated(edge) {
+function animatedFocusNeighborSlugs() {
+  if (!state.flowingEdges || !state.focusSlug) return null;
+  const focused = state.nodeMap.get(state.focusSlug);
+  if (!focused || (focused.degree || 0) <= HIGH_DEGREE_FOCUS_THRESHOLD) return null;
+  return new Set(
+    (focused.links || [])
+      .map((slug) => state.nodeMap.get(slug))
+      .filter(Boolean)
+      .sort((left, right) => (right.degree || 0) - (left.degree || 0) || left.slug.localeCompare(right.slug))
+      .slice(0, HIGH_DEGREE_ANIMATED_EDGE_LIMIT)
+      .map((node) => node.slug),
+  );
+}
+
+function flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors = null) {
   if (!state.flowingEdges) return false;
+  const hoveredSlug = state.hoverSlug && state.hoverSlug !== state.focusSlug ? state.hoverSlug : null;
+  if (hoveredSlug && (edge.source.slug === hoveredSlug || edge.target.slug === hoveredSlug)) return true;
+  if (highDegreeFocusNeighbors) {
+    if (edge.source.slug === state.focusSlug) return highDegreeFocusNeighbors.has(edge.target.slug);
+    if (edge.target.slug === state.focusSlug) return highDegreeFocusNeighbors.has(edge.source.slug);
+    return false;
+  }
   return edge.source.slug === state.focusSlug
     || edge.target.slug === state.focusSlug
-    || edge.source.slug === state.hoverSlug
-    || edge.target.slug === state.hoverSlug
     || isLinkedToFocus(edge.source)
     || isLinkedToFocus(edge.target);
 }
 
 function drawEdges() {
   const now = performance.now();
+  const highDegreeFocusNeighbors = animatedFocusNeighborSlugs();
   drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right)).forEach((edge) => {
     const alpha = edgeAlpha(edge);
     if (alpha <= 0) return;
@@ -2333,7 +2355,8 @@ function drawEdges() {
     ctx.lineTo(edge.target.screenX, edge.target.screenY);
     ctx.stroke();
 
-    if (flowingEdgeIsAnimated(edge)) {
+    const animated = flowingEdgeIsAnimated(edge, highDegreeFocusNeighbors);
+    if (animated) {
       ctx.save();
       ctx.setLineDash([6, 14]);
       ctx.lineDashOffset = -state.animationTick;
@@ -2349,7 +2372,7 @@ function drawEdges() {
       ctx.restore();
     }
 
-    if (flowingEdgeIsAnimated(edge) && (layer > 0 || isHoveredFocusEdge)) {
+    if (animated && (layer > 0 || isHoveredFocusEdge)) {
       const phase = ((now / (900 + (edge.source.degree || 1) * 12)) + ((edge.source.pulseOffset || 0) % 1)) % 1;
       const particleX = edge.source.screenX + (edge.target.screenX - edge.source.screenX) * phase;
       const particleY = edge.source.screenY + (edge.target.screenY - edge.source.screenY) * phase;
