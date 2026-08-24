@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `0e08e3b`
-- Current performance code commit: `0e08e3b` (`perf: reuse follow-up fallback snapshot`)
-- Previous pushed commit: `0763a35` (`perf: reuse follow-up capability status`)
+- Current merged and pushed source: `884be03`
+- Current performance code commit: `884be03` (`perf: overlap follow-up tag reads`)
+- Previous pushed commit: `0e08e3b` (`perf: reuse follow-up fallback snapshot`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 614 tests passed in 40.162 seconds.
+- Latest verification: 615 tests passed in 40.640 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -103,6 +103,8 @@ After the repeated Follow-ups listing cache follow-up, the full suite passed 613
 After the Follow-ups capability-status reuse follow-up, the full suite passed 614 tests in 41.344 seconds with the same static checks passing.
 
 After the Follow-ups fallback-snapshot reuse follow-up, the full suite passed 614 tests in 40.162 seconds. Python compilation and `git diff --check` also passed.
+
+After the Follow-ups parallel tag-read follow-up, the full suite passed 615 tests in 40.640 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -525,6 +527,12 @@ The fallback now also caches its unfiltered, normalized, sorted page snapshot by
 - A real cold badge request took 3.452 seconds and populated the 20-page fallback snapshot.
 - The subsequent modal request with a different limit completed in 0.042 milliseconds; a different state filter completed in 0.025 milliseconds. Both are more than 99.99% below the prior 2.176-2.211-second repeated fallback samples.
 - Tests verify the badge and modal paths perform one two-tag scan total, and that a later state filter returns the correct subset without another tag or page read.
+
+The two independent read-only fallback tag listings now run concurrently. Detail-page reads remain bounded and sequential, so this removes avoidable list latency without increasing page-read fanout.
+
+- Two alternating serial tag-list samples took 2.172 and 2.185 seconds; concurrent samples took 1.451 and 1.393 seconds with identical output lengths, reducing this phase by 33.6% and 36.3%.
+- Three complete cold badge requests after the change took 2.513, 2.577, and 2.488 seconds, with a 2.513-second median. That is 27.2% below the preceding same-environment 3.452-second serial cold sample.
+- A barrier-based regression test verifies both tag reads overlap. The full fallback tests still cover missing-tool handling, bounded reads, state filtering, and snapshot reuse.
 
 ## Earlier Performance Work
 
