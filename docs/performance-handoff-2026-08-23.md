@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `8ee2877`
-- Current performance code commit: `8ee2877` (`perf: cache repeated follow-up listings`)
-- Previous pushed commit: `b1e585e` (`perf: defer startup reads during interaction`)
+- Current merged and pushed source: `0763a35`
+- Current performance code commit: `0763a35` (`perf: reuse follow-up capability status`)
+- Previous pushed commit: `8ee2877` (`perf: cache repeated follow-up listings`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 613 tests passed in 51.719 seconds.
+- Latest verification: 614 tests passed in 41.344 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -99,6 +99,8 @@ After the interactive Settings priority follow-up, the full suite passed 613 tes
 After the general interactive startup-read deferral follow-up, the full suite passed 613 tests in 47.030 seconds with static checks passing. The Settings parity smoke also passed initial load, manual refresh, auto refresh, API/UI parity, and privacy checks.
 
 After the repeated Follow-ups listing cache follow-up, the full suite passed 613 tests in 51.719 seconds. Python compilation and `git diff --check` also passed.
+
+After the Follow-ups capability-status reuse follow-up, the full suite passed 614 tests in 41.344 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -509,6 +511,12 @@ Normalized read-only Autopilot Follow-ups list results now use a 30-second cache
 - In the accepted run, the cold fallback took 6.031 seconds. The next three same-filter reads took 0.143, 0.039, and 0.015 milliseconds, greater than 99.99% below the uncached median.
 - Tests verify repeated fallback reads perform one tool capability attempt and one pass over the two bounded fallback tags, while returning the exact same normalized payload.
 - Cache keys include normalized state, limit, and offset. Different views do not share incompatible pagination, and external changes become visible after at most 30 seconds even without an explicit invalidation.
+
+The same short-lived cache now records whether `autopilot_findings_list` is supported. When one filter proves the installed backend lacks the tool, other filter or pagination combinations skip only the redundant capability call and still execute the supported tag fallback. Expiry or any existing cache invalidation causes a fresh capability check.
+
+- The cold path split into a 1.360-second missing-tool probe and a 2.860-second tag fallback.
+- With capability status reused, two different uncached filters completed through fallback in 2.176 and 2.211 seconds instead of repeating the roughly 4.220-second full path, reductions of 48.4% and 47.6%.
+- Tests verify two different filters make one capability call while independently performing their required bounded tag reads.
 
 ## Earlier Performance Work
 
