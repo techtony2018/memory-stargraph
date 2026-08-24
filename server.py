@@ -6961,7 +6961,15 @@ class GraphStore:
             )
             return context, int((time.perf_counter() - started) * 1000)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        def load_search_output():
+            started = time.perf_counter()
+            try:
+                output = self.get_yoda_search_output(f"{effective_question} {slug}")
+            except Exception as exc:  # noqa: BLE001
+                output = f"Broader retrieval unavailable: {exc}"
+            return output, int((time.perf_counter() - started) * 1000)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
             current_todo_future = executor.submit(
                 build_timed_context,
                 self.build_yoda_current_todo_context,
@@ -6970,8 +6978,10 @@ class GraphStore:
                 build_timed_context,
                 self.build_yoda_operational_remediation_context,
             )
+            search_output_future = executor.submit(load_search_output)
             current_todo_context, current_todo_ms = current_todo_future.result()
             operational_context, operational_ms = operational_future.result()
+            search_output, search_ms = search_output_future.result()
 
         current_todo_text = current_todo_context.get("text") or ""
         if current_todo_text:
@@ -6993,12 +7003,7 @@ class GraphStore:
             )
             counts.update(operational_context.get("counts") or {})
             trace["operational_state"] = operational_ms
-        phase_started = time.perf_counter()
-        try:
-            search_output = self.get_yoda_search_output(f"{effective_question} {slug}")
-        except Exception as exc:  # noqa: BLE001
-            search_output = f"Broader retrieval unavailable: {exc}"
-        trace["search"] = int((time.perf_counter() - phase_started) * 1000)
+        trace["search"] = search_ms
         lines.extend(["", "Broader retrieval context:", str(search_output or "")[:6000]])
         search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
         if not search_slugs:

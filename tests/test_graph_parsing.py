@@ -2926,9 +2926,9 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("## SG-0123 child node", prompt)
         self.assertIn("Status: completed", prompt)
 
-    def test_yoda_prompt_builds_todo_and_operational_context_concurrently_in_order(self):
+    def test_yoda_prompt_builds_status_and_search_context_concurrently_in_order(self):
         store = GraphStore()
-        barrier = threading.Barrier(2, timeout=1)
+        barrier = threading.Barrier(3, timeout=1)
 
         def build_current(*_args, **_kwargs):
             barrier.wait()
@@ -2938,10 +2938,14 @@ cover_image: companies/example-inc/logo.jpg
             barrier.wait()
             return {"text": "OPERATIONAL CONTEXT", "counts": {"operational_state_rows": 1}}
 
+        def load_search(_query):
+            barrier.wait()
+            return ""
+
         with (
             mock.patch.object(store, "build_yoda_current_todo_context", side_effect=build_current),
             mock.patch.object(store, "build_yoda_operational_remediation_context", side_effect=build_operational),
-            mock.patch.object(store, "get_yoda_search_output", return_value=""),
+            mock.patch.object(store, "get_yoda_search_output", side_effect=load_search),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
         ):
             trace = {}
@@ -2962,6 +2966,7 @@ cover_image: companies/example-inc/logo.jpg
         self.assertLess(prompt.index("CURRENT TODO CONTEXT"), prompt.index("OPERATIONAL CONTEXT"))
         self.assertIn("current_todo_state", trace)
         self.assertIn("operational_state", trace)
+        self.assertIn("search", trace)
         self.assertEqual(counts["current_todo_rows"], 1)
         self.assertEqual(counts["operational_state_rows"], 1)
 
