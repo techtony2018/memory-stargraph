@@ -12,11 +12,15 @@
 
 ## Current Source State
 
+- Resumed performance code commit: `47bc335` (`perf: reuse persistent GBrain search session`)
+- Current merged and pushed source: `06481dd` (includes concurrent remote MCP activation fix `69baafc`)
 - Current performance code commit: `8509431` (`perf: coalesce concurrent primary searches`)
 - Previous pushed commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
 - Latest verification: 567 tests passed in 40.592 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
+
+After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -27,6 +31,27 @@ Do not stage, overwrite, revert, or include these unrelated Product Owner files 
 ```
 
 ## Improvements Completed
+
+### Persistent GBrain search session
+
+Commit `47bc335` keeps one initialized `gbrain serve --surface starter` stdio process for read-only Search calls. Unsupported operations, a busy persistent lane, startup failures, process exits, and timeouts fail closed to the existing CLI subprocess path. Runtime config changes and server shutdown close the child cleanly; health output exposes active, ready, and busy state.
+
+The committed 20-query transport benchmark measured:
+
+- CLI subprocess median: 1.638 seconds; p95: 2.194 seconds; mean: 1.789 seconds.
+- Persistent stdio median: 299 milliseconds; p95: 646 milliseconds; mean: 329 milliseconds.
+- Median transport improvement: 81.75%.
+- Exact parsed result parity: 20/20, including slug, order, score, label, and preview.
+- Forced child termination recovered with a new process in 2.450 seconds and returned 20 results.
+
+An isolated same-source end-to-end `/api/search` benchmark compared `HEAD` before the change with the resumed worktree. Both servers started fresh and received the same eight unique queries in alternating endpoint order:
+
+- Before median: 4.161 seconds; p95: 6.082 seconds; mean: 3.993 seconds.
+- After median: 960 milliseconds; p95: 2.771 seconds; mean: 1.097 seconds.
+- Median end-to-end improvement: 76.92%.
+- Final search slug order parity: 8/8; primary search completed in 8/8 cases on both paths.
+
+No dashboard-managed product service or existing GBrain HTTP service was restarted or redeployed. The isolated acceptance servers were stopped after the benchmark.
 
 ### Repeated primary search cache
 
@@ -97,36 +122,13 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 
 ## Next Bottleneck
 
-Cold primary search is now the dominant remaining Search cost. The installed GBrain reports version `0.46.28.0`.
+Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
-- `gbrain --version`: 931-millisecond median across five runs.
-- `gbrain status`: 1.260-second median across five runs.
-- Cold `gbrain search`: commonly 1.6-4.2 seconds in this session.
+Ask Yoda is also still materially slower than Search. The last full benchmark median was 12.572 seconds, so the persistent Search integration should be remeasured there before choosing between model latency, source hydration, and graph-context construction as the next implementation target.
 
-This shows that process startup is a material part of the remaining latency. The next bounded experiment should evaluate a persistent GBrain transport (`gbrain serve` over stdio or local HTTP) against the existing subprocess path.
+The installed GBrain remains `0.46.28.0`. The dashboard's current local config selects the local GBrain binary, so the persistent stdio child uses the same configured identity and data source as the existing Search subprocess. The concurrent `69baafc` change separately routes profile activation through configured remote MCP when that surface is present; it was merged and verified with this performance change.
 
-The host already has a managed persistent service:
-
-- Process: `gbrain serve --http --port 3131 --bind 127.0.0.1 ...`
-- Read-only probe: `GET http://127.0.0.1:3131/health` returned HTTP 200 in 53 milliseconds.
-- Probe payload: status `ok`, version `0.46.28.0`, engine `postgres`.
-- A plain GET to `/mcp` returned HTTP 405, as expected for an MCP endpoint requiring the correct method and authentication flow.
-- An unauthenticated MCP `initialize` POST returned HTTP 401 in 36 milliseconds with a `WWW-Authenticate` challenge.
-- Reuse this existing managed service for the benchmark. Do not restart it or launch a competing GBrain server.
-
-Recommended sequence:
-
-1. Add a benchmark-only persistent stdio client that inherits the existing dashboard launcher's validated `remote_mcp` identity; do not replace production behavior first.
-2. Compare cold and repeated Search latency, output parity, timeout behavior, and process recovery across at least 20 queries.
-3. Require exact slug/result-order parity and fail-closed fallback to the current subprocess path.
-4. Only integrate if the median and p95 gains are stable and lifecycle management does not require unauthorized service changes.
-5. Run the full Python and browser/static suites before committing and pushing.
-
-The benchmark must not hardcode the local port as a production transport or bypass the configured remote identity. Reuse the launcher's owner-only config validation and the runtime OAuth secret without printing, serializing, or committing credential material.
-
-The GBrain MCP operation is named `search`. Its required argument is `query`; optional arguments are `limit`, `offset`, `mode`, `types`, and `snippet_chars`. The current Dashboard requirements contain `nats-py` only, and the managed Python environment does not provide `mcp`, `httpx`, `requests`, or `aiohttp`. A stdio proof avoids adding an HTTP/OAuth dependency before the performance case is established. It must still inherit the launcher's isolated `GBRAIN_HOME` and secret environment rather than reading or copying credentials itself.
-
-Avoid lowering the current graph/search timeouts without new evidence. Earlier profiling found valid organization graph reads completing near 7.851 seconds, so a blanket timeout reduction would lose real evidence.
+Avoid lowering graph/search timeouts without new evidence. Earlier profiling found valid organization graph reads completing near 7.851 seconds, so a blanket timeout reduction would lose real evidence.
 
 ## Host Note
 
