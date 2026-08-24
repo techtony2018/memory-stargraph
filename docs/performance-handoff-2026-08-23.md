@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `1546625`
-- Current performance code commit: `1546625` (`perf: overlap Yoda status search`)
-- Previous pushed commit: `a6bb366` (`perf: overlap Yoda relationship evidence`)
+- Current merged and pushed source: `5c8251a`
+- Current performance code commit: `5c8251a` (`perf: skip covered Yoda entity lookups`)
+- Previous pushed commit: `1546625` (`perf: overlap Yoda status search`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 602 tests passed in 41.764 seconds.
+- Latest verification: 603 tests passed in 46.978 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -59,6 +59,8 @@ After the Ask Yoda status-reconciliation overlap follow-up, the full suite passe
 After the Ask Yoda relationship-evidence overlap follow-up, the full suite passed 602 tests in 42.785 seconds with the same static checks passing.
 
 After the Ask Yoda status-search overlap follow-up, the full suite passed 602 tests in 41.764 seconds with the same static checks passing.
+
+After the covered-entity targeted-lookup follow-up, the full suite passed 603 tests in 46.978 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -295,6 +297,14 @@ After stable selected-node context is ready, Ask Yoda now starts broader query r
 - After: concurrent samples took 4.415 and 3.952 seconds, reducing median wall time from about 6.514 to 4.184 seconds, or 35.8%.
 - The full product-case cold prompt improved from the prior 11.202 seconds to 9.345 seconds, a further 16.6% sample reduction and about 25.2% versus the original 12.489-second sequential profile.
 - Correctness: status text, query output and top slugs, final 26,456-character prompt, retrieval counts, grounding, and section order remained unchanged. Tests synchronize all three workers to prove overlap.
+
+### Covered targeted-entity lookup elimination
+
+Targeted relationship retrieval now compares each extracted named entity with the identity words of already selected direct-read slugs. When broader retrieval has already selected the exact entity, the targeted stage skips the duplicate entity search; uncovered entities retain the full search, backlink, and relationship-source path.
+
+- In the real relationship profile, broader retrieval already selected `people/garry-tan`; the subsequent “Garry Tan” targeted search produced no evidence because that slug was intentionally excluded.
+- Removing that duplicate lookup reduced prompt construction from the prior 10.194 seconds to 8.017 seconds, a further 21.4% sample improvement and 60.8% versus the original 20.427-second profile.
+- Correctness: the final 19,653-character prompt, 6 search results, 4 direct reads, targeted counts, and degradation state were unchanged. Tests prove zero targeted calls for an exact covered identity and preserve the full relationship lookup for uncovered entities.
 
 ## Earlier Performance Work
 
