@@ -525,6 +525,18 @@ Commit `6332d43` removes the second blurred shadow from important node cores. Im
 - Both viewports had no horizontal overflow, page errors, or console errors. Graph node/edge/focus parity held in every timing sample.
 - The full suite passed 644 tests in 40.768 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Bounded small-category clouds on dense graphs
+
+Commit `4f7c7b4` raises the minimum category size for drawing a cloud from four to eight nodes only when more than 240 nodes are drawable. Lower-density graphs retain the original four-node threshold. Nodes, edges, labels, category colors, filters, and the twelve larger clouds remain unchanged; the dense 314-node view stops paying for nine faint gradients representing categories with only four to seven nodes.
+
+- On the 314-node, 225-edge `people/tony-guan` view, eligible clouds fell from 21 to 12 while every graph node and edge remained present.
+- Four alternating same-server browser samples with forced rasterization reduced the cloud-stage median from 10.35 to 5.90 milliseconds, a 43.0% reduction.
+- The complete-frame median fell from 35.40 to 17.90 milliseconds, a 49.4% reduction, with materially tighter after distributions.
+- A runtime low-density check filtered the graph to 100 drawable nodes. The original four-node threshold predicted ten clouds and exactly ten gradients were drawn, proving the higher threshold is dense-view-only.
+- Fixed-time, fixed-rotation screenshots changed 26.999% of desktop pixels and 37.261% of mobile pixels because broad translucent cloud areas overlap many otherwise unchanged pixels. Mean RGB deltas remained low at 2.3087 and 2.7459. Visual inspection retained the dominant category clouds, node colors, focus hierarchy, labels, and mobile framing.
+- Both viewports remained nonblank with no horizontal overflow, page errors, or console errors. Graph node/edge/focus parity held in every timing sample.
+- The full suite passed 645 tests in 44.346 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Search results released before detail hydration
 
 Natural-language Search now releases its loading state as soon as the result graph and preferred focus are available. The selected graph result is rendered immediately, while direct-neighbor expansion, entity markdown, media, and timeline hydration continue through the existing cancellable entity loader. A newer manual selection increments the selection version and prevents the older background completion from changing feedback or detail state.
