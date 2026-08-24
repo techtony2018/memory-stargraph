@@ -359,6 +359,8 @@ Changing all non-targeted broad graph retrieval from depth 2 to depth 1 was not 
 
 Replacing full backlinks with `graph-query --direction in --depth 1` was not implemented. It reduced formatted bytes by roughly five to six times and retained 93.1-100% of sampled backlink edges, but did not improve latency: the high-degree sample regressed from 1.417 to 2.337 seconds and ordinary samples were flat. Compact output alone does not remove backend traversal cost.
 
+Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out` was not implemented. The graph-only microbenchmark preserved parsed root-outbound edges in 5/5 samples and substantially reduced bytes, including 4.12 MB to 175 KB for the high-degree person node. End-to-end prompts reversed that apparent win: the relationship case regressed from 6.963 to 7.790 seconds and the product case from 8.330 to 9.446 seconds. Grounding and counts were unchanged, but both total-latency samples failed the acceptance gate.
+
 ## Next Bottleneck
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
