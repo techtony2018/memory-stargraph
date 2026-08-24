@@ -783,6 +783,15 @@ Large JSON API responses now use deterministic gzip level 1 when the client adve
 - Same-host gzip versus plain median latency ranged from a 21% improvement to a 4% regression across those endpoints, with no systematic local-latency penalty. The transfer reduction is especially relevant on the dashboard's remote Tailscale path.
 - Tests verify gzip negotiation, explicit `q=0` refusal, small-response behavior, `Vary`, compressed content length, and lossless decompression. The full suite passed 647 tests in 40.723 seconds; Python compilation and `git diff --check` passed.
 
+### Negotiated static text compression
+
+The three first-party startup text assets now use the same gzip level-1 negotiation while preserving the standard plain-file fallback, `Last-Modified`, conditional 304 responses, MIME types, and query-string cache-busting. Compressed bytes are cached by path, nanosecond mtime, and size, so unchanged assets do not pay repeat compression CPU and file edits select a new cache key.
+
+- Offline compression reduced `index.html` from 26,569 to 6,410 bytes (75.9%), `app.js` from 343,185 to 90,038 bytes (73.8%), and `styles.css` from 96,459 to 22,564 bytes (76.6%). Level-1 CPU medians were 0.2, 3.2, and 0.7 milliseconds respectively.
+- A 20-sample alternating live-server A/B preserved exact decompressed bytes. Same-host medians were 2.30 to 2.11 milliseconds for HTML, 2.66 to 2.08 milliseconds for JavaScript, and 2.64 to 2.59 milliseconds for CSS, so the transfer win added no local-latency regression.
+- A real Chrome load reported CSS at 22,564 encoded versus 96,459 decoded bytes and JavaScript at 90,038 encoded versus 343,185 decoded bytes. All three text responses negotiated gzip, the graph loaded 274 nodes, Canvas dimensions were valid, and there were no page or console errors.
+- Tests cover lossless compressed assets, standard plain fallback, and conditional 304 behavior. The full suite passed 650 tests in 49.077 seconds; Python compilation and `git diff --check` passed.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:

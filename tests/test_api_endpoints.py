@@ -1,5 +1,6 @@
 import datetime as dt
 import asyncio
+import email.utils
 import gzip
 import io
 import json
@@ -242,6 +243,19 @@ class ApiEndpointTests(unittest.TestCase):
         handler.end_json(payload)
         return statuses, headers, handler.wfile.getvalue()
 
+    def render_static_head(self, path, headers=None):
+        handler = object.__new__(MemoryStargraphHandler)
+        handler.path = path
+        handler.headers = dict(headers or {})
+        handler.directory = str(server.PUBLIC_DIR)
+        statuses = []
+        response_headers = {}
+        handler.send_response = statuses.append
+        handler.send_header = lambda key, value: response_headers.__setitem__(key, value)
+        handler.end_headers = lambda: None
+        stream = handler.send_head()
+        return statuses, response_headers, stream
+
     def test_end_json_compresses_large_payload_when_client_accepts_gzip(self):
         payload = {"ok": True, "nodes": [{"slug": f"notes/example-{index}", "summary": "memory stargraph " * 20} for index in range(20)]}
 
@@ -266,6 +280,43 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("Content-Encoding", large_headers)
         self.assertEqual(large_headers["Vary"], "Accept-Encoding")
         self.assertEqual(json.loads(large_body), large_payload)
+
+    def test_send_head_compresses_large_static_assets_losslessly(self):
+        statuses, headers, stream = self.render_static_head("/app.js?version=test", {"Accept-Encoding": "br, gzip"})
+
+        try:
+            body = stream.read()
+        finally:
+            stream.close()
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertEqual(headers["Vary"], "Accept-Encoding")
+        self.assertEqual(headers["Content-Length"], str(len(body)))
+        self.assertEqual(gzip.decompress(body), (server.PUBLIC_DIR / "app.js").read_bytes())
+
+    def test_send_head_preserves_static_conditional_requests(self):
+        path = server.PUBLIC_DIR / "styles.css"
+        modified = email.utils.formatdate(path.stat().st_mtime, usegmt=True)
+
+        statuses, headers, stream = self.render_static_head(
+            "/styles.css",
+            {"Accept-Encoding": "gzip", "If-Modified-Since": modified},
+        )
+
+        self.assertEqual(statuses, [HTTPStatus.NOT_MODIFIED])
+        self.assertEqual(headers["Vary"], "Accept-Encoding")
+        self.assertIsNone(stream)
+
+    def test_send_head_preserves_plain_static_fallback(self):
+        statuses, headers, stream = self.render_static_head("/styles.css", {"Accept-Encoding": "br"})
+
+        try:
+            body = stream.read()
+        finally:
+            stream.close()
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertNotIn("Content-Encoding", headers)
+        self.assertEqual(body, (server.PUBLIC_DIR / "styles.css").read_bytes())
 
     def test_gbrain_call_tool_uses_remote_mcp_instead_of_local_cli(self):
         with tempfile.TemporaryDirectory() as directory:

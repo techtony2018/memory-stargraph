@@ -2,9 +2,11 @@
 import argparse
 import email
 import email.policy
+import email.utils
 import gzip
 import hashlib
 import hmac
+import io
 import json
 import math
 import mimetypes
@@ -21,6 +23,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,6 +44,12 @@ from openclaw_profile_activation import (
 APP_NAME = "Memory Stargraph"
 OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS = STATUS_ENDPOINT_BUDGET_SECONDS
 JSON_GZIP_MIN_BYTES = 1024
+GZIP_STATIC_PATHS = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/app.js": "app.js",
+    "/styles.css": "styles.css",
+}
 
 
 def accepts_gzip_encoding(header):
@@ -59,6 +68,12 @@ def accepts_gzip_encoding(header):
                     quality = 0.0
         qualities[parts[0].lower()] = quality
     return qualities.get("gzip", qualities.get("*", 0.0)) > 0
+
+
+@lru_cache(maxsize=16)
+def gzip_static_file(path, mtime_ns, size):
+    del mtime_ns, size
+    return gzip.compress(Path(path).read_bytes(), compresslevel=1, mtime=0)
 
 
 class MemoryStargraphHTTPServer(ThreadingHTTPServer):
@@ -9241,6 +9256,41 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def send_head(self):
+        request_path = urlparse(self.path).path
+        relative_path = GZIP_STATIC_PATHS.get(request_path)
+        if not relative_path or not accepts_gzip_encoding(self.headers.get("Accept-Encoding")):
+            return super().send_head()
+        path = PUBLIC_DIR / relative_path
+        try:
+            stat = path.stat()
+        except OSError:
+            return super().send_head()
+        if "If-Modified-Since" in self.headers and "If-None-Match" not in self.headers:
+            try:
+                modified_since = email.utils.parsedate_to_datetime(self.headers["If-Modified-Since"])
+            except (TypeError, IndexError, OverflowError, ValueError):
+                modified_since = None
+            if modified_since is not None:
+                if modified_since.tzinfo is None:
+                    modified_since = modified_since.replace(tzinfo=timezone.utc)
+                last_modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0)
+                if last_modified <= modified_since.astimezone(timezone.utc):
+                    self.send_response(HTTPStatus.NOT_MODIFIED)
+                    self.send_header("Vary", "Accept-Encoding")
+                    self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+                    self.end_headers()
+                    return None
+        body = gzip_static_file(str(path), stat.st_mtime_ns, stat.st_size)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+        self.end_headers()
+        return io.BytesIO(body)
 
     def read_json_body(self):
         length = int(self.headers.get("Content-Length") or 0)
