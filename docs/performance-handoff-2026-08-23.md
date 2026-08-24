@@ -14,7 +14,8 @@
 
 - Resumed performance code commit: `47bc335` (`perf: reuse persistent GBrain search session`)
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
-- Current merged and pushed source: `ae3eda9` (includes concurrent remote MCP activation fix `69baafc`)
+- Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
+- Current merged and pushed source: `d20d7fd` (includes concurrent remote MCP activation fix `69baafc`)
 - Current performance code commit: `8509431` (`perf: coalesce concurrent primary searches`)
 - Previous pushed commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
@@ -24,6 +25,8 @@
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
 
 After the persistent read-session follow-up, the full suite passed 582 tests in 68.913 seconds with the same static checks passing.
+
+After the graph-context follow-up, the full suite passed 584 tests in 62.608 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -76,6 +79,26 @@ A four-case privacy-safe Ask Yoda context benchmark used a synthetic provider-do
 - Direct source reads: 2.888 seconds to 94 milliseconds.
 - Query/search phase: 4.892 seconds to 2.640 seconds.
 - Broad graph remained the dominant phase at 5.591 seconds after the change.
+
+### Persistent and bounded Ask Yoda graph context
+
+Commit `d20d7fd` maps the existing read-only `graph-query` CLI contract to MCP `traverse_graph` and reproduces GBrain's indented tree renderer. Unsupported flags still fail closed to the CLI. It also caps non-targeted broad graph context at depth 2 while preserving the user's requested retrieval depth; targeted relationship questions keep their existing depth-1 behavior.
+
+The five-case graph-query transport benchmark measured:
+
+- CLI median: 1.406 seconds; sample p95: 1.511 seconds.
+- Persistent median: 42 milliseconds; sample p95: 218 milliseconds.
+- Median reduction: 97.01%.
+- Exact output parity: 5/5 across depth 1/2, out/both rendering, and a typed traversal.
+
+High-degree depth-4 traversals exceeded 20 seconds on both CLI and MCP and therefore always exhausted Ask Yoda's optional eight-second broad-graph budget. Depth 2 changed product and goal samples from `optional_timeout` to `available` while preserving grounding recall 1.0.
+
+The current ten-case privacy-safe Ask Yoda context matrix measured:
+
+- Cold context median: 4.186 seconds; p95: 6.723 seconds.
+- Improvement versus the prior 12.572-second full median: 66.70%.
+- Mean grounding recall: 1.0; warm cache hits: 10/10; degraded cold cases: zero.
+- One optional graph timeout remained, from the benchmark's deliberately forced slow-graph case.
 
 ### Repeated primary search cache
 
@@ -148,7 +171,7 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
-Ask Yoda context is still materially slower than Search after removing most query and page-read startup cost. The measured dominant phase is now `graph-query`, around 5.591 seconds in the four-case sample. GBrain MCP exposes `traverse_graph`, but its edge-oriented response is not output-equivalent to the richer CLI `graph-query` contract, so do not substitute it without a parity proof. Profile the graph-query output and consumers before changing that path.
+Ask Yoda context is still materially slower than Search, but the current ten-case median is 4.186 seconds rather than 12.572 seconds. Profile the ten-case subphase distribution again before the next implementation; likely candidates are hybrid `query` execution and repeated operational/TODO context reads, not process startup.
 
 The installed GBrain remains `0.46.28.0`. The dashboard's current local config selects the local GBrain binary, so the persistent stdio child uses the same configured identity and data source as the existing Search subprocess. The concurrent `69baafc` change separately routes profile activation through configured remote MCP when that surface is present; it was merged and verified with this performance change.
 
