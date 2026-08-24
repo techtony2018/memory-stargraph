@@ -661,6 +661,8 @@ Notable earlier measurements:
 
 Adding a one-second post-interaction quiet window before deferred Timeline and Follow-ups work, while marking Resolver review as foreground-busy, was not implemented. One browser trace appeared to improve Resolver review from 5.754 to 2.471 seconds, but a strict six-run alternating A/B against the same current backend reversed the result. Previous frontend samples were 3.093, 3.452, and 4.087 seconds; the quiet-window samples were 3.925, 3.370, and 4.074 seconds. Median Resolver time regressed from 3.452 to 3.925 seconds, or 13.7%, while Settings median also regressed from 7.876 to 8.673 seconds. Deferred requests still ran in every sample and runtime errors remained zero, so the rejection is strictly a latency result. The frontend and static test changes were fully reverted before commit.
 
+Moving the Follow-ups badge from the two-second startup batch to a separate 15-second idle load was also rejected. The six-run alternating browser A/B proved that early Autopilot requests fell from one in 3/3 previous samples to zero in 3/3 delayed samples, but Resolver median regressed from 3.584 to 4.385 seconds, or 22.4%. Settings median improved from 7.522 to 7.075 seconds, but the target Resolver workflow and overall distribution failed the acceptance gate. The delayed badge and Resolver busy-state changes were fully reverted.
+
 Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 
 - The returned byte counts were identical in the sampled queries.
