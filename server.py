@@ -2140,6 +2140,10 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
                 )
             caller = _REMOTE_GBRAIN_TOOL_CALLER
         return caller.call(tool_name, payload)
+    if tool_name in OPTIONAL_GBRAIN_TOOL_NAMES:
+        availability = local_gbrain_tool_available(tool_name)
+        if availability is False:
+            raise RuntimeError(f"GBrain backend does not expose {tool_name}")
     try:
         output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
     except RuntimeError as exc:
@@ -3547,6 +3551,16 @@ TAKE_REVIEW_CAPABILITY_CACHE_SECONDS = 300
 RESOLVER_READ_CACHE_SECONDS = 30
 RESOLVER_READ_CACHE_MAX_ENTRIES = 16
 RESOLVER_CAPABILITY_CACHE_SECONDS = 300
+GBRAIN_TOOL_MANIFEST_CACHE_SECONDS = 300
+GBRAIN_TOOL_MANIFEST_TIMEOUT_SECONDS = 5
+OPTIONAL_GBRAIN_TOOL_NAMES = frozenset(
+    {
+        "autopilot_findings_list",
+        "resolver_feedback_health",
+        "resolver_proposals_list",
+        "take_proposals_list",
+    }
+)
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10
 EXACT_TODO_GBRAIN_TIMEOUT_SECONDS = 12
 SEARCH_TERM_SYNONYMS = {
@@ -3888,6 +3902,64 @@ class TimedValueCache:
         with self.lock:
             self.entries.clear()
             self.generation += 1
+
+
+LOCAL_GBRAIN_TOOL_MANIFEST_CACHE = TimedValueCache(
+    ttl_seconds=GBRAIN_TOOL_MANIFEST_CACHE_SECONDS,
+    max_entries=4,
+)
+
+
+def local_gbrain_tool_manifest_key():
+    try:
+        stat = GBRAIN.stat()
+    except OSError:
+        return None
+    return (
+        str(GBRAIN.resolve()),
+        stat.st_mtime_ns,
+        stat.st_size,
+        os.environ.get("GBRAIN_HOME", ""),
+        os.environ.get("GBRAIN_CONFIG_FILE", ""),
+        id(run_gbrain),
+    )
+
+
+def load_local_gbrain_tool_names():
+    output = run_gbrain(
+        "--tools-json",
+        timeout=GBRAIN_TOOL_MANIFEST_TIMEOUT_SECONDS,
+    )
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        payload = extract_json_list(output)
+    if not isinstance(payload, list):
+        raise RuntimeError("GBrain tool manifest was invalid")
+    names = frozenset(
+        str(item.get("name") or "").strip()
+        for item in payload
+        if isinstance(item, dict) and item.get("name")
+    )
+    if not {"get_page", "search"}.issubset(names):
+        raise RuntimeError("GBrain tool manifest omitted core tools")
+    return names
+
+
+def local_gbrain_tool_available(tool_name):
+    if configured_remote_mcp_path() is not None:
+        return None
+    key = local_gbrain_tool_manifest_key()
+    if key is None:
+        return None
+    names = LOCAL_GBRAIN_TOOL_MANIFEST_CACHE.get(key)
+    if names is None:
+        names, _source = LOCAL_GBRAIN_TOOL_MANIFEST_CACHE.load_once(
+            key,
+            load_local_gbrain_tool_names,
+            timeout=GBRAIN_TOOL_MANIFEST_TIMEOUT_SECONDS,
+        )
+    return tool_name in names if names is not None else None
 
 
 def load_evidence_page_rows(page_type, per_type_limit, timeout):

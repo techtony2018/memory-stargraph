@@ -3008,6 +3008,65 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual([row["id"] for row in result], [1, 2])
 
+    def test_gbrain_tool_proxy_rejects_manifest_absence_without_failed_call(self):
+        manifest = json.dumps(
+            [
+                {"name": "get_page"},
+                {"name": "search"},
+                {"name": "takes_list"},
+            ]
+        )
+        server.LOCAL_GBRAIN_TOOL_MANIFEST_CACHE.clear()
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.local_gbrain_tool_manifest_key", return_value=("test-manifest",)),
+            mock.patch("server.run_gbrain", return_value=manifest) as fake_gbrain,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "does not expose take_proposals_list"):
+                server.gbrain_call_tool("take_proposals_list", {"limit": 2})
+
+        fake_gbrain.assert_called_once_with(
+            "--tools-json",
+            timeout=server.GBRAIN_TOOL_MANIFEST_TIMEOUT_SECONDS,
+        )
+
+    def test_gbrain_tool_proxy_reuses_manifest_for_optional_tools(self):
+        manifest = json.dumps([{"name": "get_page"}, {"name": "search"}])
+        server.LOCAL_GBRAIN_TOOL_MANIFEST_CACHE.clear()
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.local_gbrain_tool_manifest_key", return_value=("test-manifest",)),
+            mock.patch("server.run_gbrain", return_value=manifest) as fake_gbrain,
+        ):
+            for tool_name in (
+                "take_proposals_list",
+                "resolver_feedback_health",
+                "resolver_proposals_list",
+                "autopilot_findings_list",
+            ):
+                with self.assertRaisesRegex(RuntimeError, f"does not expose {tool_name}"):
+                    server.gbrain_call_tool(tool_name, {})
+
+        fake_gbrain.assert_called_once_with(
+            "--tools-json",
+            timeout=server.GBRAIN_TOOL_MANIFEST_TIMEOUT_SECONDS,
+        )
+
+    def test_gbrain_tool_proxy_falls_back_when_manifest_is_invalid(self):
+        server.LOCAL_GBRAIN_TOOL_MANIFEST_CACHE.clear()
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.local_gbrain_tool_manifest_key", return_value=("test-manifest",)),
+            mock.patch(
+                "server.run_gbrain",
+                side_effect=["not-json", '{"proposals": []}'],
+            ) as fake_gbrain,
+        ):
+            result = server.gbrain_call_tool("take_proposals_list", {"limit": 2})
+
+        self.assertEqual(result, {"proposals": []})
+        self.assertEqual(fake_gbrain.call_count, 2)
+
     def test_take_proposals_reuses_successful_result_cache(self):
         store = server.GraphStore()
         result = {"proposals": [{"id": 1}], "counts": {"pending": 1}}
