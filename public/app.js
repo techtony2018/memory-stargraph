@@ -12,7 +12,8 @@ const NODE_CACHE_LIMIT_KEY = "memory-stargraph.node-cache-limit-bytes";
 const FLOWING_EDGE_EFFECT_KEY = "memory-stargraph.flowing-edge-effect";
 const HIGH_DEGREE_FOCUS_THRESHOLD = 80;
 const HIGH_DEGREE_ANIMATED_EDGE_LIMIT = 48;
-const STATIC_GRAPH_FRAME_INTERVAL_MS = 1000 / 15;
+const STATIC_GRAPH_FRAME_INTERVAL_MS = 1000 / 8;
+const NODE_LAYER_FRAME_INTERVAL_MS = 1000 / 15;
 const YODA_CONTEXT_DEPTH_KEY = "memory-stargraph.yoda-context-depth";
 const PLANNED_PLAYBACK_KEY = "memory-stargraph.planned-playback.v1";
 const ACTIVATION_PROGRESS_KEY = "memory-stargraph.activation-progress.v1";
@@ -45,6 +46,7 @@ const state = {
   animationHandle: null,
   renderDirty: true,
   staticGraphLastRenderedAt: 0,
+  nodeLayerLastRenderedAt: 0,
   isRefreshing: false,
   lastRefreshAt: null,
   pendingSettings: null,
@@ -346,6 +348,7 @@ function resizeCanvas() {
     layer.getContext("2d").setTransform(state.viewport.dpr, 0, 0, state.viewport.dpr, 0, 0);
   });
   state.staticGraphLastRenderedAt = 0;
+  state.nodeLayerLastRenderedAt = 0;
   requestRender();
 }
 
@@ -2628,23 +2631,26 @@ function render(frameTimestamp = performance.now()) {
   state.animationTick = (state.animationTick + 0.7) % 1000;
   tick();
   const staticFrameDue = frameTimestamp - state.staticGraphLastRenderedAt >= STATIC_GRAPH_FRAME_INTERVAL_MS;
+  const nodeFrameDue = frameTimestamp - state.nodeLayerLastRenderedAt >= NODE_LAYER_FRAME_INTERVAL_MS;
   const staticLayersDue = renderWasDirty || projectionMoving || staticFrameDue;
+  const nodeLayerDue = renderWasDirty || projectionMoving || nodeFrameDue;
   const orderedEdges = drawableEdges().sort((left, right) => edgeLayer(left) - edgeLayer(right));
   if (staticLayersDue) {
     drawBackground();
     drawClusterClouds();
     drawEdges({ edges: orderedEdges, omitParticles: true });
+    state.staticGraphLastRenderedAt = frameTimestamp;
   }
   withCanvasContext(flowCtx, () => {
     flowCtx.clearRect(0, 0, state.viewport.width, state.viewport.height);
     drawEdges({ edges: orderedEdges, particlesOnly: true });
   });
-  if (staticLayersDue) {
+  if (nodeLayerDue) {
     withCanvasContext(nodeCtx, () => {
       nodeCtx.clearRect(0, 0, state.viewport.width, state.viewport.height);
       drawNodes();
     });
-    state.staticGraphLastRenderedAt = frameTimestamp;
+    state.nodeLayerLastRenderedAt = frameTimestamp;
   }
   if (!shouldAnimateContinuously()) {
     state.animationHandle = null;
