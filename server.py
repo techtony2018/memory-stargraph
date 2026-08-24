@@ -6355,24 +6355,25 @@ class GraphStore:
 
     def get_yoda_source_pages(self, slugs):
         ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))
-        pages = {}
-        missing_slugs = []
-        cache_keys = {}
-        for slug in ordered_slugs:
+        if not ordered_slugs:
+            return {}
+
+        def load_slug(slug):
             cache_key = hashlib.sha256(slug.encode("utf-8")).hexdigest()
-            cache_keys[slug] = cache_key
             cached = self.yoda_source_cache.get(cache_key)
-            if cached is None:
-                missing_slugs.append(slug)
-            else:
-                pages[slug] = cached
-        if missing_slugs:
-            fetched_pages = self.get_entities_raw(missing_slugs)
-            for slug in missing_slugs:
-                page = fetched_pages.get(slug)
-                pages[slug] = page
-                if page is not None:
-                    self.yoda_source_cache.put(cache_keys[slug], page)
+            if cached is not None:
+                return cached
+            page, _load_status = self.yoda_source_cache.load_once(
+                cache_key,
+                lambda: self.get_entity_raw(slug),
+                timeout=20,
+            )
+            return page
+
+        workers = min(4, len(ordered_slugs))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {slug: executor.submit(load_slug, slug) for slug in ordered_slugs}
+            pages = {slug: futures[slug].result() for slug in ordered_slugs}
         return {slug: pages.get(slug) for slug in ordered_slugs}
 
     def get_entity_media(self, slug):

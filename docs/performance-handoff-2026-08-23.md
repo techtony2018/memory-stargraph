@@ -49,6 +49,8 @@ After the unique exact-label Search follow-up, the full suite passed 596 tests i
 
 After the concurrent Ask Yoda retrieval coalescing follow-up, the full suite passed 597 tests in 43.970 seconds with the same static checks passing.
 
+After the concurrent Ask Yoda source-page coalescing follow-up, the full suite passed 598 tests in 42.759 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -240,6 +242,14 @@ Concurrent cold misses for the same normalized Ask Yoda retrieval key now share 
 - Before: two concurrent identical requests completed in 2.112 and 3.788 seconds, with a 3.789-second wall time and different dynamic outputs.
 - After: both completed in about 1.276 seconds, with a 1.276-second wall time, a 66.3% improvement.
 - Correctness: both callers received identical output from one cache entry, and the regression test verifies exactly one GBrain call.
+
+### Concurrent Ask Yoda source-page coalescing
+
+Question-specific source pages now single-flight cold loads per slug while preserving four-way parallelism inside one request. Concurrent prompts share each owner read; failed reads remain uncached.
+
+- Before: two concurrent four-page requests completed with a 177-millisecond wall time.
+- After: both completed in 111-112 milliseconds with a 112-millisecond wall time, a 36.7% improvement.
+- Correctness: both callers received all 4/4 pages with identical 25,125-byte output, and tests verify one underlying read per slug.
 
 ## Earlier Performance Work
 

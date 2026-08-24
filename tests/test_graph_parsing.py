@@ -983,6 +983,37 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0], rows[1])
 
+    def test_yoda_source_pages_coalesce_concurrent_cold_loads_per_slug(self):
+        store = GraphStore()
+        release = threading.Event()
+        calls = []
+        rows = []
+        slugs = ["pages/one", "pages/two", "pages/three", "pages/four"]
+
+        def slow_get(slug):
+            calls.append(slug)
+            release.wait(timeout=1)
+            return f"# {slug}"
+
+        def load():
+            rows.append(store.get_yoda_source_pages(slugs))
+
+        with mock.patch.object(store, "get_entity_raw", side_effect=slow_get):
+            first = threading.Thread(target=load)
+            second = threading.Thread(target=load)
+            first.start()
+            second.start()
+            deadline = time.monotonic() + 1
+            while len(calls) < len(slugs) and time.monotonic() < deadline:
+                time.sleep(0.005)
+            release.set()
+            first.join(timeout=1)
+            second.join(timeout=1)
+
+        self.assertEqual(sorted(calls), sorted(slugs))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0], rows[1])
+
     def test_search_runs_primary_and_evidence_calls_concurrently(self):
         raw_graph = {
             "title": "Memory Stargraph",
