@@ -4448,13 +4448,20 @@ async function refreshSettingsEvidenceCards(options = {}) {
   }
 }
 
-function runAfterSettingsEvidenceRefresh(callback) {
+function runAfterInteractiveWork(callback) {
   const pendingRefresh = settingsEvidenceRefreshPromise;
-  if (!pendingRefresh) {
-    callback();
+  if (pendingRefresh) {
+    void pendingRefresh.then(
+      () => runAfterInteractiveWork(callback),
+      () => runAfterInteractiveWork(callback),
+    );
     return;
   }
-  void pendingRefresh.then(callback, callback);
+  if (state.busyOperations.size) {
+    window.setTimeout(() => runAfterInteractiveWork(callback), 100);
+    return;
+  }
+  callback();
 }
 
 function openSettingsSurface() {
@@ -7606,7 +7613,7 @@ async function loadEntity(slug, options = {}) {
     updateSource(source);
     if (deferTimelineBadge) {
       window.setTimeout(() => {
-        runAfterSettingsEvidenceRefresh(() => {
+        runAfterInteractiveWork(() => {
           if (loadId === state.entityLoadId && state.focusSlug === entity.slug) {
             void refreshTimelineBadge(entity.slug, loadId);
           }
@@ -8530,7 +8537,7 @@ async function init() {
     await loadRouteSelection();
   }
   window.setTimeout(() => {
-    runAfterSettingsEvidenceRefresh(() => {
+    runAfterInteractiveWork(() => {
       void loadDeferredStartupData();
     });
   }, 2000);
