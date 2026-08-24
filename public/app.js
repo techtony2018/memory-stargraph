@@ -2148,18 +2148,6 @@ function drawBackground() {
   const width = state.viewport.width;
   const height = state.viewport.height;
   ctx.clearRect(0, 0, width, height);
-  const nebula = ctx.createRadialGradient(width * 0.28, height * 0.54, 20, width * 0.28, height * 0.54, width * 0.34);
-  nebula.addColorStop(0, "rgba(168, 85, 247, 0.18)");
-  nebula.addColorStop(0.42, "rgba(34, 211, 238, 0.055)");
-  nebula.addColorStop(1, "rgba(4, 8, 18, 0)");
-  ctx.fillStyle = nebula;
-  ctx.fillRect(0, 0, width, height);
-  const glow = ctx.createRadialGradient(width * 0.5, height * 0.48, 10, width * 0.5, height * 0.48, width * 0.44);
-  glow.addColorStop(0, "rgba(34, 211, 238, 0.1)");
-  glow.addColorStop(0.5, "rgba(59, 130, 246, 0.045)");
-  glow.addColorStop(1, "rgba(4, 8, 18, 0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, width, height);
 
   ctx.save();
   ctx.strokeStyle = "rgba(34, 211, 238, 0.07)";

@@ -189,13 +189,15 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function drawBackground()", script)
         self.assertIn("ctx.arc(radarX, radarY, radius, 0, Math.PI * 2)", script)
 
-    def test_canvas_draws_background_glow_without_full_viewport_texture_composition(self):
+    def test_canvas_uses_css_for_static_background_depth(self):
         script = (ROOT / "public" / "app.js").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
+        background = script[script.index("function drawBackground()"):script.index("function degreeIntensity")]
 
-        self.assertIn("const nebula = ctx.createRadialGradient", script)
-        self.assertIn("const glow = ctx.createRadialGradient", script)
-        self.assertNotIn("backgroundGlowCanvas", script)
-        self.assertNotIn("staticBackgroundGlow", script)
+        self.assertIn("ctx.clearRect(0, 0, width, height)", background)
+        self.assertNotIn("createRadialGradient", background)
+        self.assertIn("#graphCanvas {", styles)
+        self.assertIn("radial-gradient(circle at 28% 48%", styles)
 
     def test_important_nodes_do_not_stack_core_shadow_over_radial_glow(self):
         script = (ROOT / "public" / "app.js").read_text()
