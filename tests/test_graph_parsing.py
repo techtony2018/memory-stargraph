@@ -993,6 +993,127 @@ class GraphParsingTests(unittest.TestCase):
             ["notes/memory-starmap-todo-list/reduce-recurring-ask-yoda-broad-graph-timeout-regression"],
         )
 
+    def test_search_raw_graph_resolves_exact_loaded_slug_without_live_search(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "products/memory-stargraph",
+                    "id": "product",
+                    "label": "Memory Stargraph",
+                    "type": "product",
+                    "summary": "Local-first knowledge operating system.",
+                    "tags": [],
+                    "links": [],
+                }
+            ],
+            "edge_types": [],
+        }
+
+        with mock.patch("server.run_gbrain") as run:
+            graph = search_raw_graph(raw_graph, "  PRODUCTS/MEMORY-STARGRAPH  ")
+
+        coverage = graph["source"]["coverage"]
+        run.assert_not_called()
+        self.assertEqual(coverage["search_status"], "complete")
+        self.assertEqual(coverage["search_primary_cache_status"], "skipped_exact_slug")
+        self.assertEqual(coverage["search_evidence_status"], "skipped_exact_slug")
+        self.assertTrue(coverage["search_exact_slug"])
+        self.assertEqual(coverage["search_exact_slug_source"], "loaded_graph")
+        self.assertEqual(coverage["search_slugs"], ["products/memory-stargraph"])
+        self.assertEqual(coverage["search_results"], 1)
+
+    def test_search_raw_graph_verifies_unloaded_exact_slug_with_direct_get(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "links": []}],
+            "edge_types": [],
+        }
+        page = "---\ntitle: Attachment Runbook\ntype: document\n---\n\n# Attachment Runbook\n\nDurable storage checks."
+
+        with mock.patch("server.run_gbrain", return_value=page) as run:
+            graph = search_raw_graph(raw_graph, "docs/gbrain-attachment-runbook")
+
+        coverage = graph["source"]["coverage"]
+        run.assert_called_once_with("get", "docs/gbrain-attachment-runbook", timeout=3)
+        self.assertTrue(coverage["search_exact_slug"])
+        self.assertEqual(coverage["search_exact_slug_source"], "gbrain_get")
+        self.assertEqual(coverage["search_primary_cache_status"], "skipped_exact_slug")
+        self.assertEqual(coverage["search_slugs"], ["docs/gbrain-attachment-runbook"])
+
+    def test_search_raw_graph_does_not_use_loaded_slug_fast_path_for_broader_query(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {
+                    "slug": "products/memory-stargraph",
+                    "id": "product",
+                    "label": "Memory Stargraph",
+                    "type": "product",
+                    "summary": "Local-first knowledge operating system.",
+                    "tags": [],
+                    "links": [],
+                }
+            ],
+            "edge_types": [],
+        }
+        primary_result = {
+            "slug": "products/memory-stargraph",
+            "score": 1.0,
+            "label": "Memory Stargraph",
+            "preview": "Live primary result.",
+        }
+
+        with (
+            mock.patch(
+                "server.cached_primary_search_results",
+                return_value=([primary_result], "complete", "miss"),
+            ) as primary,
+            mock.patch(
+                "server.evidence_record_search_results",
+                return_value=([], "complete", "hit"),
+            ),
+        ):
+            graph = search_raw_graph(raw_graph, "products/memory-stargraph roadmap")
+
+        coverage = graph["source"]["coverage"]
+        primary.assert_called_once()
+        self.assertFalse(coverage["search_exact_slug"])
+        self.assertEqual(coverage["search_exact_slug_source"], "")
+        self.assertEqual(coverage["search_primary_cache_status"], "miss")
+
+    def test_search_raw_graph_falls_back_when_exact_slug_cannot_be_verified(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [{"slug": "index", "id": "index", "label": "Index", "links": []}],
+            "edge_types": [],
+        }
+
+        with (
+            mock.patch("server.run_gbrain", side_effect=RuntimeError("not found")) as get_page,
+            mock.patch(
+                "server.cached_primary_search_results",
+                return_value=([], "complete", "miss"),
+            ) as primary,
+            mock.patch(
+                "server.evidence_record_search_results",
+                return_value=([], "complete", "hit"),
+            ),
+        ):
+            graph = search_raw_graph(raw_graph, "docs/does-not-exist")
+
+        coverage = graph["source"]["coverage"]
+        get_page.assert_called_once_with("get", "docs/does-not-exist", timeout=3)
+        primary.assert_called_once()
+        self.assertFalse(coverage["search_exact_slug"])
+        self.assertEqual(coverage["search_exact_slug_source"], "")
+        self.assertEqual(coverage["search_primary_cache_status"], "miss")
+        self.assertEqual(coverage["search_results"], 0)
+
     def test_search_raw_graph_missing_exact_todo_id_does_not_return_false_positives(self):
         raw_graph = {
             "title": "Memory Stargraph",
