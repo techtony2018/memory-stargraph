@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `aa3e5f0`
-- Current performance code commit: `aa3e5f0` (`perf: reuse node cache serialization`)
-- Previous pushed commit: `b2b098b` (`perf: batch node cache touch writes`)
+- Current merged and pushed source: `e8225e8`
+- Current performance code commit: `e8225e8` (`perf: coalesce node cache content writes`)
+- Previous pushed commit: `aa3e5f0` (`perf: reuse node cache serialization`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 610 tests passed in 46.764 seconds.
+- Latest verification: 610 tests passed in 45.931 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -87,6 +87,8 @@ After the Search result-release follow-up, the full suite passed 609 tests in 47
 After the batched node-cache touch follow-up, the full suite passed 610 tests in 48.274 seconds. JavaScript syntax, the 72 focused frontend tests, and `git diff --check` also passed.
 
 After the node-cache serialization reuse follow-up, the full suite passed 610 tests in 46.764 seconds with the same focused and static checks passing.
+
+After the node-cache content-write coalescing follow-up, the full suite passed 610 tests in 45.931 seconds with JavaScript syntax and `git diff --check` passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -447,6 +449,12 @@ Cold cache writes also reuse one serialized payload for limit enforcement, persi
 - In an alternating same-page 4 MB benchmark, the previous cold-write path had a 127.4-millisecond median and 142.1-millisecond mean.
 - The single-serialization path measured 73.3 milliseconds median and 75.9 milliseconds mean, reductions of 42.5% and 46.6%.
 - Over-limit writes still sort by `lastAccessed`, evict one entry at a time, and reserialize after each eviction until the configured byte cap is satisfied.
+
+Entity and media cache additions now share a 500-millisecond content-persistence window. Each response still updates the in-memory store and enforces the byte limit immediately, but only the newest serialized payload is written. Mutations, invalidations, deletions, and Flush cancel the pending write and persist immediately.
+
+- An alternating 4 MB two-add benchmark reduced median synchronous work from 178.4 to 105.0 milliseconds, a 41.1% reduction. Mean fell from 160.4 to 115.0 milliseconds, a 28.3% reduction.
+- A real deep-link load initially wrote the 4 MB cache twice because entity and media arrived 406 milliseconds apart. The accepted 500-millisecond window wrote once, and final readback contained both the entity and media entries in the 4.32 MB payload.
+- The delay affects only reconstructible browser cache persistence. In-memory responses are available immediately, and authoritative product or GBrain data is never delayed or mutated.
 
 ## Earlier Performance Work
 
