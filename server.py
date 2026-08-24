@@ -4847,7 +4847,7 @@ def image_preview_bytes(path, mtime_ns, size):
             if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA" if "transparency" in image.info else "RGB")
             output = io.BytesIO()
-            image.save(output, "WEBP", quality=80, method=4)
+            image.save(output, "WEBP", quality=80, method=0)
             return output.getvalue()
     except (OSError, ValueError):
         return None
