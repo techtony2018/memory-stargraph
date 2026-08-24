@@ -2220,7 +2220,9 @@ function degreeIntensity(node) {
 function drawClusterClouds() {
   if (!state.cloudMode || !state.filteredSlugs.size) return;
   const groups = new Map();
-  drawableNodes().forEach((node) => {
+  const cloudNodes = drawableNodes();
+  const minimumCloudNodes = cloudNodes.length > 240 ? 8 : 4;
+  cloudNodes.forEach((node) => {
     if (isClusterHidden(node) || isHiddenByHubConnection(node)) return;
     const alpha = nodeAlpha(node);
     if (alpha <= 0) return;
@@ -2231,7 +2233,7 @@ function drawClusterClouds() {
 
   ctx.save();
   groups.forEach((nodes, category) => {
-    if (nodes.length < 4) return;
+    if (nodes.length < minimumCloudNodes) return;
     const color = getCategoryColor(category);
     const centerX = nodes.reduce((sum, node) => sum + node.screenX, 0) / nodes.length;
     const centerY = nodes.reduce((sum, node) => sum + node.screenY, 0) / nodes.length;
