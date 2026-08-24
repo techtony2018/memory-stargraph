@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `96599ce`
-- Current performance code commit: `96599ce` (`perf: reuse expanded relationship evidence`)
-- Previous pushed commit: `32e502c` (`perf: overlap selection metadata reads`)
+- Current merged and pushed source: `188b39e`
+- Current performance code commit: `188b39e` (`perf: cache repeated timeline reads`)
+- Previous pushed commit: `96599ce` (`perf: reuse expanded relationship evidence`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 607 tests passed in 42.217 seconds.
+- Latest verification: 608 tests passed in 40.765 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -73,6 +73,8 @@ After the deferred startup-data follow-up, the full suite passed 605 tests in 40
 After the selection-metadata overlap follow-up, the full suite passed 606 tests in 51.096 seconds with JavaScript syntax and `git diff --check` passing. Isolated-source browser comparison against the previous commit completed with no runtime errors.
 
 After the expanded-relationship evidence reuse follow-up, the full suite passed 607 tests in 42.217 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
+After the repeated timeline-read cache follow-up, the full suite passed 608 tests in 40.765 seconds. Python compilation and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -372,6 +374,16 @@ Successful lazy expansion already reads complete outbound `graph-query` and inbo
 - A first implementation that reconstructed types from the bounded final graph was rejected: it preserved neighbors but lost valid backlink-derived types such as `doc_of`, `mentions`, and `runbook_for`. The accepted implementation captures the complete raw outbound/backlink type evidence before graph supplement bounding.
 - Regression tests verify two total relationship backend calls during expansion, zero repeats during immediate detail, and preservation of a backlink type on an edge already discovered outbound.
 
+### Repeated timeline read cache
+
+Successful selected-node timeline output is cached for 30 seconds, up to 64 slugs. Failed reads are never cached. Any GraphStore invalidation clears the cache, and `timeline-add` invalidates before the next read, so new events cannot be hidden by a stale warm entry.
+
+- Before: three repeated dashboard endpoint reads took 1.123-1.257 seconds for `products/memory-stargraph` and 1.159-1.179 seconds for `people/tony-guan`.
+- After: the product timeline loaded once in 1.204 seconds, then returned in 9 and 3 microseconds. The person timeline loaded once in 1.103 seconds, then returned in 3 and 1 microseconds.
+- Correctness: output hashes matched for all three reads of both an empty 21-byte timeline and a nonempty 4,547-byte timeline.
+- Regression tests verify one backend read for warm repeats, immediate invalidation after `timeline-add`, and a fresh backend read afterward.
+- This optimization does not reduce the first timeline read; it removes repeated backend work during reselection and repeated Timeline opening.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -419,7 +431,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, and the immediate entity detail reuses expansion relationship evidence. The timeline endpoint remains the longest selected-node request at roughly 3.7-3.9 seconds in the measured traces; profile its server-side timeline operation before changing client behavior again.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate entity detail reuses expansion relationship evidence, and repeated timeline reads are cached. First-time timeline reads still cost about 1.1-1.2 seconds in isolation; they run in the background and do not block detail rendering. The next measured user-facing bottleneck remains uncached primary GBrain Search or first-time entity `get`, not frontend graph visibility.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
