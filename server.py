@@ -7842,8 +7842,13 @@ class GraphStore:
         cached = self.relationship_output_cache.get(cache_key)
         if cached is not None:
             return cached
-        output = run_gbrain("backlinks", slug)
-        self.relationship_output_cache.put(cache_key, output)
+        output, _load_status = self.relationship_output_cache.load_once(
+            cache_key,
+            lambda: run_gbrain("backlinks", slug),
+            timeout=20,
+        )
+        if output is None:
+            raise RuntimeError("GBrain backlinks retrieval was unavailable")
         return output
 
     def backlink_page(self, slug, page=0, limit=20):

@@ -1788,6 +1788,30 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(first["total"], 5)
         self.assertEqual(run.call_count, 1)
 
+    def test_backlinks_coalesce_concurrent_reads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_run(*args):
+            self.assertEqual(args, ("backlinks", "people/tony-guan"))
+            started.set()
+            release.wait(timeout=1)
+            return '[{"from_slug":"posts/example","to_slug":"people/tony-guan"}]'
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(store.backlinks, "people/tony-guan")
+                    for _ in range(8)
+                ]
+                self.assertTrue(started.wait(timeout=1))
+                release.set()
+                outputs = [future.result(timeout=2) for future in futures]
+
+        self.assertEqual(outputs, [outputs[0]] * 8)
+        self.assertEqual(run.call_count, 1)
+
     def test_parse_link_types_reads_graph_relationships(self):
         output = """[
   {"slug": "people/tony-guan", "links": [{"to_slug": "universities/changan-university", "link_type": "studied in"}]}

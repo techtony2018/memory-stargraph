@@ -503,6 +503,17 @@ Lazy expansion now retains the successful raw `graph-query --direction out --dep
 - After expansion, Relationships returned the same 2,300 bytes in 16 microseconds and Backlinks returned the same 183,013 bytes in 20 microseconds. Warm repeats took 12 and 4 microseconds, greater than 99.99% reductions from the uncached samples.
 - Tests verify expansion makes exactly the original two backend calls, then both modal reads reuse the exact raw outputs without another call. The 32-entry bound limits memory exposure from large backlink payloads.
 
+### Coalesced cold Backlinks reads
+
+Concurrent first Backlinks reads for the same slug now share one in-flight backend call through the existing 30-second relationship-output cache. Different slugs and graph-query variants remain independent, successful raw output retains the existing 32-entry bound, and graph writes keep the current cache invalidation behavior.
+
+- A three-round direction-balanced fresh-process A/B sent eight synchronized compact Backlinks requests for the high-degree `people/tony-guan` node on every run.
+- Median batch completion fell from 10.891 to 5.772 seconds, a 47.0% improvement. The median of per-run request medians fell from 10.683 to 5.769 seconds, a 46.0% improvement.
+- Every run returned eight `200` responses with one exact 1,484-byte compact page and one SHA-256 hash.
+- The compact projection was intentionally left unchanged: after raw-read coalescing, all eight candidate requests completed within about 160 milliseconds of each other, so another coordination layer was not justified.
+- Regression coverage proves eight same-slug callers invoke `gbrain backlinks` exactly once and preserves compact projection reuse across pages.
+- The full suite passed 662 tests in 47.797 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Bounded high-degree graph glows
 
 The canvas renderer no longer gives every direct neighbor an expensive radial glow when the focused node is a high-degree hub. Focus, hover, visible top hubs, globally high-degree nodes, and direct neighbors with degree at least 5 retain the glow at normal zoom. All direct neighbors retain it for focused nodes with degree 80 or lower, and zooming to 165% restores it for detailed inspection.
