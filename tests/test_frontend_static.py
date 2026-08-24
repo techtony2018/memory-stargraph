@@ -189,6 +189,15 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function drawBackground()", script)
         self.assertIn("ctx.arc(radarX, radarY, radius, 0, Math.PI * 2)", script)
 
+    def test_canvas_reuses_static_background_glow_for_matching_viewport_and_dpr(self):
+        script = (ROOT / "public" / "app.js").read_text()
+
+        self.assertIn("function backgroundGlowCanvas(width, height)", script)
+        self.assertIn("staticBackgroundGlow.width === width", script)
+        self.assertIn("staticBackgroundGlow.height === height", script)
+        self.assertIn("staticBackgroundGlow.pixelRatio === pixelRatio", script)
+        self.assertIn("ctx.drawImage(backgroundGlowCanvas(width, height), 0, 0, width, height)", script)
+
     def test_restored_yoda_history_uses_the_same_formatted_chat_renderer(self):
         script = (ROOT / "public" / "app.js").read_text()
 
