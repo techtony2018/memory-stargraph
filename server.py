@@ -5797,7 +5797,20 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
         existing_slugs=[result["slug"] for result in sentinel_results + evidence_results + primary_results],
     )
     results = merge_search_results(primary_results, sentinel_results + evidence_results + loaded_results, query)
-    nodes = {str(node.get("slug")): dict(node) for node in raw_graph.get("nodes", []) if node.get("slug")}
+    result_slugs = {result["slug"] for result in results}
+    nodes = {}
+    pruned_search_nodes = 0
+    for node in raw_graph.get("nodes", []):
+        slug = str(node.get("slug") or "").strip()
+        if not slug:
+            continue
+        tags = {str(tag).strip() for tag in node.get("tags") or [] if str(tag).strip()}
+        search_only = tags == {"lazy-search"}
+        retained_context = bool(node.get("expanded") or node.get("links"))
+        if search_only and slug not in result_slugs and not retained_context:
+            pruned_search_nodes += 1
+            continue
+        nodes[slug] = dict(node)
     for result in results:
         slug = result["slug"]
         nodes.setdefault(
@@ -5822,6 +5835,7 @@ def search_raw_graph(raw_graph, query, evidence_cache=None, primary_cache=None):
     coverage["search_sentinel_slugs"] = [result["slug"] for result in sentinel_results]
     coverage["evidence_search_slugs"] = [result["slug"] for result in evidence_results]
     coverage["loaded_graph_search_slugs"] = [result["slug"] for result in loaded_results]
+    coverage["search_pruned_stale_nodes"] = pruned_search_nodes
     coverage["search_elapsed_ms"] = int((time.monotonic() - started) * 1000)
     evidence_complete = evidence_status in {
         "complete",

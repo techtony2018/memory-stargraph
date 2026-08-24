@@ -1140,6 +1140,39 @@ class GraphParsingTests(unittest.TestCase):
             ["lazy-search"],
         )
 
+    def test_search_raw_graph_prunes_only_stale_unexpanded_search_nodes(self):
+        raw_graph = {
+            "title": "Memory Stargraph",
+            "source": {"coverage": {}},
+            "nodes": [
+                {"slug": "index", "label": "Index", "type": "root", "tags": [], "links": []},
+                {"slug": "learnings/stale", "label": "Stale", "type": "learning", "tags": ["lazy-search"], "links": [], "expanded": False},
+                {"slug": "learnings/current", "label": "Current", "type": "learning", "tags": ["lazy-search"], "links": [], "expanded": False},
+                {"slug": "learnings/expanded", "label": "Expanded", "type": "learning", "tags": ["lazy-search"], "links": [], "expanded": True},
+                {"slug": "learnings/linked", "label": "Linked", "type": "learning", "tags": ["lazy-search"], "links": ["index"], "expanded": False},
+                {"slug": "learnings/tagged", "label": "Tagged", "type": "learning", "tags": ["lazy-search", "reviewed"], "links": [], "expanded": False},
+            ],
+            "edge_types": [],
+        }
+
+        def fake_run_gbrain(*args, **_kwargs):
+            if args[0] == "search":
+                return "[0.90] learnings/current -- Current\n"
+            if args[0] == "list":
+                return ""
+            raise AssertionError(args)
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run_gbrain):
+            graph = search_raw_graph(raw_graph, "current benchmark")
+
+        slugs = {node["slug"] for node in graph["nodes"]}
+        self.assertNotIn("learnings/stale", slugs)
+        self.assertIn("learnings/current", slugs)
+        self.assertIn("learnings/expanded", slugs)
+        self.assertIn("learnings/linked", slugs)
+        self.assertIn("learnings/tagged", slugs)
+        self.assertEqual(graph["source"]["coverage"]["search_pruned_stale_nodes"], 1)
+
     def test_search_raw_graph_reports_partial_status_when_evidence_budget_expires(self):
         raw_graph = {
             "title": "Memory Stargraph",
