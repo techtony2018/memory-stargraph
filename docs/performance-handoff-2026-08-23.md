@@ -10,6 +10,22 @@
 - Product code was not deployed or restarted during this work.
 - All performance commits listed below were pushed to `origin/main`.
 
+## Pause Checkpoint - 2026-08-24 07:36 PDT
+
+- User requested a pause after the current optimization round.
+- Current local and remote source: `20d4fff10f2b54bae4db4da57ecde68009bb29c9`; `main == origin/main`.
+- New pushed commits in this continuation:
+  - `4428c52` (`perf: coalesce cold graph queries`)
+  - `ce75369` (`perf: share entity relationship reads`)
+  - `20d4fff` (`perf: cache repeated history reads`)
+- Latest full verification: 665 tests passed in 43.782 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` passed.
+- No dashboard-managed product service was deployed or restarted. All isolated benchmark services on ports 8875-8877 were stopped before pausing.
+- The only remaining workspace changes are the pre-existing Product Owner ledger and two 2026-08-23 Goal Steward artifacts listed below; they remain untouched and uncommitted.
+
+The final discovery pass did not start another code change. The normal product-path Search benchmark completed three uncached queries in 314-623 milliseconds with complete primary and evidence results. A privacy-safe, provider-down Ask Yoda matrix then measured a cold context median of 8.943 seconds and p95 of 10.546 seconds across ten cases, with grounding recall 1.0, zero degraded cases, and one deliberate optional broad-graph timeout. Warm context hits still took 3.846-5.764 seconds because each new question performs fresh Search and direct source reads. Previous parameter and multiplexing experiments recorded later in this document failed the 15% acceptance gate, so this remains the next profiling point rather than an authorized implementation direction.
+
+On resume, begin with source-sync and workspace hygiene checks. Preserve the Product Owner files, rerun the product-path Search calibration if the source or GBrain backend changed, then profile Ask Yoda Search and direct-read phases independently with fresh paraphrases. Accept a change only if end-to-end median improves by at least 15% with exact evidence/grounding parity; do not reuse warmed same-query timings as product evidence.
+
 ## Current Source State
 
 - Resumed performance code commit: `47bc335` (`perf: reuse persistent GBrain search session`)
