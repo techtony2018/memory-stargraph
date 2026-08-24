@@ -44,15 +44,16 @@ from openclaw_profile_activation import (
 APP_NAME = "Memory Stargraph"
 OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS = STATUS_ENDPOINT_BUDGET_SECONDS
 JSON_GZIP_MIN_BYTES = 1024
-GZIP_STATIC_PATHS = {
+COMPRESSIBLE_STATIC_PATHS = {
     "/": "index.html",
     "/index.html": "index.html",
     "/app.js": "app.js",
     "/styles.css": "styles.css",
 }
+BROTLI_STATIC_DIR = "assets/precompressed"
 
 
-def accepts_gzip_encoding(header):
+def content_encoding_qualities(header):
     qualities = {}
     for item in str(header or "").split(","):
         parts = [part.strip() for part in item.split(";") if part.strip()]
@@ -67,13 +68,86 @@ def accepts_gzip_encoding(header):
                 except ValueError:
                     quality = 0.0
         qualities[parts[0].lower()] = quality
-    return qualities.get("gzip", qualities.get("*", 0.0)) > 0
+    return qualities
+
+
+def content_encoding_quality(header, encoding):
+    qualities = content_encoding_qualities(header)
+    return qualities.get(str(encoding).lower(), qualities.get("*", 0.0))
+
+
+def accepts_gzip_encoding(header):
+    return content_encoding_quality(header, "gzip") > 0
+
+
+def accepted_static_encodings(header):
+    preference = {"br": 1, "gzip": 0}
+    return sorted(
+        (encoding for encoding in preference if content_encoding_quality(header, encoding) > 0),
+        key=lambda encoding: (content_encoding_quality(header, encoding), preference[encoding]),
+        reverse=True,
+    )
 
 
 @lru_cache(maxsize=16)
 def gzip_static_file(path, mtime_ns, size):
     del mtime_ns, size
     return gzip.compress(Path(path).read_bytes(), compresslevel=1, mtime=0)
+
+
+@lru_cache(maxsize=4)
+def load_brotli_static_manifest(path, mtime_ns, size):
+    del mtime_ns, size
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+@lru_cache(maxsize=16)
+def validated_brotli_static_file(
+    public_dir,
+    relative_path,
+    mtime_ns,
+    size,
+    manifest_mtime_ns,
+    manifest_size,
+):
+    source_path = Path(public_dir) / relative_path
+    manifest_path = Path(public_dir) / BROTLI_STATIC_DIR / "manifest.json"
+    try:
+        manifest = load_brotli_static_manifest(
+            str(manifest_path),
+            manifest_mtime_ns,
+            manifest_size,
+        )
+        entry = (manifest.get("assets") or {}).get(relative_path) or {}
+        if int(entry.get("source_size") or -1) != int(size):
+            return None
+        source = source_path.read_bytes()
+        if hashlib.sha256(source).hexdigest() != str(entry.get("source_sha256") or ""):
+            return None
+        compressed_path = Path(public_dir) / BROTLI_STATIC_DIR / f"{relative_path}.br"
+        compressed = compressed_path.read_bytes()
+        if len(compressed) != int(entry.get("brotli_size") or -1):
+            return None
+        return compressed
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def brotli_static_file(public_dir, relative_path, mtime_ns, size):
+    manifest_path = Path(public_dir) / BROTLI_STATIC_DIR / "manifest.json"
+    try:
+        manifest_stat = manifest_path.stat()
+    except OSError:
+        return None
+    return validated_brotli_static_file(
+        public_dir,
+        relative_path,
+        mtime_ns,
+        size,
+        manifest_stat.st_mtime_ns,
+        manifest_stat.st_size,
+    )
 
 
 class MemoryStargraphHTTPServer(ThreadingHTTPServer):
@@ -9259,8 +9333,9 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         request_path = urlparse(self.path).path
-        relative_path = GZIP_STATIC_PATHS.get(request_path)
-        if not relative_path or not accepts_gzip_encoding(self.headers.get("Accept-Encoding")):
+        relative_path = COMPRESSIBLE_STATIC_PATHS.get(request_path)
+        encodings = accepted_static_encodings(self.headers.get("Accept-Encoding"))
+        if not relative_path or not encodings:
             return super().send_head()
         path = PUBLIC_DIR / relative_path
         try:
@@ -9282,10 +9357,26 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
                     self.end_headers()
                     return None
-        body = gzip_static_file(str(path), stat.st_mtime_ns, stat.st_size)
+        body = None
+        encoding = None
+        for candidate in encodings:
+            if candidate == "br":
+                body = brotli_static_file(
+                    str(PUBLIC_DIR),
+                    relative_path,
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
+            elif candidate == "gzip":
+                body = gzip_static_file(str(path), stat.st_mtime_ns, stat.st_size)
+            if body is not None:
+                encoding = candidate
+                break
+        if body is None:
+            return super().send_head()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", self.guess_type(str(path)))
-        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Encoding", encoding)
         self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))

@@ -1,5 +1,7 @@
 from pathlib import Path
 from html.parser import HTMLParser
+import hashlib
+import json
 import unittest
 
 
@@ -29,6 +31,20 @@ class ActionableControlParser(HTMLParser):
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_precompressed_startup_assets_match_sources(self):
+        output_dir = ROOT / "public" / "assets" / "precompressed"
+        manifest = json.loads((output_dir / "manifest.json").read_text())
+
+        self.assertEqual(manifest["quality"], 5)
+        self.assertEqual(set(manifest["assets"]), {"index.html", "app.js", "styles.css"})
+        for name, entry in manifest["assets"].items():
+            source = (ROOT / "public" / name).read_bytes()
+            sidecar = output_dir / f"{name}.br"
+            self.assertEqual(entry["source_size"], len(source))
+            self.assertEqual(entry["source_sha256"], hashlib.sha256(source).hexdigest())
+            self.assertEqual(entry["brotli_size"], sidecar.stat().st_size)
+            self.assertLess(entry["brotli_size"], len(source))
+
     def test_slug_deep_links_setup_diagnostics_and_layered_canvas_background_are_wired(self):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public" / "app.js").read_text()

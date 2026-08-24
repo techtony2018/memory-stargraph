@@ -2,6 +2,7 @@ import datetime as dt
 import asyncio
 import email.utils
 import gzip
+import hashlib
 import io
 import json
 import subprocess
@@ -282,7 +283,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(json.loads(large_body), large_payload)
 
     def test_send_head_compresses_large_static_assets_losslessly(self):
-        statuses, headers, stream = self.render_static_head("/app.js?version=test", {"Accept-Encoding": "br, gzip"})
+        statuses, headers, stream = self.render_static_head("/app.js?version=test", {"Accept-Encoding": "gzip"})
 
         try:
             body = stream.read()
@@ -293,6 +294,58 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(headers["Vary"], "Accept-Encoding")
         self.assertEqual(headers["Content-Length"], str(len(body)))
         self.assertEqual(gzip.decompress(body), (server.PUBLIC_DIR / "app.js").read_bytes())
+
+    def test_send_head_prefers_validated_brotli_static_assets(self):
+        statuses, headers, stream = self.render_static_head(
+            "/app.js?version=test",
+            {"Accept-Encoding": "gzip, br"},
+        )
+
+        try:
+            body = stream.read()
+        finally:
+            stream.close()
+        manifest = json.loads(
+            (server.PUBLIC_DIR / server.BROTLI_STATIC_DIR / "manifest.json").read_text()
+        )
+        entry = manifest["assets"]["app.js"]
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertEqual(headers["Content-Encoding"], "br")
+        self.assertEqual(headers["Vary"], "Accept-Encoding")
+        self.assertEqual(len(body), entry["brotli_size"])
+        self.assertEqual(
+            entry["source_sha256"],
+            hashlib.sha256((server.PUBLIC_DIR / "app.js").read_bytes()).hexdigest(),
+        )
+
+    def test_send_head_falls_back_when_brotli_sidecar_is_stale(self):
+        with mock.patch("server.brotli_static_file", return_value=None):
+            statuses, headers, stream = self.render_static_head(
+                "/styles.css",
+                {"Accept-Encoding": "br"},
+            )
+
+        try:
+            body = stream.read()
+        finally:
+            stream.close()
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertNotIn("Content-Encoding", headers)
+        self.assertEqual(body, (server.PUBLIC_DIR / "styles.css").read_bytes())
+
+    def test_send_head_honors_static_encoding_quality(self):
+        statuses, headers, stream = self.render_static_head(
+            "/styles.css",
+            {"Accept-Encoding": "br;q=0, gzip;q=0.5"},
+        )
+
+        try:
+            body = stream.read()
+        finally:
+            stream.close()
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertEqual(gzip.decompress(body), (server.PUBLIC_DIR / "styles.css").read_bytes())
 
     def test_send_head_preserves_static_conditional_requests(self):
         path = server.PUBLIC_DIR / "styles.css"
@@ -308,7 +361,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIsNone(stream)
 
     def test_send_head_preserves_plain_static_fallback(self):
-        statuses, headers, stream = self.render_static_head("/styles.css", {"Accept-Encoding": "br"})
+        statuses, headers, stream = self.render_static_head("/styles.css", {"Accept-Encoding": "identity"})
 
         try:
             body = stream.read()

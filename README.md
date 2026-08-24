@@ -236,6 +236,7 @@ If Tailscale Serve returns `502`, first check whether its backend route uses `ht
 
 Verification commands:
 - export PATH="$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+- python3 scripts/build_static_brotli.py
 - scripts/automation/preflight.sh
 - python3 -m py_compile server.py
 - python3 -m unittest discover -s tests
@@ -298,6 +299,7 @@ Safety:
 ## Verification
 
 ```bash
+python3 scripts/build_static_brotli.py
 scripts/automation/preflight.sh
 python3 -m py_compile server.py
 python3 -m unittest discover -s tests
