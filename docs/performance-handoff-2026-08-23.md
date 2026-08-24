@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `76e34cd`
-- Current performance code commit: `76e34cd` (`perf: cache take review reads`)
-- Previous pushed commit: `c092200` (`docs: record settings detail benchmark`)
+- Current merged and pushed source: `9ccef04`
+- Current performance code commit: `9ccef04` (`perf: cache resolver review reads`)
+- Previous pushed commit: `2894b9d` (`docs: record take review cache benchmark`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 629 tests passed in 41.852 seconds.
+- Latest verification: 636 tests passed in 45.133 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -617,6 +617,15 @@ Take Review now caches only successful normalized proposal and existing-take lis
 - After one 1,532.5-millisecond capability and content probe, five repeated parallel loads took 9.1, 11.1, 11.8, 8.6, and 9.3 milliseconds; median was 9.3 milliseconds, a 99.36% reduction. Response statuses remained `[502, 200]`.
 - After the 30-second result TTL elapsed, the next real refresh took 1,322.8 milliseconds and the immediate repeat took 9.6 milliseconds. This verifies bounded freshness without requiring a service restart.
 - Tests verify successful proposal and take result reuse, explicit missing-tool capability reuse across different filters, transient-error retries, and immediate cache invalidation after single and bulk review writes. The full suite passed 629 tests in 41.852 seconds.
+
+### Repeated Resolver review read cache
+
+Resolver review health and proposal-list reads now use the same bounded freshness contract: successful normalized results remain reusable for 30 seconds, while explicit missing-tool capability results remain reusable for five minutes. Transient failures are never cached. Resolver event submission, proposal generation or review, release application, impact measurement, graph invalidation, and force refresh clear successful result data and the combined Settings snapshot immediately.
+
+- Five pre-change parallel health/proposal loads took 1,433.2, 1,439.6, 1,405.2, 1,422.5, and 1,662.2 milliseconds; median was 1,433.2 milliseconds. Health returned a supported local read-only fallback after the backend capability probe, while proposal listing truthfully returned 502 for the missing tool.
+- After one 2,264.1-millisecond cold process probe, five repeated parallel loads took 8.1, 9.0, 6.7, 7.6, and 4.9 milliseconds; median was 7.6 milliseconds, a 99.47% reduction from the repeated pre-change median. Statuses remained `[200, 502]`.
+- After the 30-second result TTL expired but within the five-minute capability TTL, the next read took 68.4 milliseconds and the immediate repeat took 7.8 milliseconds. Local health evidence was reread without repeating known-unsupported remote probes.
+- Cache keys include the active GBrain caller and local ledger paths so test, configuration, and source-context changes cannot reuse incompatible evidence. Tests verify success reuse, explicit capability reuse, result-expiry behavior, transient-error retries, write invalidation, and the complete resolver generate/review/apply/impact lifecycle. The full suite passed 636 tests in 45.133 seconds.
 
 ## Earlier Performance Work
 
