@@ -11,6 +11,7 @@ from server import (
     DEFAULT_CONFIG,
     EvidenceListCache,
     GraphStore,
+    PersistentGBrainSearch,
     TimedValueCache,
     append_attachment_reference,
     cached_primary_search_results,
@@ -49,7 +50,9 @@ from server import (
     parse_gbrain_durable_evidence,
     safe_upload_filename,
     merge_search_results,
+    format_mcp_json,
     format_mcp_search_results,
+    parse_gbrain_query_arguments,
     parse_gbrain_search_arguments,
 )
 
@@ -191,9 +194,45 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(parsed[0]["label"], "Memory Stargraph")
         self.assertEqual(parsed[1]["preview"], "a" * 99)
 
+    def test_parse_gbrain_query_arguments_maps_current_yoda_options(self):
+        payload = parse_gbrain_query_arguments(
+            (
+                "query",
+                "What should I inspect?",
+                "--no-expand",
+                "--adaptive-return",
+                "true",
+                "--limit",
+                "10",
+                "--relational",
+                "true",
+            )
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "query": "What should I inspect?",
+                "expand": False,
+                "adaptive_return": True,
+                "limit": 10,
+                "relational": True,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "invalid boolean option"):
+            parse_gbrain_query_arguments(("query", "question", "--relational", "maybe"))
+        with self.assertRaisesRegex(ValueError, "unsupported persistent query option"):
+            parse_gbrain_query_arguments(("query", "question", "--unknown"))
+
+    def test_format_mcp_json_matches_cli_json_contract(self):
+        self.assertEqual(
+            format_mcp_json([{"slug": "products/memory-stargraph", "context": "Memory"}]),
+            '[\n  {\n    "slug": "products/memory-stargraph",\n    "context": "Memory"\n  }\n]\n',
+        )
+
     def test_run_gbrain_prefers_active_persistent_search(self):
         persistent = mock.Mock(active=True)
-        persistent.search_cli_output.return_value = "[0.90] products/memory-stargraph -- # Memory Stargraph\n"
+        persistent.read_cli_output.return_value = "[0.90] products/memory-stargraph -- # Memory Stargraph\n"
         with (
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess") as fallback,
@@ -201,7 +240,7 @@ class GraphParsingTests(unittest.TestCase):
             output = run_gbrain("search", "memory stargraph", "--limit", "5", timeout=6)
 
         self.assertIn("products/memory-stargraph", output)
-        persistent.search_cli_output.assert_called_once_with(
+        persistent.read_cli_output.assert_called_once_with(
             ("search", "memory stargraph", "--limit", "5"),
             6,
         )
@@ -209,7 +248,7 @@ class GraphParsingTests(unittest.TestCase):
 
     def test_run_gbrain_falls_back_when_persistent_search_fails(self):
         persistent = mock.Mock(active=True)
-        persistent.search_cli_output.side_effect = RuntimeError("synthetic process exit")
+        persistent.read_cli_output.side_effect = RuntimeError("synthetic process exit")
         with (
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess", return_value="fallback") as fallback,
@@ -219,6 +258,61 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(output, "fallback")
         self.assertEqual(fallback.call_args.args, ("search", "memory stargraph"))
         self.assertGreater(fallback.call_args.kwargs["timeout"], 5.5)
+
+    def test_run_gbrain_routes_supported_read_commands_to_persistent_session(self):
+        persistent = mock.Mock(active=True)
+        persistent.read_cli_output.side_effect = ["query", "page", "[]\n"]
+        with (
+            mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
+            mock.patch("server.run_gbrain_subprocess") as fallback,
+        ):
+            outputs = [
+                run_gbrain("query", "question", timeout=6),
+                run_gbrain("get", "products/memory-stargraph", timeout=6),
+                run_gbrain("backlinks", "products/memory-stargraph", timeout=6),
+            ]
+
+        self.assertEqual(outputs, ["query", "page", "[]\n"])
+        self.assertEqual(persistent.read_cli_output.call_count, 3)
+        fallback.assert_not_called()
+
+    def test_persistent_read_session_formats_query_get_and_backlinks(self):
+        session = PersistentGBrainSearch()
+        with (
+            mock.patch.object(session, "_start_locked"),
+            mock.patch.object(
+                session,
+                "_call_tool_locked",
+                side_effect=[
+                    [{"slug": "products/memory-stargraph", "score": 0.75, "chunk_text": "# Memory Stargraph"}],
+                    {"content": "---\ntitle: Memory Stargraph\n---\n"},
+                    [{"from_slug": "goals/example", "to_slug": "products/memory-stargraph"}],
+                ],
+            ) as call_tool,
+        ):
+            query_output = session.read_cli_output(
+                ("query", "What matters?", "--no-expand", "--limit", "10"),
+                5,
+            )
+            get_output = session.read_cli_output(("get", "products/memory-stargraph"), 5)
+            backlinks_output = session.read_cli_output(
+                ("backlinks", "products/memory-stargraph"),
+                5,
+            )
+
+        self.assertEqual(
+            query_output,
+            "[0.7500] products/memory-stargraph -- # Memory Stargraph\n",
+        )
+        self.assertEqual(get_output, "---\ntitle: Memory Stargraph\n---\n")
+        self.assertEqual(
+            backlinks_output,
+            '[\n  {\n    "from_slug": "goals/example",\n    "to_slug": "products/memory-stargraph"\n  }\n]\n',
+        )
+        self.assertEqual(
+            [item.args[0] for item in call_tool.call_args_list],
+            ["query", "get_page", "get_backlinks"],
+        )
 
     def test_evidence_record_search_lists_types_concurrently(self):
         barrier = threading.Barrier(4)

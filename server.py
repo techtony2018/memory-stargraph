@@ -1250,6 +1250,43 @@ def parse_gbrain_search_arguments(args):
     return payload
 
 
+def parse_cli_boolean(value):
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise ValueError(f"invalid boolean option: {value}")
+
+
+def parse_gbrain_query_arguments(args):
+    if len(args) < 2 or args[0] != "query":
+        raise ValueError("persistent query requires query text")
+    payload = {"query": str(args[1])}
+    option_names = {
+        "--adaptive-return": ("adaptive_return", parse_cli_boolean),
+        "--limit": ("limit", int),
+        "--mode": ("mode", str),
+        "--offset": ("offset", int),
+        "--relational": ("relational", parse_cli_boolean),
+        "--snippet-chars": ("snippet_chars", int),
+        "--types": ("types", lambda value: [item for item in str(value).split(",") if item]),
+    }
+    index = 2
+    while index < len(args):
+        option = str(args[index])
+        if option == "--no-expand":
+            payload["expand"] = False
+            index += 1
+            continue
+        if option not in option_names or index + 1 >= len(args):
+            raise ValueError(f"unsupported persistent query option: {option}")
+        key, parser = option_names[option]
+        payload[key] = parser(args[index + 1])
+        index += 2
+    return payload
+
+
 def truncate_utf16(text, max_units):
     encoded = str(text or "").encode("utf-16-le")
     return encoded[: max(0, int(max_units)) * 2].decode("utf-16-le", errors="ignore")
@@ -1269,6 +1306,10 @@ def format_mcp_search_results(rows):
             score = 0.0
         lines.append(f"[{score:.4f}] {row['slug']} -- {preview}")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def format_mcp_json(value):
+    return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
 
 
 class PersistentGBrainSearch:
@@ -1405,34 +1446,65 @@ class PersistentGBrainSearch:
         )
         process.stdin.flush()
 
-    def search_cli_output(self, args, timeout):
-        payload = parse_gbrain_search_arguments(args)
-        if not self.lock.acquire(blocking=False):
-            raise RuntimeError("persistent GBrain search is busy")
+    def _call_tool_locked(self, name, payload, deadline):
+        result = self._request_locked(
+            "tools/call",
+            {"name": name, "arguments": payload},
+            deadline,
+        )
+        if result.get("isError"):
+            raise RuntimeError(f"persistent GBrain {name} tool failed")
+        content = result.get("content") if isinstance(result.get("content"), list) else []
+        text_item = next(
+            (item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"),
+            "null",
+        )
+        return json.loads(text_item)
+
+    def read_cli_output(self, args, timeout):
+        command = args[0] if args else ""
+        if command == "search":
+            tool_name = "search"
+            payload = parse_gbrain_search_arguments(args)
+            formatter = format_mcp_search_results
+        elif command == "query":
+            tool_name = "query"
+            payload = parse_gbrain_query_arguments(args)
+            formatter = format_mcp_search_results
+        elif command == "get" and len(args) == 2:
+            tool_name = "get_page"
+            payload = {"slug": str(args[1]), "include_content": True}
+            formatter = None
+        elif command == "backlinks" and len(args) == 2:
+            tool_name = "get_backlinks"
+            payload = {"slug": str(args[1])}
+            formatter = format_mcp_json
+        else:
+            raise ValueError(f"unsupported persistent GBrain command: {command}")
+        lock_wait = min(0.25, max(0.0, float(timeout)))
+        if not self.lock.acquire(timeout=lock_wait):
+            raise RuntimeError("persistent GBrain read session is busy")
         deadline = time.monotonic() + max(0.1, float(timeout))
         try:
             self._start_locked(deadline)
-            result = self._request_locked(
-                "tools/call",
-                {"name": "search", "arguments": payload},
-                deadline,
-            )
-            if result.get("isError"):
-                raise RuntimeError("persistent GBrain search tool failed")
-            content = result.get("content") if isinstance(result.get("content"), list) else []
-            text_item = next(
-                (item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"),
-                "[]",
-            )
-            rows = json.loads(text_item)
-            if not isinstance(rows, list):
-                raise RuntimeError("persistent GBrain search returned invalid rows")
-            return format_mcp_search_results(rows)
+            value = self._call_tool_locked(tool_name, payload, deadline)
+            if command in {"search", "query", "backlinks"} and not isinstance(value, list):
+                raise RuntimeError(f"persistent GBrain {command} returned invalid rows")
+            if command == "get":
+                if not isinstance(value, dict) or not isinstance(value.get("content"), str):
+                    raise RuntimeError("persistent GBrain get returned invalid content")
+                return value["content"]
+            return formatter(value)
         except Exception:
             self._close_locked()
             raise
         finally:
             self.lock.release()
+
+    def search_cli_output(self, args, timeout):
+        if not args or args[0] != "search":
+            raise ValueError("persistent search requires a search command")
+        return self.read_cli_output(args, timeout)
 
     def prewarm_async(self, timeout=15):
         self.active = True
@@ -1482,9 +1554,10 @@ def run_gbrain_subprocess(*args, input_text=None, timeout=20):
 
 def run_gbrain(*args, input_text=None, timeout=20):
     started = time.monotonic()
-    if input_text is None and args and args[0] == "search" and PERSISTENT_GBRAIN_SEARCH.active:
+    persistent_commands = {"search", "query", "get", "backlinks"}
+    if input_text is None and args and args[0] in persistent_commands and PERSISTENT_GBRAIN_SEARCH.active:
         try:
-            return PERSISTENT_GBRAIN_SEARCH.search_cli_output(args, timeout)
+            return PERSISTENT_GBRAIN_SEARCH.read_cli_output(args, timeout)
         except Exception:  # noqa: BLE001
             pass
     remaining = max(0.1, float(timeout) - (time.monotonic() - started))
