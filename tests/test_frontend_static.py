@@ -775,6 +775,12 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('const settingsEvidenceCards = document.getElementById("settingsEvidenceCards")', script)
         self.assertIn('apiGet(settingsEvidenceUrl("/api/settings-evidence", requestId))', script)
         self.assertIn("function refreshSettingsEvidenceCards", script)
+        self.assertIn("function performSettingsEvidenceRefresh", script)
+        self.assertIn("let settingsEvidenceRefreshPromise = null", script)
+        self.assertIn("if (settingsEvidenceRefreshPromise) return settingsEvidenceRefreshPromise", script)
+        self.assertIn("function runAfterSettingsEvidenceRefresh", script)
+        self.assertIn('const deferTimelineBadge = options.source === "system"', script)
+        self.assertIn("runAfterSettingsEvidenceRefresh(() =>", script)
         self.assertIn("SETTINGS_EVIDENCE_TIMEOUT_MS = 60000", script)
         self.assertIn("function withSettingsEvidenceTimeout", script)
         self.assertIn("function renderSettingsUnavailableCard", script)
@@ -1633,19 +1639,24 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("loadPersistentYodaLogs()", deferred_block)
         self.assertIn("refreshAutopilotFindingsBadge()", deferred_block)
 
-    def test_entity_detail_prefetches_timeline_and_media_concurrently(self):
+    def test_entity_detail_defers_only_system_timeline_prefetch(self):
         script = (ROOT / "public/app.js").read_text()
         load_start = script.index("async function loadEntity(slug, options = {})")
         load_end = script.index("async function refreshTimelineBadge", load_start)
         load_block = script[load_start:load_end]
 
         entity_start = load_block.index("const entityResponsePromise = apiGet")
-        timeline_start = load_block.index("const timelineResponsePromise = apiGet")
+        timeline_start = load_block.index("const timelineResponsePromise = deferTimelineBadge")
         media_start = load_block.index("const mediaResponsePromise = apiGet")
         entity_await = load_block.index("const response = await entityResponsePromise")
         self.assertLess(entity_start, timeline_start)
         self.assertLess(timeline_start, entity_await)
         self.assertLess(media_start, entity_await)
+        self.assertIn('const deferTimelineBadge = options.source === "system"', load_block)
+        self.assertIn('apiGet(`/api/entity-timeline-view/${encodedSlug}`)', load_block)
+        self.assertIn("window.setTimeout(() =>", load_block)
+        self.assertIn("runAfterSettingsEvidenceRefresh(() =>", load_block)
+        self.assertIn("refreshTimelineBadge(entity.slug, loadId);", load_block)
         self.assertIn("refreshTimelineBadge(entity.slug, loadId, timelineResponsePromise)", load_block)
         self.assertIn("loadSelectionMediaPreview(entity.slug, loadId, mediaResponsePromise)", load_block)
 

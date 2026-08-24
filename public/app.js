@@ -4296,6 +4296,7 @@ function renderCustomerReadinessCard(data) {
 
 let settingsEvidenceRequestId = 0;
 let settingsEvidenceRefreshTimer = null;
+let settingsEvidenceRefreshPromise = null;
 const SETTINGS_EVIDENCE_TIMEOUT_MS = 60000;
 const SETTINGS_EVIDENCE_REFRESH_INTERVAL_MS = 15000;
 
@@ -4398,13 +4399,7 @@ function renderSettingsUnavailableCard(kind, message) {
   return card;
 }
 
-async function refreshSettingsEvidenceCards(_options = {}) {
-  if (!settingsEvidenceCards) return;
-  if (settingsFlyout?.hidden && _options.forceVisible) {
-    state.settingsPinned = true;
-    showFloatingPanel(settingsFlyout, navSettingsButton);
-  }
-  if (settingsFlyout?.hidden) return;
+async function performSettingsEvidenceRefresh() {
   clearSettingsEvidenceAutoRefresh();
   const requestId = ++settingsEvidenceRequestId;
   renderSettingsEvidenceMessage("Loading weekly outcomes and customer readiness...");
@@ -4413,10 +4408,6 @@ async function refreshSettingsEvidenceCards(_options = {}) {
     "Settings evidence",
     SETTINGS_EVIDENCE_TIMEOUT_MS,
   );
-  if (settingsFlyout?.hidden && _options.forceVisible) {
-    state.settingsPinned = true;
-    showFloatingPanel(settingsFlyout, navSettingsButton);
-  }
   if (requestId !== settingsEvidenceRequestId || settingsFlyout?.hidden) return;
   const refreshedAt = Date.now();
   settingsEvidenceCards.innerHTML = "";
@@ -4436,6 +4427,34 @@ async function refreshSettingsEvidenceCards(_options = {}) {
     settingsEvidenceCards.appendChild(renderSettingsUnavailableCard("readiness", `Customer readiness unavailable: ${evidenceResponse.data?.error || evidenceResponse.status}`));
   }
   scheduleSettingsEvidenceAutoRefresh();
+}
+
+async function refreshSettingsEvidenceCards(options = {}) {
+  if (!settingsEvidenceCards) return;
+  if (settingsFlyout?.hidden && options.forceVisible) {
+    state.settingsPinned = true;
+    showFloatingPanel(settingsFlyout, navSettingsButton);
+  }
+  if (settingsFlyout?.hidden) return;
+  if (settingsEvidenceRefreshPromise) return settingsEvidenceRefreshPromise;
+  const refreshPromise = performSettingsEvidenceRefresh();
+  settingsEvidenceRefreshPromise = refreshPromise;
+  try {
+    return await refreshPromise;
+  } finally {
+    if (settingsEvidenceRefreshPromise === refreshPromise) {
+      settingsEvidenceRefreshPromise = null;
+    }
+  }
+}
+
+function runAfterSettingsEvidenceRefresh(callback) {
+  const pendingRefresh = settingsEvidenceRefreshPromise;
+  if (!pendingRefresh) {
+    callback();
+    return;
+  }
+  void pendingRefresh.then(callback, callback);
 }
 
 function openSettingsSurface() {
@@ -7537,7 +7556,10 @@ async function loadEntity(slug, options = {}) {
     if (loadId !== state.entityLoadId) return { status: "stale", slug };
     const encodedSlug = encodeURIComponent(slug);
     const entityResponsePromise = apiGet(`/api/entity/${encodedSlug}`);
-    const timelineResponsePromise = apiGet(`/api/entity-timeline-view/${encodedSlug}`).catch(() => null);
+    const deferTimelineBadge = options.source === "system";
+    const timelineResponsePromise = deferTimelineBadge
+      ? null
+      : apiGet(`/api/entity-timeline-view/${encodedSlug}`).catch(() => null);
     const mediaResponsePromise = apiGet(`/api/entity-media/${encodedSlug}`).catch(() => null);
     const response = await entityResponsePromise;
     if (!response.ok) {
@@ -7582,7 +7604,17 @@ async function loadEntity(slug, options = {}) {
       ? `${summaryText} ${collapseNote}`
       : summaryText;
     updateSource(source);
-    void refreshTimelineBadge(entity.slug, loadId, timelineResponsePromise);
+    if (deferTimelineBadge) {
+      window.setTimeout(() => {
+        runAfterSettingsEvidenceRefresh(() => {
+          if (loadId === state.entityLoadId && state.focusSlug === entity.slug) {
+            void refreshTimelineBadge(entity.slug, loadId);
+          }
+        });
+      }, 2000);
+    } else {
+      void refreshTimelineBadge(entity.slug, loadId, timelineResponsePromise);
+    }
     void loadSelectionMediaPreview(entity.slug, loadId, mediaResponsePromise);
     state.visibleLabelSlugs = [
       ...new Set([
@@ -8497,7 +8529,11 @@ async function init() {
   if (requestedSlug) {
     await loadRouteSelection();
   }
-  void loadDeferredStartupData();
+  window.setTimeout(() => {
+    runAfterSettingsEvidenceRefresh(() => {
+      void loadDeferredStartupData();
+    });
+  }, 2000);
   if (!state.animationHandle) {
     requestRender();
   }
