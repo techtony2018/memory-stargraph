@@ -1279,20 +1279,28 @@ async function runLazySearch(query) {
     const focusSlug = selectionVersion === state.selectionVersion ? preferredFocus : state.focusSlug;
     applyGraphPayload(response.data.graph, focusSlug);
     if (partialSearch) {
-      reportSearchPartialState(submittedQuery, response.data.graph);
       if (selectionVersion === state.selectionVersion && preferredFocus) {
-        await loadEntity(preferredFocus, { source: "search" }).catch(() => {});
-        if (String(state.query || "").trim() === submittedQuery) {
-          reportSearchPartialState(submittedQuery, response.data.graph);
-          setFlyoutOpen(searchFlyout, navSearchButton, true);
-        }
+        showSearchSelectionFromGraph(preferredFocus);
+        void loadEntity(preferredFocus, { source: "search" })
+          .then(() => {
+            if (
+              selectionVersion === state.selectionVersion
+              && state.focusSlug === preferredFocus
+              && String(state.query || "").trim() === submittedQuery
+            ) {
+              reportSearchPartialState(submittedQuery, response.data.graph);
+            }
+          })
+          .catch(() => {});
       }
+      reportSearchPartialState(submittedQuery, response.data.graph);
       return;
     }
     if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
-      await loadEntity(preferredFocus, { source: "search" });
+      showSearchSelectionFromGraph(preferredFocus);
+      void loadEntity(preferredFocus, { source: "search" }).catch(() => {});
     }
-    reportSearchTiming(searchStartedAt);
+    reportSearchTiming(searchStartedAt, preferredFocus);
   } catch (error) {
     const timedOut = String(error?.message || "").includes("timed out");
     reportSearchTerminalState(submittedQuery, timedOut ? "timeout" : "no-results");
