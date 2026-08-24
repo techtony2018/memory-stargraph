@@ -2179,11 +2179,15 @@ function rememberNodeMediaStatus(slug, items = []) {
 }
 
 function isImportantNodeForLod(node, topHubs = new Set()) {
-  return node.slug === state.focusSlug
+  if (
+    node.slug === state.focusSlug
     || node.slug === state.hoverSlug
-    || isLinkedToFocus(node)
     || topHubs.has(node.slug)
-    || (node.degree || 0) >= Math.max(8, (state.graph?.stats?.max_degree || 1) * 0.18);
+    || (node.degree || 0) >= Math.max(8, (state.graph?.stats?.max_degree || 1) * 0.18)
+  ) return true;
+  if (!isLinkedToFocus(node)) return false;
+  const focused = state.focusSlug ? state.nodeMap.get(state.focusSlug) : null;
+  return (focused?.degree || 0) <= 80 || (node.degree || 0) >= 5 || state.zoom >= 1.65;
 }
 
 function flowingEdgeIsAnimated(edge) {

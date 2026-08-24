@@ -1023,6 +1023,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("const drawableEdges = () => state.edges.filter((edge) => nodeIsDrawable(edge.source) && nodeIsDrawable(edge.target))", script)
         self.assertIn("flowingEdgeIsAnimated", script)
         self.assertIn("isImportantNodeForLod", script)
+        self.assertIn("(focused?.degree || 0) <= 80", script)
+        self.assertIn("(node.degree || 0) >= 5 || state.zoom >= 1.65", script)
 
     def test_autopilot_launch_icon_and_radar_polish_are_present(self):
         markup = (ROOT / "public" / "index.html").read_text()
