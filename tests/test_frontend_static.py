@@ -1013,6 +1013,7 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
 
         self.assertIn("let nodeCacheMemoryStore = null", script)
+        self.assertIn("let nodeCacheMemoryBytes = null", script)
         self.assertIn("let nodeCacheTouchSaveTimer = null", script)
         self.assertIn("scheduleCacheTouchSave(store)", script)
         self.assertIn("window.setTimeout(() =>", script)
@@ -1020,6 +1021,8 @@ class FrontendStaticTests(unittest.TestCase):
         cache_get = script[script.index("function cacheGet"):script.index("function enforceCacheLimit")]
         self.assertIn("scheduleCacheTouchSave(store)", cache_get)
         self.assertNotIn("saveCacheStore(store)", cache_get)
+        enforce_cache = script[script.index("function enforceCacheLimit"):script.index("function formatRefreshTime")]
+        self.assertIn("saveCacheStore(store, serialized)", enforce_cache)
 
     def test_graph_render_uses_dirty_idle_loop_and_culls_hidden_nodes(self):
         script = (ROOT / "public/app.js").read_text()

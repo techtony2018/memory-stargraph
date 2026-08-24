@@ -398,22 +398,29 @@ function cacheLimitBytes() {
 }
 
 let nodeCacheMemoryStore = null;
+let nodeCacheMemoryBytes = null;
 let nodeCacheTouchSaveTimer = null;
 
 function cacheStore() {
   if (nodeCacheMemoryStore === null) {
-    nodeCacheMemoryStore = safeJsonParse(window.localStorage?.getItem(NODE_CACHE_STORAGE_KEY) || "", { entries: {} });
+    const serialized = window.localStorage?.getItem(NODE_CACHE_STORAGE_KEY) || "";
+    nodeCacheMemoryStore = safeJsonParse(serialized, { entries: {} });
+    nodeCacheMemoryBytes = serialized
+      ? Math.max(0, serialized.length - 12)
+      : JSON.stringify(nodeCacheMemoryStore.entries || {}).length;
   }
   return nodeCacheMemoryStore;
 }
 
-function saveCacheStore(store) {
+function saveCacheStore(store, serialized = null) {
+  const payload = serialized || JSON.stringify(store);
   nodeCacheMemoryStore = store;
+  nodeCacheMemoryBytes = Math.max(0, payload.length - 12);
   if (nodeCacheTouchSaveTimer !== null) {
     window.clearTimeout(nodeCacheTouchSaveTimer);
     nodeCacheTouchSaveTimer = null;
   }
-  window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, JSON.stringify(store));
+  window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, payload);
 }
 
 function scheduleCacheTouchSave(store) {
@@ -421,7 +428,9 @@ function scheduleCacheTouchSave(store) {
   if (nodeCacheTouchSaveTimer !== null) return;
   nodeCacheTouchSaveTimer = window.setTimeout(() => {
     nodeCacheTouchSaveTimer = null;
-    window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, JSON.stringify(nodeCacheMemoryStore || { entries: {} }));
+    const payload = JSON.stringify(nodeCacheMemoryStore || { entries: {} });
+    nodeCacheMemoryBytes = Math.max(0, payload.length - 12);
+    window.localStorage?.setItem(NODE_CACHE_STORAGE_KEY, payload);
   }, 1000);
 }
 
@@ -432,6 +441,9 @@ window.addEventListener("storage", (event) => {
     nodeCacheTouchSaveTimer = null;
   }
   nodeCacheMemoryStore = safeJsonParse(event.newValue || "", { entries: {} });
+  nodeCacheMemoryBytes = event.newValue
+    ? Math.max(0, event.newValue.length - 12)
+    : JSON.stringify(nodeCacheMemoryStore.entries || {}).length;
 });
 
 function cacheableGetUrl(url) {
@@ -471,6 +483,7 @@ function flushNodeCache() {
 }
 
 function cacheUsedBytes(store = cacheStore()) {
+  if (store === nodeCacheMemoryStore && nodeCacheMemoryBytes !== null) return nodeCacheMemoryBytes;
   return JSON.stringify(store.entries || {}).length;
 }
 
@@ -496,12 +509,18 @@ function enforceCacheLimit(store = cacheStore()) {
     saveCacheStore({ entries: {} });
     return { entries: {} };
   }
-  const entries = Object.entries(store.entries || {}).sort((left, right) => (left[1].lastAccessed || 0) - (right[1].lastAccessed || 0));
-  while (JSON.stringify(store.entries || {}).length > limit && entries.length) {
-    const [key] = entries.shift();
-    delete store.entries[key];
+  let serialized = JSON.stringify(store);
+  let usedBytes = Math.max(0, serialized.length - 12);
+  if (usedBytes > limit) {
+    const entries = Object.entries(store.entries || {}).sort((left, right) => (left[1].lastAccessed || 0) - (right[1].lastAccessed || 0));
+    while (usedBytes > limit && entries.length) {
+      const [key] = entries.shift();
+      delete store.entries[key];
+      serialized = JSON.stringify(store);
+      usedBytes = Math.max(0, serialized.length - 12);
+    }
   }
-  saveCacheStore(store);
+  saveCacheStore(store, serialized);
   return store;
 }
 
