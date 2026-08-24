@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `c85584a`
-- Current performance code commit: `c85584a` (`perf: cache repeated settings evidence`)
-- Previous pushed commit: `884be03` (`perf: overlap follow-up tag reads`)
+- Current merged and pushed source: `e1e6d27`
+- Current performance code commit: `e1e6d27` (`perf: retain follow-up capability status`)
+- Previous pushed commit: `c85584a` (`perf: cache repeated settings evidence`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 616 tests passed in 44.076 seconds.
+- Latest verification: 617 tests passed in 41.265 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -107,6 +107,8 @@ After the Follow-ups fallback-snapshot reuse follow-up, the full suite passed 61
 After the Follow-ups parallel tag-read follow-up, the full suite passed 615 tests in 40.640 seconds with the same static checks passing.
 
 After the repeated Settings evidence cache follow-up, the full suite passed 616 tests in 44.076 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
+After the retained Follow-ups capability-status follow-up, the full suite passed 617 tests in 41.265 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -543,6 +545,12 @@ The two independent read-only fallback tag listings now run concurrently. Detail
 - Direct-import implementation samples, which do not enable the product server's persistent GBrain session, measured a 2.513-second post-change median versus one preceding 3.452-second serial cold sample. This 27.2% sample is retained only as supporting phase evidence, not as the user-facing result.
 - A barrier-based regression test verifies both tag reads overlap. The full fallback tests still cover missing-tool handling, bounded reads, state filtering, and snapshot reuse.
 
+Missing-tool capability status now has its own five-minute cache instead of expiring with 30-second Follow-ups result data. Result expiry and graph refresh still rescan both content tags; they only skip the redundant unsupported-tool call. Backend upgrades are rediscovered within five minutes without a product restart.
+
+- Before, clearing the 30-second result snapshot and refreshing took 2.657 seconds.
+- With capability status retained, the same refresh took 1.941 seconds, a 26.9% reduction, while still performing a fresh two-tag content scan.
+- Tests verify result-cache clearing causes a fresh fallback scan but does not repeat the capability call.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -583,6 +591,8 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 - The contradictory result indicates ordinary backend/process variance, not a measured improvement.
 
 Reducing primary Search from the default 20 results to 10 was not implemented. With the supported persistent-session `--limit 10` option, top-ten prefix order matched the default in 8/8 sampled queries, but median transport latency regressed from 0.295 to 1.052 seconds. An earlier `-n 10` attempt was discarded because that unsupported persistent option correctly fell back to the CLI and did not limit results.
+
+Expanding the persistent GBrain process from the least-privilege `starter` surface to `full` solely for Timeline was not implemented. A full-surface experiment returned empty timelines in 14-76 milliseconds after a 956-millisecond process initialization, versus about 1.1 seconds through the current remote read. However, the current brain supplied no nonempty Timeline sample for output-parity acceptance, and broadening the internal tool surface was not justified for one background read.
 
 Changing all non-targeted broad graph retrieval from depth 2 to depth 1 was not implemented. In the alternating ten-case provider-down matrix, depth 1 preserved measured grounding and slightly lowered the mean, but regressed median cold prompt construction from 7.192 to 7.751 seconds. It also removes second-hop evidence globally, so the mixed latency result did not justify the quality risk.
 
