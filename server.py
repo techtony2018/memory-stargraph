@@ -5122,6 +5122,47 @@ def parse_backlink_types(raw_text, center_slug):
     return edge_types
 
 
+def compact_backlink_items(raw_text, center_slug):
+    backlinks = extract_json_list(raw_text)
+    if not isinstance(backlinks, list):
+        return None
+
+    items = []
+    for backlink in backlinks:
+        if not isinstance(backlink, dict):
+            continue
+        source = str(backlink.get("from_slug") or "").strip()
+        if not source:
+            continue
+        items.append({
+            "from_slug": source,
+            "to_slug": str(backlink.get("to_slug") or center_slug).strip(),
+            "link_type": str(backlink.get("link_type") or "").strip(),
+        })
+    return items
+
+
+def paginate_compact_backlinks(items, page=0, limit=20):
+    items = list(items or [])
+    limit = max(1, min(100, int(limit)))
+    last_page = max(0, (len(items) - 1) // limit)
+    page = max(0, min(last_page, int(page)))
+    start = page * limit
+    return {
+        "items": items[start:start + limit],
+        "page": page,
+        "limit": limit,
+        "total": len(items),
+    }
+
+
+def compact_backlink_page(raw_text, center_slug, page=0, limit=20):
+    items = compact_backlink_items(raw_text, center_slug)
+    if items is None:
+        return None
+    return paginate_compact_backlinks(items, page, limit)
+
+
 def merge_edge_types(target, source):
     for key, values in source.items():
         target[key].update(values)
@@ -7332,6 +7373,18 @@ class GraphStore:
         output = run_gbrain("backlinks", slug)
         self.relationship_output_cache.put(cache_key, output)
         return output
+
+    def backlink_page(self, slug, page=0, limit=20):
+        cache_key = ("backlink-items", slug)
+        items = self.relationship_output_cache.get(cache_key)
+        if items is None:
+            output = self.backlinks(slug)
+            items = compact_backlink_items(output, slug)
+            if items is None:
+                return None, output
+            items = tuple(items)
+            self.relationship_output_cache.put(cache_key, items)
+        return paginate_compact_backlinks(items, page, limit), None
 
     def graph_query(self, slug, link_type="", direction="both", depth="1"):
         normalized_direction = {"outgoing": "out", "incoming": "in"}.get(direction, direction)
@@ -9568,6 +9621,22 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/entity-backlinks/"):
             slug = unquote(parsed.path.split("/api/entity-backlinks/", 1)[1]).strip("/")
             try:
+                payload = self.read_json_body()
+                if payload.get("compact") is True:
+                    try:
+                        page, fallback_output = STORE.backlink_page(
+                            slug,
+                            payload.get("page", 0),
+                            payload.get("limit", 20),
+                        )
+                    except (TypeError, ValueError):
+                        return self.end_json(
+                            {"error": "page and limit must be integers"},
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                    if page is not None:
+                        return self.end_json({"ok": True, "slug": slug, **page})
+                    return self.end_json({"ok": True, "slug": slug, "output": fallback_output})
                 output = STORE.backlinks(slug)
                 return self.end_json({"ok": True, "slug": slug, "output": output})
             except Exception as exc:  # noqa: BLE001

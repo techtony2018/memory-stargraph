@@ -80,6 +80,15 @@ class FakeStore:
         self.calls.append(("backlinks", slug))
         return "backlinks"
 
+    def backlink_page(self, slug, page=0, limit=20):
+        self.calls.append(("backlink_page", slug, page, limit))
+        return {
+            "items": [],
+            "page": int(page),
+            "limit": int(limit),
+            "total": 0,
+        }, None
+
     def graph_query(self, slug, link_type="", direction="both", depth="1"):
         self.calls.append(("graph_query", slug, link_type, direction, depth))
         return "graph query"
@@ -1351,6 +1360,35 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("attach_file", call_names)
         self.assertIn("history", call_names)
         self.assertIn("refresh_embedding", call_names)
+
+    def test_backlinks_endpoint_returns_compact_page_when_requested(self):
+        fake_store = FakeStore()
+        fake_store.backlink_page = mock.Mock(return_value=({
+            "items": [{
+                "from_slug": "people/two",
+                "to_slug": "people/tony-guan",
+                "link_type": "knows",
+            }],
+            "page": 1,
+            "limit": 1,
+            "total": 2,
+        }, None))
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-backlinks/people%2Ftony-guan",
+                {"compact": True, "page": 1, "limit": 1},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["items"], [{
+            "from_slug": "people/two",
+            "to_slug": "people/tony-guan",
+            "link_type": "knows",
+        }])
+        self.assertNotIn("output", data)
+        fake_store.backlink_page.assert_called_once_with("people/tony-guan", 1, 1)
 
     def test_gbrain_backend_config_exposes_primary_and_persists_validated_selection(self):
         fake_store = FakeStore()

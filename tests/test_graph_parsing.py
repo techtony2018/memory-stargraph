@@ -18,6 +18,7 @@ from server import (
     append_attachment_reference,
     cached_primary_search_results,
     collapse_part_identity,
+    compact_backlink_page,
     collect_seed_graph,
     ensure_media_references_available,
     extract_openclaw_answer,
@@ -1681,6 +1682,76 @@ class GraphParsingTests(unittest.TestCase):
 
         self.assertIn(("organizations/cfer-foundation", "people/frank-xu"), edges)
         self.assertIn(("organizations/cfer-foundation", "people/gail-heriot"), edges)
+
+    def test_compact_backlink_page_projects_and_slices_ui_fields(self):
+        output = json.dumps([
+            {
+                "from_slug": f"people/person-{index}",
+                "to_slug": "organizations/cfer-foundation",
+                "link_type": "member_of",
+                "context": "large context omitted from the UI payload",
+                "origin_source_id": 100 + index,
+            }
+            for index in range(5)
+        ])
+
+        result = compact_backlink_page(
+            output,
+            "organizations/cfer-foundation",
+            page=1,
+            limit=2,
+        )
+
+        self.assertEqual(result["page"], 1)
+        self.assertEqual(result["limit"], 2)
+        self.assertEqual(result["total"], 5)
+        self.assertEqual(result["items"], [
+            {
+                "from_slug": "people/person-2",
+                "to_slug": "organizations/cfer-foundation",
+                "link_type": "member_of",
+            },
+            {
+                "from_slug": "people/person-3",
+                "to_slug": "organizations/cfer-foundation",
+                "link_type": "member_of",
+            },
+        ])
+
+    def test_compact_backlink_page_preserves_unstructured_fallback(self):
+        self.assertIsNone(
+            compact_backlink_page(
+                "Backlink output unavailable",
+                "organizations/cfer-foundation",
+            )
+        )
+
+    def test_backlink_page_reuses_compact_projection_across_pages(self):
+        store = GraphStore()
+        output = json.dumps([
+            {
+                "from_slug": f"people/person-{index}",
+                "to_slug": "organizations/cfer-foundation",
+                "link_type": "member_of",
+                "context": "large context",
+            }
+            for index in range(5)
+        ])
+
+        with mock.patch("server.run_gbrain", return_value=output) as run:
+            first, first_fallback = store.backlink_page(
+                "organizations/cfer-foundation", page=0, limit=2
+            )
+            second, second_fallback = store.backlink_page(
+                "organizations/cfer-foundation", page=1, limit=2
+            )
+
+        self.assertIsNone(first_fallback)
+        self.assertIsNone(second_fallback)
+        self.assertEqual(first["items"][0]["from_slug"], "people/person-0")
+        self.assertEqual(second["items"][0]["from_slug"], "people/person-2")
+        self.assertEqual(first["total"], 5)
+        self.assertEqual(run.call_count, 1)
 
     def test_parse_link_types_reads_graph_relationships(self):
         output = """[

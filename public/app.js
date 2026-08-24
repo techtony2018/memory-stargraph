@@ -3258,6 +3258,16 @@ function renderViewModalMessage(slug) {
 }
 
 function parseBacklinkItems(rawOutput, selectedSlug) {
+  if (Array.isArray(rawOutput)) {
+    return rawOutput
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        from_slug: String(item.from_slug || "").trim(),
+        to_slug: String(item.to_slug || selectedSlug || "").trim(),
+        link_type: String(item.link_type || "").trim(),
+      }))
+      .filter((item) => item.from_slug);
+  }
   const text = String(rawOutput || "").trim();
   if (!text || text === "(No backlinks)") return [];
   try {
@@ -3468,19 +3478,49 @@ function renderRelationshipsMessage(slug) {
   modalMessage.appendChild(addButton);
 }
 
-function renderBacklinksView(rawOutput, selectedSlug) {
+async function loadBacklinksPage(selectedSlug, page = 0) {
+  modalMessage.textContent = "Loading backlinks...";
+  renderMarkdownView("Loading backlinks...");
+  const busyToken = beginBusyOperation("Loading backlinks");
+  try {
+    const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(selectedSlug)}`, {
+      compact: true,
+      page,
+      limit: RELATIONSHIP_PAGE_SIZE,
+    });
+    if (!response.ok) {
+      modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
+      renderMarkdownView(modalMessage.textContent);
+      return;
+    }
+    modalMessage.textContent = "Incoming gbrain links for this node.";
+    renderBacklinksView(response.data.items ?? response.data.output ?? "(No backlinks)", selectedSlug, {
+      page: response.data.page,
+      total: response.data.total,
+    });
+  } finally {
+    endBusyOperation(busyToken);
+  }
+}
+
+function renderBacklinksView(rawOutput, selectedSlug, pagination = {}) {
   const items = parseBacklinkItems(rawOutput, selectedSlug);
-  state.backlinkPages.set(selectedSlug, state.backlinkPages.get(selectedSlug) || 0);
+  const serverPaginated = Number.isInteger(pagination.page) && Number.isInteger(pagination.total);
+  if (serverPaginated) state.backlinkPages.set(selectedSlug, pagination.page);
+  else state.backlinkPages.set(selectedSlug, state.backlinkPages.get(selectedSlug) || 0);
   if (!items.length) {
-    renderMarkdownView(rawOutput || "(No backlinks)");
+    renderMarkdownView(Array.isArray(rawOutput) ? "(No backlinks)" : (rawOutput || "(No backlinks)"));
     return;
   }
   const allTargetsAreSelected = items.every((item) => !item.to_slug || item.to_slug === selectedSlug);
   modalMarkdown.innerHTML = "";
-  const totalPages = Math.max(1, Math.ceil(items.length / RELATIONSHIP_PAGE_SIZE));
+  const totalItems = serverPaginated ? pagination.total : items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / RELATIONSHIP_PAGE_SIZE));
   const currentPage = Math.max(0, Math.min(totalPages - 1, state.backlinkPages.get(selectedSlug) || 0));
   state.backlinkPages.set(selectedSlug, currentPage);
-  const visibleItems = items.slice(currentPage * RELATIONSHIP_PAGE_SIZE, (currentPage + 1) * RELATIONSHIP_PAGE_SIZE);
+  const visibleItems = serverPaginated
+    ? items
+    : items.slice(currentPage * RELATIONSHIP_PAGE_SIZE, (currentPage + 1) * RELATIONSHIP_PAGE_SIZE);
   const list = document.createElement("div");
   list.className = "relationship-wiki-list backlink-list";
   visibleItems.forEach((item) => {
@@ -3509,10 +3549,11 @@ function renderBacklinksView(rawOutput, selectedSlug) {
     list.appendChild(row);
   });
   modalMarkdown.appendChild(list);
-  if (items.length > RELATIONSHIP_PAGE_SIZE) {
+  if (totalItems > RELATIONSHIP_PAGE_SIZE) {
     modalMarkdown.appendChild(renderRelationshipPager(currentPage, totalPages, (nextPage) => {
       state.backlinkPages.set(selectedSlug, nextPage);
-      renderBacklinksView(rawOutput, selectedSlug);
+      if (serverPaginated) void loadBacklinksPage(selectedSlug, nextPage);
+      else renderBacklinksView(rawOutput, selectedSlug);
     }));
   }
 }
@@ -6923,25 +6964,11 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalCancelButton.hidden = true;
     setModalControlTooltips("Close", "");
     modalEditor.readOnly = true;
-    modalMessage.textContent = "Loading backlinks...";
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
-    renderMarkdownView("Loading backlinks...");
     operationModal.hidden = false;
     state.modalAction = { action: "result", slug, label };
-    const busyToken = beginBusyOperation("Loading backlinks");
-    try {
-      const response = await apiPost(`/api/entity-backlinks/${encodeURIComponent(slug)}`, {});
-      if (!response.ok) {
-        modalMessage.textContent = `Unable to load backlinks: ${response.data?.error || response.status}`;
-        renderMarkdownView(modalMessage.textContent);
-        return;
-      }
-      modalMessage.textContent = "Incoming gbrain links for this node.";
-      renderBacklinksView(response.data.output || "(No backlinks)", slug);
-    } finally {
-      endBusyOperation(busyToken);
-    }
+    await loadBacklinksPage(slug, 0);
     return;
   }
 
