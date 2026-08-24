@@ -46,6 +46,11 @@ dedicated `GBRAIN_HOME` under the All Things Codex Dashboard state directory,
 validates an owner-only `remote_mcp` config and OAuth client secret, and fails
 closed when either is missing or unsafe. OAuth values are installed runtime
 state only; they are never stored in this repository or Dashboard source.
+When this identity is active, private activation reads and writes use the
+remote MCP `tools/call` boundary directly with a cached OAuth token and one
+serialized request lane. Invalid remote configuration, missing credentials,
+or a remote tool error fails closed; it never falls back to a local GBrain
+database.
 
 Verify the thin-client identity before or after a managed restart:
 

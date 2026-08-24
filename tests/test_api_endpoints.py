@@ -190,6 +190,267 @@ class SingleRowTakeStore(FakeStore):
 
 
 class ApiEndpointTests(unittest.TestCase):
+    class _JsonResponse:
+        def __init__(self, payload, *, content_type="application/json"):
+            self.payload = payload
+            self.headers = {"Content-Type": content_type}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    class _RawResponse:
+        def __init__(self, payload, *, content_type):
+            self.payload = payload
+            self.headers = {"Content-Type": content_type}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self.payload.encode("utf-8")
+
+    def test_gbrain_call_tool_uses_remote_mcp_instead_of_local_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "engine": "postgres",
+                        "remote_mcp": {
+                            "issuer_url": "https://auth.example",
+                            "mcp_url": "https://mcp.example/mcp",
+                            "oauth_client_id": "memory-stargraph",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            responses = iter(
+                (
+                    self._JsonResponse(
+                        {"token_endpoint": "https://auth.example/token"}
+                    ),
+                    self._JsonResponse(
+                        {"access_token": "private-access-token", "expires_in": 3600}
+                    ),
+                    self._JsonResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "response",
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": json.dumps(
+                                            {
+                                                "slug": "agents/timmy",
+                                                "type": "agent",
+                                            }
+                                        ),
+                                    }
+                                ]
+                            },
+                        }
+                    ),
+                )
+            )
+            requests = []
+
+            def open_remote(request, **_kwargs):
+                requests.append(request)
+                return next(responses)
+
+            with (
+                mock.patch.dict(
+                    server.os.environ,
+                    {
+                        "GBRAIN_HOME": str(home),
+                        "GBRAIN_REMOTE_CLIENT_SECRET": "private-client-secret",
+                    },
+                    clear=False,
+                ),
+                mock.patch("server.urlopen", side_effect=open_remote),
+                mock.patch("server.run_gbrain", return_value='{"source":"local"}') as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                result = server.gbrain_call_tool(
+                    "get_page", {"slug": "agents/timmy"}
+                )
+
+            self.assertEqual(
+                result,
+                {"slug": "agents/timmy", "type": "agent"},
+            )
+            rpc = json.loads(requests[-1].data.decode("utf-8"))
+            self.assertEqual(rpc["method"], "tools/call")
+            self.assertEqual(rpc["params"]["name"], "get_page")
+            self.assertEqual(
+                rpc["params"]["arguments"], {"slug": "agents/timmy"}
+            )
+            self.assertEqual(
+                requests[-1].headers["Authorization"],
+                "Bearer private-access-token",
+            )
+            local.assert_not_called()
+
+    def test_gbrain_call_tool_remote_config_missing_secret_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "remote_mcp": {
+                            "issuer_url": "https://auth.example",
+                            "mcp_url": "https://mcp.example/mcp",
+                            "oauth_client_id": "memory-stargraph",
+                            "oauth_client_secret": "must-not-be-read-from-config",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.dict(
+                    server.os.environ,
+                    {"GBRAIN_HOME": str(home)},
+                    clear=True,
+                ),
+                mock.patch("server.run_gbrain", return_value='{"source":"local"}') as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                with self.assertRaisesRegex(RuntimeError, "client secret"):
+                    server.gbrain_call_tool("get_page", {"slug": "agents/timmy"})
+
+            local.assert_not_called()
+
+    def test_gbrain_call_tool_remote_tool_error_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "remote_mcp": {
+                            "issuer_url": "https://auth.example",
+                            "mcp_url": "https://mcp.example/mcp",
+                            "oauth_client_id": "memory-stargraph",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            responses = iter(
+                (
+                    self._JsonResponse(
+                        {"token_endpoint": "https://auth.example/token"}
+                    ),
+                    self._JsonResponse(
+                        {"access_token": "private-access-token", "expires_in": 3600}
+                    ),
+                    self._JsonResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "response",
+                            "result": {
+                                "isError": True,
+                                "content": [
+                                    {"type": "text", "text": "page_not_found"}
+                                ],
+                            },
+                        }
+                    ),
+                )
+            )
+            with (
+                mock.patch.dict(
+                    server.os.environ,
+                    {
+                        "GBRAIN_HOME": str(home),
+                        "GBRAIN_REMOTE_CLIENT_SECRET": "private-client-secret",
+                    },
+                    clear=False,
+                ),
+                mock.patch("server.urlopen", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch("server.run_gbrain", return_value='{"source":"local"}') as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                with self.assertRaisesRegex(RuntimeError, "page_not_found"):
+                    server.gbrain_call_tool("get_page", {"slug": "missing/page"})
+
+            local.assert_not_called()
+
+    def test_gbrain_call_tool_without_remote_config_retains_local_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps({"engine": "postgres"}), encoding="utf-8"
+            )
+            with (
+                mock.patch.dict(
+                    server.os.environ,
+                    {"GBRAIN_HOME": str(home)},
+                    clear=True,
+                ),
+                mock.patch(
+                    "server.run_gbrain",
+                    return_value='{"slug":"agents/timmy","type":"agent"}',
+                ) as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                result = server.gbrain_call_tool(
+                    "get_page", {"slug": "agents/timmy"}
+                )
+
+            self.assertEqual(result["slug"], "agents/timmy")
+            local.assert_called_once()
+
+    def test_remote_gbrain_tool_caller_accepts_sse_json_rpc_response(self):
+        response = self._RawResponse(
+            'event: message\ndata: {"jsonrpc":"2.0","id":"one","result":{"ok":true}}\n\n',
+            content_type="text/event-stream",
+        )
+        caller = server.RemoteGBrainToolCaller(Path("unused.json"))
+        with mock.patch("server.urlopen", return_value=response):
+            result = caller._read_json_response(Request("https://mcp.example/mcp"))
+
+        self.assertEqual(result["result"], {"ok": True})
+
+    def test_gbrain_call_tool_invalid_config_shape_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text("[]", encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    server.os.environ,
+                    {"GBRAIN_HOME": str(home)},
+                    clear=True,
+                ),
+                mock.patch("server.run_gbrain", return_value='{"source":"local"}') as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                with self.assertRaisesRegex(RuntimeError, "config is unavailable"):
+                    server.gbrain_call_tool("get_page", {"slug": "agents/timmy"})
+
+            local.assert_not_called()
+
     def dispatch_post(self, path, payload=None, *, allow_resolver_submit=False, headers=None):
         handler = object.__new__(MemoryStargraphHandler)
         handler.path = path
@@ -2494,13 +2755,19 @@ class ApiEndpointTests(unittest.TestCase):
 
     def test_gbrain_tool_proxy_collapses_unknown_tool_migration_noise(self):
         noisy = "Schema version 1 -> 119\n  [69] take_proposals_v0_36...\nUnknown tool: take_proposals_list"
-        with mock.patch("server.run_gbrain", side_effect=RuntimeError(noisy)):
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.run_gbrain", side_effect=RuntimeError(noisy)),
+        ):
             with self.assertRaisesRegex(RuntimeError, "GBrain backend does not expose take_proposals_list"):
                 server.gbrain_call_tool("take_proposals_list", {"limit": 2})
 
     def test_gbrain_tool_proxy_preserves_array_responses(self):
         output = '[{"id": 1, "claim": "First"}, {"id": 2, "claim": "Second"}]'
-        with mock.patch("server.run_gbrain", return_value=output):
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.run_gbrain", return_value=output),
+        ):
             result = server.gbrain_call_tool("takes_list", {"limit": 2})
 
         self.assertIsInstance(result, list)
@@ -2841,7 +3108,10 @@ class ApiEndpointTests(unittest.TestCase):
             "proposals": [],
             "dream_run": {"auto_applied": 0},
         })
-        with mock.patch("server.run_gbrain", return_value=output):
+        with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
+            mock.patch("server.run_gbrain", return_value=output),
+        ):
             data = server.gbrain_call_tool("resolver_proposals_generate", {})
 
         self.assertIsInstance(data, dict)

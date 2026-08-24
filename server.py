@@ -24,7 +24,8 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from openclaw_profile_activation import (
@@ -201,7 +202,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.199"
+UI_VERSION = "V1.0.200"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1717,7 +1718,206 @@ def extract_json_list(text):
     return None
 
 
+class RemoteGBrainToolCaller:
+    """Authenticated, serialized JSON-RPC caller for a remote GBrain MCP."""
+
+    def __init__(self, config_path, timeout=30):
+        self.config_path = Path(config_path)
+        self.timeout = timeout
+        self._lane_lock = threading.Lock()
+        self._token_lock = threading.Lock()
+        self._token = None
+        self._token_expires_at = 0.0
+        self._token_endpoint = None
+
+    def _remote_config(self):
+        try:
+            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("GBrain remote config is unavailable") from exc
+        remote = raw.get("remote_mcp") if isinstance(raw, dict) else None
+        if not isinstance(remote, dict):
+            raise RuntimeError("GBrain remote_mcp config is unavailable")
+        result = {}
+        for field in ("issuer_url", "mcp_url", "oauth_client_id"):
+            value = remote.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RuntimeError(f"GBrain remote_mcp {field} is unavailable")
+            result[field] = value.strip()
+        secret = os.environ.get("GBRAIN_REMOTE_CLIENT_SECRET")
+        if not isinstance(secret, str) or not secret:
+            raise RuntimeError("GBrain remote client secret is unavailable")
+        result["oauth_client_secret"] = secret
+        return result
+
+    def _read_json_response(self, request):
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+                content_type = response.headers.get("Content-Type", "")
+        except HTTPError as exc:
+            raise RuntimeError(
+                f"GBrain remote request failed with HTTP {exc.code}"
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise RuntimeError("GBrain remote request failed") from exc
+        try:
+            if "text/event-stream" in content_type:
+                data_lines = [
+                    line[5:].strip()
+                    for line in raw.splitlines()
+                    if line.startswith("data:")
+                ]
+                if not data_lines:
+                    raise ValueError("missing SSE data")
+                return json.loads(data_lines[-1])
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError("GBrain remote response was invalid") from exc
+
+    def _access_token(self, remote):
+        with self._token_lock:
+            if self._token is not None and self._token_expires_at > time.time() + 30:
+                return self._token
+            if self._token_endpoint is None:
+                metadata = self._read_json_response(
+                    Request(
+                        remote["issuer_url"].rstrip("/")
+                        + "/.well-known/oauth-authorization-server"
+                    )
+                )
+                endpoint = (
+                    metadata.get("token_endpoint")
+                    if isinstance(metadata, dict)
+                    else None
+                )
+                if not isinstance(endpoint, str) or not endpoint:
+                    raise RuntimeError(
+                        "GBrain OAuth discovery omitted token_endpoint"
+                    )
+                self._token_endpoint = endpoint
+            body = urlencode(
+                {
+                    "grant_type": "client_credentials",
+                    "client_id": remote["oauth_client_id"],
+                    "client_secret": remote["oauth_client_secret"],
+                }
+            ).encode("utf-8")
+            token_payload = self._read_json_response(
+                Request(
+                    self._token_endpoint,
+                    data=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            )
+            token = (
+                token_payload.get("access_token")
+                if isinstance(token_payload, dict)
+                else None
+            )
+            if not isinstance(token, str) or not token:
+                raise RuntimeError("GBrain OAuth response omitted access_token")
+            expires_in = token_payload.get("expires_in", 3600)
+            ttl = float(expires_in) if isinstance(expires_in, (int, float)) else 3600.0
+            self._token = token
+            self._token_expires_at = time.time() + max(60.0, ttl)
+            return token
+
+    def call(self, tool_name, payload=None):
+        remote = self._remote_config()
+        with self._lane_lock:
+            token = self._access_token(remote)
+            envelope = self._read_json_response(
+                Request(
+                    remote["mcp_url"],
+                    data=json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": hashlib.sha256(
+                                f"{time.time_ns()}:{tool_name}".encode("utf-8")
+                            ).hexdigest(),
+                            "method": "tools/call",
+                            "params": {
+                                "name": tool_name,
+                                "arguments": dict(payload or {}),
+                            },
+                        },
+                        separators=(",", ":"),
+                    ).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream",
+                    },
+                )
+            )
+        result = envelope.get("result") if isinstance(envelope, dict) else None
+        if not isinstance(result, dict):
+            raise RuntimeError("GBrain remote response omitted result")
+        content = result.get("content")
+        text_blocks = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ] if isinstance(content, list) else []
+        if result.get("isError"):
+            detail = "\n".join(str(value) for value in text_blocks if value).strip()
+            raise RuntimeError(
+                f"GBrain tool {tool_name} failed: {detail or 'unknown remote error'}"
+            )
+        if not text_blocks:
+            if "structuredContent" in result:
+                return result["structuredContent"]
+            raise RuntimeError("GBrain remote result omitted text content")
+        try:
+            return json.loads(str(text_blocks[-1]))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"GBrain tool {tool_name} returned invalid JSON"
+            ) from exc
+
+
+_REMOTE_GBRAIN_TOOL_CALLER = None
+_REMOTE_GBRAIN_TOOL_CALLER_LOCK = threading.Lock()
+
+
+def gbrain_config_path():
+    configured = os.environ.get("GBRAIN_CONFIG_FILE")
+    if configured:
+        return Path(configured).expanduser()
+    configured_home = os.environ.get("GBRAIN_HOME")
+    home = Path(configured_home).expanduser() if configured_home else Path.home()
+    return home / ".gbrain" / "config.json"
+
+
+def configured_remote_mcp_path():
+    path = gbrain_config_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("GBrain config is unavailable") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError("GBrain config is unavailable")
+    return path if "remote_mcp" in raw else None
+
+
 def gbrain_call_tool(tool_name, payload=None, timeout=30):
+    global _REMOTE_GBRAIN_TOOL_CALLER
+    remote_path = configured_remote_mcp_path()
+    if remote_path is not None:
+        with _REMOTE_GBRAIN_TOOL_CALLER_LOCK:
+            if (
+                _REMOTE_GBRAIN_TOOL_CALLER is None
+                or _REMOTE_GBRAIN_TOOL_CALLER.config_path != remote_path
+                or _REMOTE_GBRAIN_TOOL_CALLER.timeout != timeout
+            ):
+                _REMOTE_GBRAIN_TOOL_CALLER = RemoteGBrainToolCaller(
+                    remote_path, timeout=timeout
+                )
+            caller = _REMOTE_GBRAIN_TOOL_CALLER
+        return caller.call(tool_name, payload)
     try:
         output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
     except RuntimeError as exc:
