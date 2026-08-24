@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `0cb7bc8`
-- Current performance code commit: `0cb7bc8` (`perf: reuse settings evidence in detail views`)
-- Previous pushed commit: `22f7b03` (`docs: record bounded search graph benchmark`)
+- Current merged and pushed source: `76e34cd`
+- Current performance code commit: `76e34cd` (`perf: cache take review reads`)
+- Previous pushed commit: `c092200` (`docs: record settings detail benchmark`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 624 tests passed in 47.311 seconds.
+- Latest verification: 629 tests passed in 41.852 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -608,6 +608,15 @@ Missing-tool capability status now has its own five-minute cache instead of expi
 - Before, clearing the 30-second result snapshot and refreshing took 2.657 seconds.
 - With capability status retained, the same refresh took 1.941 seconds, a 26.9% reduction, while still performing a fresh two-tag content scan.
 - Tests verify result-cache clearing causes a fresh fallback scan but does not repeat the capability call.
+
+### Repeated Take Review read cache
+
+Take Review now caches only successful normalized proposal and existing-take list results for 30 seconds, bounded to 32 filter combinations. It separately retains an explicit `take_proposals_list` unsupported-capability result for five minutes. Transient failures are never cached, existing 502 semantics remain intact, and successful single or bulk review writes immediately clear both list families. Graph force refresh and ordinary data invalidation also clear successful list data.
+
+- Five pre-change parallel proposal/existing-take loads took 1,442.2, 1,449.4, 1,612.5, 1,338.2, and 1,429.4 milliseconds; median was 1,442.2 milliseconds. The proposal side truthfully returned 502 because the installed backend reports `Unknown tool: take_proposals_list`, while existing takes returned 200.
+- After one 1,532.5-millisecond capability and content probe, five repeated parallel loads took 9.1, 11.1, 11.8, 8.6, and 9.3 milliseconds; median was 9.3 milliseconds, a 99.36% reduction. Response statuses remained `[502, 200]`.
+- After the 30-second result TTL elapsed, the next real refresh took 1,322.8 milliseconds and the immediate repeat took 9.6 milliseconds. This verifies bounded freshness without requiring a service restart.
+- Tests verify successful proposal and take result reuse, explicit missing-tool capability reuse across different filters, transient-error retries, and immediate cache invalidation after single and bulk review writes. The full suite passed 629 tests in 41.852 seconds.
 
 ## Earlier Performance Work
 
