@@ -485,6 +485,16 @@ Concurrent first reads for the same entity timeline now share one in-flight back
 - Regression coverage proves eight same-slug callers invoke `gbrain timeline` exactly once, while the existing cache and post-write invalidation contract remains intact.
 - The full suite passed 661 tests in 53.950 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Repeated and concurrent History read cache
+
+Successful entity History output is now cached for 30 seconds, up to 64 slugs, and concurrent first readers share one backend call. Failed reads are not cached. Any GraphStore force refresh or mutation clears the cache, preserving immediate visibility of new revisions.
+
+- A three-round alternating fresh-process A/B opened `people/tony-guan` History three times per run.
+- Median three-open completion fell from 7.197 to 4.115 seconds, a 42.8% improvement. The first cold read retained its backend cost, while repeated-read median fell from 1.315 seconds to 2.1 milliseconds, a 99.84% improvement.
+- Every run returned three `200` responses with one exact 1,344-byte length and one SHA-256 hash.
+- Regression coverage proves eight concurrent first readers issue one `gbrain history` call and verifies a fresh backend read after invalidation.
+- The full suite passed 665 tests in 43.782 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Coalesced raw entity reads
 
 Raw entity markdown now uses a 30-second, 128-entry single-flight cache shared by detail hydration, media extraction, View, and Ask Yoda source loading. Concurrent cold readers for one slug share one owner `get`; failed loads are not cached. All GraphStore invalidation paths clear the cache.

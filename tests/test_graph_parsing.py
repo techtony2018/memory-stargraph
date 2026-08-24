@@ -1968,6 +1968,35 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[1].args[:2], ("timeline-add", "products/memory-stargraph"))
         self.assertEqual(run.call_args_list[2].args, ("timeline", "products/memory-stargraph"))
 
+    def test_history_caches_concurrent_reads_and_invalidates(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+
+        def first_history(*args):
+            self.assertEqual(args, ("history", "people/tony-guan"))
+            started.set()
+            release.wait(timeout=1)
+            return "v2 2026-08-24\nv1 2026-08-23"
+
+        with mock.patch("server.run_gbrain", side_effect=first_history) as run:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(store.history, "people/tony-guan")
+                    for _ in range(8)
+                ]
+                self.assertTrue(started.wait(timeout=1))
+                release.set()
+                outputs = [future.result(timeout=2) for future in futures]
+
+        self.assertEqual(outputs, ["v2 2026-08-24\nv1 2026-08-23"] * 8)
+        self.assertEqual(run.call_count, 1)
+
+        store.invalidate()
+        with mock.patch("server.run_gbrain", return_value="v3 2026-08-24") as run:
+            self.assertEqual(store.history("people/tony-guan"), "v3 2026-08-24")
+        self.assertEqual(run.call_count, 1)
+
     def test_timeline_coalesces_concurrent_reads(self):
         store = GraphStore()
         started = threading.Event()

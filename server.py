@@ -6598,6 +6598,10 @@ class GraphStore:
             ttl_seconds=30,
             max_entries=64,
         )
+        self.history_cache = TimedValueCache(
+            ttl_seconds=30,
+            max_entries=64,
+        )
         self.autopilot_findings_cache = TimedValueCache(
             ttl_seconds=AUTOPILOT_FINDINGS_CACHE_SECONDS,
             max_entries=AUTOPILOT_FINDINGS_CACHE_MAX_ENTRIES,
@@ -6676,6 +6680,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.history_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
             self.resolver_read_cache.clear()
@@ -6740,6 +6745,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.history_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
             self.resolver_read_cache.clear()
@@ -6845,6 +6851,7 @@ class GraphStore:
             self.relationship_type_cache.clear()
             self.relationship_output_cache.clear()
             self.timeline_cache.clear()
+            self.history_cache.clear()
             self.autopilot_findings_cache.clear()
             self.take_review_cache.clear()
             self.resolver_read_cache.clear()
@@ -8064,7 +8071,17 @@ class GraphStore:
         return local_media
 
     def history(self, slug):
-        return run_gbrain("history", slug)
+        cached = self.history_cache.get(slug)
+        if cached is not None:
+            return cached
+        output, _load_status = self.history_cache.load_once(
+            slug,
+            lambda: run_gbrain("history", slug),
+            timeout=20,
+        )
+        if output is None:
+            raise RuntimeError("GBrain history retrieval was unavailable")
+        return output
 
     def timeline(self, slug):
         cached = self.timeline_cache.get(slug)
