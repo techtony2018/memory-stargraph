@@ -580,6 +580,16 @@ Commit `31afc98` places the retained flowing particles on a pointer-transparent 
 - Fixed-time desktop/mobile screenshots changed 1.3847% and 3.0078% of pixels, with mean RGB deltas of only 0.0072 and 0.1025. Node-layer pixels were exact, the particle layer was nonblank, visual inspection retained correct particle-under-node order, and pointer hover still resolved the focus node.
 - The full suite passed 645 tests in 45.314 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
 
+### Independent static-background and node cadence
+
+Commit `19e9327` gives the static background/base-edge layer and node layer independent timestamps. During passive flow, the slow radar rays, star twinkle, cluster clouds, static edges, and relationship labels redraw at 8 FPS; node pulse and labels retain 15 FPS; particles retain every available animation callback. Any dirty interaction, resize, drag, or inertial rotation still redraws both static layers immediately.
+
+- Four same-server forced-raster pages in before/after/after/before order measured 60-frame batch median at 1,588.4 versus 1,240.5 milliseconds, a 21.9% reduction against the committed three-layer baseline.
+- A separate six-page, 45-dirty-frame interaction matrix reversed the noisy first small sample: per-page median dirty-frame time improved from 89.75 to 73.5 milliseconds, or 18.1%. Software-raster p95 remained noisy in both directions and is not claimed as a tail win.
+- Eight direction-balanced real three-second observations reduced static main-layer clears from a conventional median of 29 to 19, or 34.5%. Callback throughput rose from 50 to 52, median callback duration fell from 4.8 to 4.1 milliseconds, while total callback work varied by only 3.3%; p95 varied by 9.9% in the opposite direction. The acceptance rests on fixed-work and median interaction gains, not on the noisy tail.
+- Fixed-time desktop and mobile readback produced exact nontransparent-pixel counts on all three Canvas layers before and after. Both retained 274 nodes, 139 edges, 48 particles, correct focus/hover hit testing, no errors, and no overflow.
+- The full suite passed 645 tests in 45.290 seconds. Python compilation, JavaScript syntax, and `git diff --check` also passed.
+
 ### Direct background gradients on current Chrome
 
 Commit `6559df8` removes the full-viewport offscreen texture and draws the same two nebula/glow radial gradients directly on the live Canvas. This reverses the older `c445b1b` implementation only after new profiling showed that the current Chrome software raster path spends most background time copying the large texture. Radar rings, rotating rays, stars, colors, gradient stops, graph layers, and interactions are unchanged.
@@ -871,6 +881,8 @@ Raising the newly accepted dense-cloud threshold again from twelve to sixteen no
 Reducing the seven retained dense-cloud maximum radii from 260 to 220 pixels was also rejected without changing source. It preserved every cloud category, node, edge, and animation, but cloud-stage median regressed from 7.3 to 10.5 milliseconds and complete dirty-frame median regressed from 46.9 to 69.1 milliseconds. Current Chrome gradient raster cost is not monotonic with filled radius in this scene. Do not continue tuning cloud size by intuition; require a new renderer-level hypothesis.
 
 Reducing the accepted high-degree particle budget from 48 to 32 was rejected without changing source. Four same-server pages kept every static edge and varied only the deterministic glowing-particle cap. Aggregate edge-stage median fell from 6.5 to 5.0 milliseconds, a 23.1% component improvement, but complete-frame median moved only from 76.5 to 70.1 milliseconds, or 8.4%. The end-to-end frame result did not clear the 15% acceptance threshold and would remove one third of the remaining motion cues, so the 48-particle budget remains.
+
+Using a 10 FPS static-background cadence instead of the accepted 8 FPS was rejected. In the same four-page forced-raster structure, its 60-frame summary moved from 1,865.9 to 1,650.2 milliseconds, only 11.6% and below the 15% acceptance threshold. The 8 FPS candidate cleared the gate at 21.9% while nodes remained independently at 15 FPS and particles remained per-callback, so 10 FPS added work without a measured user-facing benefit.
 
 Caching the 21 stable cluster-cloud gradients on an offscreen canvas was rejected. It reduced stable-frame gradient creation from 31 to about 10.5 per draw, but six alternating in-page samples showed only a 1% task-time median improvement: 40.82 milliseconds per direct draw versus 40.43 milliseconds per cached draw. Offscreen `drawImage` composition replaced most of the gradient cost instead of removing it, so the cache and its invalidation state were fully reverted.
 
