@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import selectors
 import shutil
 import ssl
 import subprocess
@@ -132,6 +133,12 @@ def apply_runtime_config(config):
     GRAPH_STALE_SECONDS = int(CONFIG["graph_stale_seconds"])
     GRAPH_COMMAND_LIMIT = int(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_LIMIT", str(CONFIG["graph_command_limit"])))
     GRAPH_COMMAND_PAUSE_SECONDS = float(os.environ.get("MEMORY_STARGRAPH_GRAPH_COMMAND_PAUSE_SECONDS", str(CONFIG["graph_command_pause_seconds"])))
+    search_session = globals().get("PERSISTENT_GBRAIN_SEARCH")
+    if search_session is not None:
+        was_active = search_session.active
+        search_session.close()
+        if was_active:
+            search_session.prewarm_async()
 
 
 CONFIG = load_config()
@@ -1213,20 +1220,255 @@ def decode_process_output(value):
     return value or ""
 
 
-def run_gbrain(*args, input_text=None, timeout=20):
-    if not GBRAIN.exists():
-        raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
-    command = [str(GBRAIN), *args]
+def gbrain_subprocess_env():
     env = os.environ.copy()
     bun_bin = Path.home() / ".bun" / "bin"
     env["PATH"] = f"{bun_bin}:/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
+    return env
+
+
+def parse_gbrain_search_arguments(args):
+    if len(args) < 2 or args[0] != "search":
+        raise ValueError("persistent search requires a search query")
+    payload = {"query": str(args[1])}
+    option_names = {
+        "--limit": ("limit", int),
+        "--offset": ("offset", int),
+        "--mode": ("mode", str),
+        "--snippet-chars": ("snippet_chars", int),
+        "--types": ("types", lambda value: [item for item in str(value).split(",") if item]),
+    }
+    index = 2
+    while index < len(args):
+        option = str(args[index])
+        if option not in option_names or index + 1 >= len(args):
+            raise ValueError(f"unsupported persistent search option: {option}")
+        key, parser = option_names[option]
+        payload[key] = parser(args[index + 1])
+        index += 2
+    return payload
+
+
+def truncate_utf16(text, max_units):
+    encoded = str(text or "").encode("utf-16-le")
+    return encoded[: max(0, int(max_units)) * 2].decode("utf-16-le", errors="ignore")
+
+
+def format_mcp_search_results(rows):
+    lines = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not row.get("slug"):
+            continue
+        chunk_lines = str(row.get("chunk_text") or "").splitlines()
+        preview_source = next((line for line in chunk_lines if line.strip()), str(row.get("title") or ""))
+        preview = truncate_utf16(preview_source, 100).strip()
+        try:
+            score = float(row.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        lines.append(f"[{score:.4f}] {row['slug']} -- {preview}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+class PersistentGBrainSearch:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.process = None
+        self.request_id = 0
+        self.active = False
+        self.prewarming = False
+
+    def _close_locked(self):
+        process = self.process
+        self.process = None
+        self.request_id = 0
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def close(self):
+        with self.lock:
+            self.active = False
+            self._close_locked()
+
+    def status(self):
+        busy = not self.lock.acquire(blocking=False)
+        if busy:
+            process = self.process
+            return {
+                "active": self.active,
+                "ready": process is not None and process.poll() is None,
+                "busy": True,
+            }
+        try:
+            process = self.process
+            return {
+                "active": self.active,
+                "ready": process is not None and process.poll() is None,
+                "busy": False,
+            }
+        finally:
+            self.lock.release()
+
+    def _drain_stderr(self, process):
+        try:
+            for _line in process.stderr:
+                pass
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _request_locked(self, method, params, deadline):
+        process = self.process
+        if process is None or process.poll() is not None:
+            raise RuntimeError("persistent GBrain search process is unavailable")
+        self.request_id += 1
+        request_id = self.request_id
+        process.stdin.write(
+            json.dumps(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"persistent GBrain {method} timed out")
+                if not selector.select(remaining):
+                    raise TimeoutError(f"persistent GBrain {method} timed out")
+                line = process.stdout.readline()
+                if not line:
+                    raise RuntimeError("persistent GBrain search process exited")
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if message.get("id") != request_id:
+                    continue
+                if message.get("error"):
+                    raise RuntimeError("persistent GBrain search returned an MCP error")
+                return message.get("result") or {}
+        finally:
+            selector.close()
+
+    def _start_locked(self, deadline):
+        if self.process is not None and self.process.poll() is None:
+            return
+        self._close_locked()
+        if not GBRAIN.exists():
+            raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
+        process = subprocess.Popen(
+            [str(GBRAIN), "serve", "--surface", "starter"],
+            cwd=ROOT,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=gbrain_subprocess_env(),
+        )
+        self.process = process
+        threading.Thread(target=self._drain_stderr, args=(process,), daemon=True).start()
+        initialized = self._request_locked(
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "memory-stargraph", "version": UI_VERSION},
+            },
+            deadline,
+        )
+        if not isinstance(initialized.get("serverInfo"), dict):
+            raise RuntimeError("persistent GBrain search initialization was invalid")
+        process.stdin.write(
+            json.dumps(
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+
+    def search_cli_output(self, args, timeout):
+        payload = parse_gbrain_search_arguments(args)
+        if not self.lock.acquire(blocking=False):
+            raise RuntimeError("persistent GBrain search is busy")
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        try:
+            self._start_locked(deadline)
+            result = self._request_locked(
+                "tools/call",
+                {"name": "search", "arguments": payload},
+                deadline,
+            )
+            if result.get("isError"):
+                raise RuntimeError("persistent GBrain search tool failed")
+            content = result.get("content") if isinstance(result.get("content"), list) else []
+            text_item = next(
+                (item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"),
+                "[]",
+            )
+            rows = json.loads(text_item)
+            if not isinstance(rows, list):
+                raise RuntimeError("persistent GBrain search returned invalid rows")
+            return format_mcp_search_results(rows)
+        except Exception:
+            self._close_locked()
+            raise
+        finally:
+            self.lock.release()
+
+    def prewarm_async(self, timeout=15):
+        self.active = True
+        if self.prewarming or (self.process is not None and self.process.poll() is None):
+            return False
+        self.prewarming = True
+
+        def prewarm():
+            if not self.lock.acquire(blocking=False):
+                self.prewarming = False
+                return
+            try:
+                self._start_locked(time.monotonic() + timeout)
+            except Exception:  # noqa: BLE001
+                self._close_locked()
+            finally:
+                self.prewarming = False
+                self.lock.release()
+
+        threading.Thread(target=prewarm, daemon=True).start()
+        return True
+
+
+PERSISTENT_GBRAIN_SEARCH = PersistentGBrainSearch()
+
+
+def run_gbrain_subprocess(*args, input_text=None, timeout=20):
+    if not GBRAIN.exists():
+        raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
+    command = [str(GBRAIN), *args]
     result = subprocess.run(
         command,
         cwd=ROOT,
         capture_output=True,
         timeout=timeout,
         check=False,
-        env=env,
+        env=gbrain_subprocess_env(),
         input=input_text.encode("utf-8") if isinstance(input_text, str) else input_text,
     )
     if result.returncode != 0:
@@ -1235,6 +1477,17 @@ def run_gbrain(*args, input_text=None, timeout=20):
         message = stderr or stdout or f"gbrain exited with status {result.returncode}"
         raise RuntimeError(message)
     return decode_process_output(result.stdout)
+
+
+def run_gbrain(*args, input_text=None, timeout=20):
+    started = time.monotonic()
+    if input_text is None and args and args[0] == "search" and PERSISTENT_GBRAIN_SEARCH.active:
+        try:
+            return PERSISTENT_GBRAIN_SEARCH.search_cli_output(args, timeout)
+        except Exception:  # noqa: BLE001
+            pass
+    remaining = max(0.1, float(timeout) - (time.monotonic() - started))
+    return run_gbrain_subprocess(*args, input_text=input_text, timeout=remaining)
 
 
 def run_gbrain_binary(gbrain_path, *args, timeout=20):
@@ -7832,6 +8085,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "source": graph.get("source") if graph else None,
                     "stats": graph.get("stats") if graph else None,
                     "attachment_storage": attachment_storage_status(),
+                    "persistent_search": PERSISTENT_GBRAIN_SEARCH.status(),
                 }
             )
         if parsed.path == "/api/setup-diagnostics":
@@ -8507,6 +8761,7 @@ def main():
             context.load_cert_chain(certfile=args.certfile, keyfile=args.keyfile)
             server.socket = context.wrap_socket(server.socket, server_side=True)
             scheme = "https"
+        PERSISTENT_GBRAIN_SEARCH.prewarm_async()
         start_openclaw_profile_activation_runtime()
         print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
         server.serve_forever()
@@ -8514,6 +8769,7 @@ def main():
         pass
     finally:
         server.server_close()
+        PERSISTENT_GBRAIN_SEARCH.close()
         stop_openclaw_profile_activation_runtime()
 
 

@@ -49,6 +49,8 @@ from server import (
     parse_gbrain_durable_evidence,
     safe_upload_filename,
     merge_search_results,
+    format_mcp_search_results,
+    parse_gbrain_search_arguments,
 )
 
 
@@ -130,6 +132,93 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["score"], 0.7772)
         self.assertEqual(rows[0]["label"], "Equal Rights For All PAC (ERFA PAC)")
         self.assertEqual(rows[1]["slug"], "products/jtuner/rfc/part-03")
+
+    def test_parse_gbrain_search_arguments_maps_supported_cli_options(self):
+        payload = parse_gbrain_search_arguments(
+            (
+                "search",
+                "memory stargraph",
+                "--limit",
+                "5",
+                "--offset",
+                "2",
+                "--mode",
+                "balanced",
+                "--types",
+                "report,run",
+                "--snippet-chars",
+                "0",
+            )
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "query": "memory stargraph",
+                "limit": 5,
+                "offset": 2,
+                "mode": "balanced",
+                "types": ["report", "run"],
+                "snippet_chars": 0,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported persistent search option"):
+            parse_gbrain_search_arguments(("search", "query", "--unknown", "value"))
+
+    def test_format_mcp_search_results_matches_cli_preview_contract(self):
+        long_unicode_preview = "a" * 99 + "\U0001f680" + "tail"
+        output = format_mcp_search_results(
+            [
+                {
+                    "slug": "products/memory-stargraph",
+                    "score": 0.7772,
+                    "chunk_text": "\n  # Memory Stargraph  \nBody",
+                },
+                {
+                    "slug": "learnings/utf16-preview",
+                    "score": 0.5,
+                    "chunk_text": long_unicode_preview,
+                },
+            ]
+        )
+
+        self.assertEqual(
+            output,
+            "[0.7772] products/memory-stargraph -- # Memory Stargraph\n"
+            f"[0.5000] learnings/utf16-preview -- {'a' * 99}\n",
+        )
+        parsed = parse_search_results(output)
+        self.assertEqual(parsed[0]["label"], "Memory Stargraph")
+        self.assertEqual(parsed[1]["preview"], "a" * 99)
+
+    def test_run_gbrain_prefers_active_persistent_search(self):
+        persistent = mock.Mock(active=True)
+        persistent.search_cli_output.return_value = "[0.90] products/memory-stargraph -- # Memory Stargraph\n"
+        with (
+            mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
+            mock.patch("server.run_gbrain_subprocess") as fallback,
+        ):
+            output = run_gbrain("search", "memory stargraph", "--limit", "5", timeout=6)
+
+        self.assertIn("products/memory-stargraph", output)
+        persistent.search_cli_output.assert_called_once_with(
+            ("search", "memory stargraph", "--limit", "5"),
+            6,
+        )
+        fallback.assert_not_called()
+
+    def test_run_gbrain_falls_back_when_persistent_search_fails(self):
+        persistent = mock.Mock(active=True)
+        persistent.search_cli_output.side_effect = RuntimeError("synthetic process exit")
+        with (
+            mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
+            mock.patch("server.run_gbrain_subprocess", return_value="fallback") as fallback,
+        ):
+            output = run_gbrain("search", "memory stargraph", timeout=6)
+
+        self.assertEqual(output, "fallback")
+        self.assertEqual(fallback.call_args.args, ("search", "memory stargraph"))
+        self.assertGreater(fallback.call_args.kwargs["timeout"], 5.5)
 
     def test_evidence_record_search_lists_types_concurrently(self):
         barrier = threading.Barrier(4)
