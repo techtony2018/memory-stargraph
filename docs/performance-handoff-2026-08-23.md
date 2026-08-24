@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `8ca1f13`
-- Current performance code commit: `8ca1f13` (`perf: release search results before details`)
-- Previous pushed commit: `343bcfd` (`perf: bound high-degree graph glows`)
+- Current merged and pushed source: `b2b098b`
+- Current performance code commit: `b2b098b` (`perf: batch node cache touch writes`)
+- Previous pushed commit: `8ca1f13` (`perf: release search results before details`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 609 tests passed in 47.081 seconds.
+- Latest verification: 610 tests passed in 48.274 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -83,6 +83,8 @@ After the expanded relationship-output reuse follow-up, the full suite passed 60
 After the high-degree graph-glow follow-up, the full suite passed 609 tests in 44.742 seconds. JavaScript syntax and `git diff --check` also passed. An isolated browser run rendered a nonblank 276-node, 139-edge canvas with no runtime errors.
 
 After the Search result-release follow-up, the full suite passed 609 tests in 47.081 seconds. JavaScript syntax, the 71 focused frontend tests, and `git diff --check` also passed after the final stale-selection guard.
+
+After the batched node-cache touch follow-up, the full suite passed 610 tests in 48.274 seconds. JavaScript syntax, the 72 focused frontend tests, and `git diff --check` also passed.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -430,6 +432,14 @@ Natural-language Search now releases its loading state as soon as the result gra
 - With the entity endpoint intentionally delayed by 2 seconds, Search unlocked with the correct focus and loading-details state, then hydrated to the complete six-link entity at 3.132 seconds. The user can search or select another node during that delay.
 - Backend Search time and retrieval semantics are unchanged. This improvement removes avoidable UI serialization after the ranked result already exists.
 
+### Batched node-cache LRU touches
+
+The browser node/media cache now parses its persisted JSON once into an in-memory store. Cache hits update LRU timestamps in memory and coalesce pure timestamp persistence into one write after 1 second. Cache additions, deletions, invalidations, limit enforcement, and flushes still persist immediately. A cross-tab `storage` listener cancels a pending touch write and reloads the external value, preventing a stale tab from overwriting a newer cache.
+
+- The previous hit path synchronously parsed and rewrote the entire cache. Synthetic median hit cost was 19.3 milliseconds at 1 MB and 63.1 milliseconds at 4 MB; 4 MB p95 was 133.5 milliseconds.
+- With a 4.21 MB real cache, five sequential full entity reselections completed in 11.9 milliseconds. Their entity and media reads produced zero synchronous cache writes and one merged 4.25 MB write after the delay.
+- The same roughly ten hits would cost about 631 milliseconds at the measured old 4 MB median. Immediate cache-touch work fell by about 98%, while response payloads and eviction semantics stayed unchanged.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -477,7 +487,7 @@ Changing Ask Yoda broad graph traversal from `direction=both` to `direction=out`
 
 ## Next Bottleneck
 
-Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, concurrent raw page consumers single-flight, high-degree graph views bound their expensive glow tier, and Search no longer waits for detail hydration after ranked results arrive. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all result-ready latency.
+Frontend startup no longer waits for TODO prefetch, Yoda logs, or the slow Follow-ups badge. Selection metadata overlaps after direct-neighbor expansion, immediate detail and relationship views reuse expansion evidence, repeated timeline reads are cached, concurrent raw page consumers single-flight, high-degree graph views bound their expensive glow tier, Search no longer waits for detail hydration after ranked results arrive, and browser cache hits no longer synchronously parse and rewrite multi-megabyte storage. First-time timeline reads still cost about 1.1-1.2 seconds in isolation but run in the background. The next measured user-facing bottleneck remains uncached primary GBrain Search, where backend retrieval accounts for nearly all result-ready latency.
 
 Persistent stdio removed most process startup cost. The remaining end-to-end Search median is about 960 milliseconds, with a 2.771-second p95 in the same-source sample. The next bounded Search profiling pass should separate primary retrieval from evidence ranking, graph merging, and finalization, then optimize only the dominant measured phase.
 
