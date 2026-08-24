@@ -41,6 +41,8 @@ After the bounded direct-relationship traversal follow-up, the full suite passed
 
 After the bounded graph expansion and seed-load follow-up, the full suite passed 591 tests in 41.911 seconds with the same static checks passing.
 
+After the repeated relationship-type cache follow-up, the full suite passed 591 tests in 40.526 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -198,6 +200,14 @@ Lazy node expansion and forced live-graph collection now use the same bounded de
 - After: complete lazy expansion finished in 45-395 milliseconds, with an 87-millisecond median; median improvement is greater than 99.5% against the timeout floor.
 - Expanded center-node link counts were 27, 116, and 199, showing that the faster path retained substantial relationship coverage.
 - A fresh seed collection completed in 1.407 seconds with 75 nodes and `root_index_loaded=true`; the old root expansion could spend 20 seconds and fall back to an unexpanded seed.
+
+### Repeated entity relationship cache
+
+Successful outbound-plus-inbound relationship type snapshots are cached for 30 seconds, up to 64 entities. Partial reads are never cached, returned sets are reconstructed per caller, and force refreshes or any GraphStore invalidation clear the cache.
+
+- Before: six repeated `people/tony-guan` entity reads had a 181.8-millisecond median and a stable relationship signature.
+- After: the first read was 353.6 milliseconds; the next five had a 10.25-millisecond median, a 94.4% warm-repeat improvement.
+- Correctness: all 6/6 relationship signatures matched, and tests verify that the second read performs no additional graph-query or backlinks call.
 
 ## Earlier Performance Work
 

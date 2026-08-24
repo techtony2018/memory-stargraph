@@ -586,6 +586,7 @@ class GraphParsingTests(unittest.TestCase):
         store.primary_search_cache.put("query", (({"slug": "cached"},), "complete"))
         store.yoda_search_cache.put("question", "cached search")
         store.yoda_source_cache.put("source", "cached source")
+        store.relationship_type_cache.put("people/tony-guan", (("edge",),))
 
         store.invalidate()
 
@@ -593,6 +594,7 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIsNone(store.primary_search_cache.get("query"))
         self.assertIsNone(store.yoda_search_cache.get("question"))
         self.assertIsNone(store.yoda_source_cache.get("source"))
+        self.assertIsNone(store.relationship_type_cache.get("people/tony-guan"))
 
     def test_timed_value_cache_expires_and_bounds_entries(self):
         cache = TimedValueCache(ttl_seconds=10, max_entries=2)
@@ -1444,6 +1446,7 @@ class GraphParsingTests(unittest.TestCase):
 
         with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
             edge_types = store.direct_relationship_types("people/tony-guan")
+            cached_edge_types = store.direct_relationship_types("people/tony-guan")
 
         self.assertEqual(
             edge_types[("categories/people", "people/tony-guan")],
@@ -1454,6 +1457,7 @@ class GraphParsingTests(unittest.TestCase):
             {"authored_by"},
         )
         self.assertEqual(run.call_count, 2)
+        self.assertEqual(dict(cached_edge_types), dict(edge_types))
 
     def test_parse_neighbors_ignores_unrelated_neighbor_edges_in_depth_one_json(self):
         output = """  Schema version 1 → 119 (114 migration(s) pending)

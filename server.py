@@ -5841,6 +5841,10 @@ class GraphStore:
             ttl_seconds=YODA_SOURCE_CACHE_SECONDS,
             max_entries=YODA_SOURCE_CACHE_MAX_ENTRIES,
         )
+        self.relationship_type_cache = TimedValueCache(
+            ttl_seconds=30,
+            max_entries=64,
+        )
         self.evidence_list_cache = EvidenceListCache()
 
     def prewarm_search_evidence(
@@ -5887,6 +5891,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.relationship_type_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -5943,6 +5948,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.relationship_type_cache.clear()
             self.evidence_list_cache.clear()
         if self.graph and not force and now - self.loaded_at < GRAPH_STALE_SECONDS:
             return self.graph
@@ -6029,6 +6035,7 @@ class GraphStore:
             self.primary_search_cache.clear()
             self.yoda_search_cache.clear()
             self.yoda_source_cache.clear()
+            self.relationship_type_cache.clear()
             self.evidence_list_cache.clear()
 
     def hydrate_node_details(self, node, node_map=None, allow_fetch=True, fetch_timeout=6):
@@ -6092,7 +6099,15 @@ class GraphStore:
                     pass
 
     def direct_relationship_types(self, slug):
+        cached = self.relationship_type_cache.get(slug)
+        if cached is not None:
+            edge_types = defaultdict(set)
+            for key, types in cached:
+                edge_types[tuple(key)].update(types)
+            return edge_types
+
         edge_types = defaultdict(set)
+        complete = True
         try:
             graph_output = run_gbrain(
                 "graph-query",
@@ -6104,12 +6119,18 @@ class GraphStore:
             )
             merge_edge_types(edge_types, parse_graph_query_link_types(graph_output, slug))
         except Exception:  # noqa: BLE001
-            pass
+            complete = False
         try:
             backlinks_output = run_gbrain("backlinks", slug)
             merge_edge_types(edge_types, parse_backlink_types(backlinks_output, slug))
         except Exception:  # noqa: BLE001
-            pass
+            complete = False
+        if complete:
+            snapshot = tuple(
+                (key, tuple(sorted(types)))
+                for key, types in sorted(edge_types.items())
+            )
+            self.relationship_type_cache.put(slug, snapshot)
         return edge_types
 
     def get_entity(self, slug):
