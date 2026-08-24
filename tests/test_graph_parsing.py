@@ -2926,6 +2926,45 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("## SG-0123 child node", prompt)
         self.assertIn("Status: completed", prompt)
 
+    def test_yoda_prompt_builds_todo_and_operational_context_concurrently_in_order(self):
+        store = GraphStore()
+        barrier = threading.Barrier(2, timeout=1)
+
+        def build_current(*_args, **_kwargs):
+            barrier.wait()
+            return {"text": "CURRENT TODO CONTEXT", "counts": {"current_todo_rows": 1}}
+
+        def build_operational(*_args, **_kwargs):
+            barrier.wait()
+            return {"text": "OPERATIONAL CONTEXT", "counts": {"operational_state_rows": 1}}
+
+        with (
+            mock.patch.object(store, "build_yoda_current_todo_context", side_effect=build_current),
+            mock.patch.object(store, "build_yoda_operational_remediation_context", side_effect=build_operational),
+            mock.patch.object(store, "get_yoda_search_output", return_value=""),
+            mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
+        ):
+            trace = {}
+            counts = {}
+            prompt = store.build_yoda_prompt(
+                "products/memory-stargraph",
+                "What is current?",
+                stable_context={
+                    "selected_node": "# Memory Stargraph",
+                    "graph": "",
+                    "backlinks": "",
+                    "timings": {},
+                },
+                trace=trace,
+                counts=counts,
+            )
+
+        self.assertLess(prompt.index("CURRENT TODO CONTEXT"), prompt.index("OPERATIONAL CONTEXT"))
+        self.assertIn("current_todo_state", trace)
+        self.assertIn("operational_state", trace)
+        self.assertEqual(counts["current_todo_rows"], 1)
+        self.assertEqual(counts["operational_state_rows"], 1)
+
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):
         store = GraphStore()
 

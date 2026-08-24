@@ -6944,18 +6944,35 @@ class GraphStore:
             ]
         )
         todo_root_cache = []
+        todo_root_lock = threading.Lock()
 
         def load_todo_root():
-            if not todo_root_cache:
-                todo_root_cache.append(self.get_entity_raw("notes/memory-starmap-todo-list") or "")
-            return todo_root_cache[0]
+            with todo_root_lock:
+                if not todo_root_cache:
+                    todo_root_cache.append(self.get_entity_raw("notes/memory-starmap-todo-list") or "")
+                return todo_root_cache[0]
 
-        phase_started = time.perf_counter()
-        current_todo_context = self.build_yoda_current_todo_context(
-            effective_question or question,
-            slug,
-            todo_root_loader=load_todo_root,
-        )
+        def build_timed_context(builder):
+            started = time.perf_counter()
+            context = builder(
+                effective_question or question,
+                slug,
+                todo_root_loader=load_todo_root,
+            )
+            return context, int((time.perf_counter() - started) * 1000)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            current_todo_future = executor.submit(
+                build_timed_context,
+                self.build_yoda_current_todo_context,
+            )
+            operational_future = executor.submit(
+                build_timed_context,
+                self.build_yoda_operational_remediation_context,
+            )
+            current_todo_context, current_todo_ms = current_todo_future.result()
+            operational_context, operational_ms = operational_future.result()
+
         current_todo_text = current_todo_context.get("text") or ""
         if current_todo_text:
             lines.extend(
@@ -6965,13 +6982,7 @@ class GraphStore:
                 ]
             )
             counts.update(current_todo_context.get("counts") or {})
-            trace["current_todo_state"] = int((time.perf_counter() - phase_started) * 1000)
-        phase_started = time.perf_counter()
-        operational_context = self.build_yoda_operational_remediation_context(
-            effective_question or question,
-            slug,
-            todo_root_loader=load_todo_root,
-        )
+            trace["current_todo_state"] = current_todo_ms
         operational_text = operational_context.get("text") or ""
         if operational_text:
             lines.extend(
@@ -6981,7 +6992,7 @@ class GraphStore:
                 ]
             )
             counts.update(operational_context.get("counts") or {})
-            trace["operational_state"] = int((time.perf_counter() - phase_started) * 1000)
+            trace["operational_state"] = operational_ms
         phase_started = time.perf_counter()
         try:
             search_output = self.get_yoda_search_output(f"{effective_question} {slug}")

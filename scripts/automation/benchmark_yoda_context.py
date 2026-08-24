@@ -188,8 +188,7 @@ def run_case(
         return details if return_details else None
 
     if case.get("expire_cache_before_cold"):
-        for entry in store.yoda_context_cache.values():
-            entry["created_at"] = 0
+        store.yoda_context_cache.clear()
 
     previous_model = server.run_yoda_model
     previous_gbrain = server.run_gbrain
