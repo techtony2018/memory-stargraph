@@ -33,6 +33,8 @@ After the read-lane follow-up, the full suite passed 584 tests in 40.152 seconds
 
 After the exact-slug Search follow-up, the full suite passed 588 tests in 40.715 seconds. `python3 -m py_compile openclaw_profile_activation.py server.py`, `node --check public/app.js`, and `git diff --check` also passed.
 
+After the whitespace-equivalent Search cache follow-up, the full suite passed 588 tests in 42.631 seconds with the same static checks passing.
+
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
 ```text
@@ -150,6 +152,16 @@ The same five canonical slug queries measured:
 - After: 5-108 milliseconds, median 27 milliseconds; 97.76% median improvement.
 - Correctness: 5/5 complete, 5/5 exact top slug, and 5/5 returned exactly one verified result.
 - Loaded product/goal nodes completed in 5-7 milliseconds. Three unloaded document/list/organization nodes completed in 27-108 milliseconds through persistent `get` verification.
+
+### Whitespace-equivalent primary Search cache keys
+
+Primary Search cache keys now collapse internal whitespace in addition to the existing case and edge-whitespace normalization. The first request is still sent to GBrain exactly as entered; only semantically equivalent repeat lookups share the cached result.
+
+Five real query pairs measured before and after using one normal-space query followed by the same words with doubled spaces:
+
+- Before: every variant was a cache miss; variant median 2.006 seconds, with another GBrain search for all 5/5 pairs.
+- After: every variant was a cache hit; variant median 0.058 milliseconds, greater than 99.99% median improvement.
+- Correctness: cached result ordering matched the first query in 5/5 pairs, and the second query triggered zero additional GBrain calls.
 
 ## Earlier Performance Work
 

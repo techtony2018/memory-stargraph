@@ -645,7 +645,7 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(second[2], "stale_refresh_joined")
         self.assertEqual(search.call_count, 1)
 
-    def test_graph_store_reuses_exact_primary_search_results(self):
+    def test_graph_store_reuses_whitespace_equivalent_primary_search_results(self):
         store = GraphStore()
         seed_graph = finalize_graph(
             {
@@ -674,7 +674,7 @@ class GraphParsingTests(unittest.TestCase):
             ) as run,
         ):
             first = store.search("memory stargraph")
-            second = store.search("memory stargraph")
+            second = store.search("  MEMORY   STARGRAPH  ")
 
         search_calls = [call for call in run.call_args_list if call.args[0] == "search"]
         self.assertEqual(len(search_calls), 1)

@@ -5408,7 +5408,8 @@ def live_primary_search_results(query, timeout):
 
 
 def cached_primary_search_results(query, timeout, cache=None):
-    cache_key = hashlib.sha256(str(query or "").strip().lower().encode("utf-8")).hexdigest()
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip().lower())
+    cache_key = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
     cached = cache.get(cache_key) if cache is not None else None
     if cached is not None:
         results, status = cached
