@@ -514,6 +514,16 @@ Concurrent first Backlinks reads for the same slug now share one in-flight backe
 - Regression coverage proves eight same-slug callers invoke `gbrain backlinks` exactly once and preserves compact projection reuse across pages.
 - The full suite passed 662 tests in 47.797 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Coalesced cold graph-query reads
+
+Concurrent first graph queries for the same slug, relationship type, direction, and depth now share one in-flight backend call. Different query keys remain independent, successful output retains the existing 30-second relationship-output cache, graph writes retain the existing invalidation behavior, and backend errors continue to propagate through the original fallback path.
+
+- A three-round alternating fresh-process A/B sent eight synchronized `outgoing`, depth-1 graph-query requests for `people/tony-guan` on every run.
+- Median batch completion fell from 9.567 to 4.197 seconds, a 56.1% improvement. The median of per-run request medians fell from 9.369 to 4.191 seconds, a 55.3% improvement.
+- Every run returned eight `200` responses with one exact 8,974-byte length and one SHA-256 hash.
+- Regression coverage proves eight same-query callers invoke `gbrain graph-query` exactly once and preserves the existing database-URL-missing loaded-graph fallback.
+- The full suite passed 663 tests in 46.161 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Bounded high-degree graph glows
 
 The canvas renderer no longer gives every direct neighbor an expensive radial glow when the focused node is a high-degree hub. Focus, hover, visible top hubs, globally high-degree nodes, and direct neighbors with degree at least 5 retain the glow at normal zoom. All direct neighbors retain it for focused nodes with degree 80 or lower, and zooming to 165% restores it for detailed inspection.

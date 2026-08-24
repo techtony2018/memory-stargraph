@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -4057,6 +4057,31 @@ class TimedValueCache:
             self.generation += 1
 
 
+class SingleFlight:
+    def __init__(self):
+        self.futures = {}
+        self.lock = threading.Lock()
+
+    def run(self, key, loader, timeout):
+        with self.lock:
+            future = self.futures.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self.futures[key] = future
+
+        if owner:
+            try:
+                future.set_result(loader())
+            except BaseException as error:  # noqa: BLE001
+                future.set_exception(error)
+            finally:
+                with self.lock:
+                    self.futures.pop(key, None)
+            return future.result()
+        return future.result(timeout=max(0, timeout))
+
+
 LOCAL_GBRAIN_TOOL_MANIFEST_CACHE = TimedValueCache(
     ttl_seconds=GBRAIN_TOOL_MANIFEST_CACHE_SECONDS,
     max_entries=4,
@@ -6568,6 +6593,7 @@ class GraphStore:
             ttl_seconds=30,
             max_entries=32,
         )
+        self.graph_query_flights = SingleFlight()
         self.timeline_cache = TimedValueCache(
             ttl_seconds=30,
             max_entries=64,
@@ -7876,15 +7902,18 @@ class GraphStore:
             command.extend(["--direction", direction])
         if depth:
             command.extend(["--depth", str(depth)])
-        try:
-            output = run_gbrain(*command)
+        def load():
+            try:
+                output = run_gbrain(*command)
+            except RuntimeError as exc:
+                message = str(exc)
+                if "database_url is missing" not in message and "No database URL" not in message:
+                    raise
+                output = self.graph_query_from_loaded_graph(slug, link_type, direction, depth, message)
             self.relationship_output_cache.put(cache_key, output)
             return output
-        except RuntimeError as exc:
-            message = str(exc)
-            if "database_url is missing" not in message and "No database URL" not in message:
-                raise
-            return self.graph_query_from_loaded_graph(slug, link_type, direction, depth, message)
+
+        return self.graph_query_flights.run(cache_key, load, timeout=25)
 
     def graph_query_from_loaded_graph(self, slug, link_type="", direction="both", depth="1", reason=""):
         try:

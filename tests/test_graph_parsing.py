@@ -1838,6 +1838,39 @@ class GraphParsingTests(unittest.TestCase):
         )
         self.assertNotIn(("people/tony-guan", "posts/example"), edge_types)
 
+    def test_graph_query_coalesces_concurrent_reads(self):
+        store = GraphStore()
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_run(*args):
+            self.assertEqual(
+                args,
+                ("graph-query", "people/tony-guan", "--direction", "outgoing", "--depth", "1"),
+            )
+            started.set()
+            release.wait(timeout=1)
+            return "[depth 0] people/tony-guan"
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(
+                        store.graph_query,
+                        "people/tony-guan",
+                        "",
+                        "outgoing",
+                        "1",
+                    )
+                    for _ in range(8)
+                ]
+                self.assertTrue(started.wait(timeout=1))
+                release.set()
+                outputs = [future.result(timeout=2) for future in futures]
+
+        self.assertEqual(outputs, ["[depth 0] people/tony-guan"] * 8)
+        self.assertEqual(run.call_count, 1)
+
     def test_direct_relationship_types_uses_bounded_outbound_query_and_backlinks(self):
         store = GraphStore()
 
