@@ -405,6 +405,7 @@ MEDIA_PREVIEW_EXTENSIONS = {".avif", ".jpeg", ".jpg", ".png", ".webp"}
 MEDIA_PREVIEW_MIN_BYTES = 512 * 1024
 MEDIA_PREVIEW_MAX_SIZE = (640, 640)
 MEDIA_STREAM_CHUNK_BYTES = 1024 * 1024
+MEDIA_RANGE_INVALID = object()
 
 
 DEMO_GRAPH = {
@@ -4834,6 +4835,39 @@ def resolve_media_preview_file_path(request_path):
     if not text.startswith("/media-preview/"):
         return None
     return resolve_media_file_path("/media/" + text.split("/media-preview/", 1)[1])
+
+
+def parse_media_byte_range(header, size):
+    text = str(header or "").strip()
+    if not text or not text.lower().startswith("bytes="):
+        return None
+    specification = text.split("=", 1)[1].strip()
+    if not specification or "," in specification or "-" not in specification or size <= 0:
+        return MEDIA_RANGE_INVALID
+    start_text, end_text = (part.strip() for part in specification.split("-", 1))
+    try:
+        if not start_text:
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                return MEDIA_RANGE_INVALID
+            return max(0, size - suffix_length), size - 1
+        start = int(start_text)
+        end = int(end_text) if end_text else size - 1
+    except ValueError:
+        return MEDIA_RANGE_INVALID
+    if start < 0 or start >= size or end < start:
+        return MEDIA_RANGE_INVALID
+    return start, min(end, size - 1)
+
+
+def copy_media_range(source, destination, byte_count):
+    remaining = max(0, int(byte_count))
+    while remaining:
+        chunk = source.read(min(MEDIA_STREAM_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        destination.write(chunk)
+        remaining -= len(chunk)
 
 
 @lru_cache(maxsize=32)
@@ -9473,15 +9507,30 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Media file not found")
             return
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        content_length = file_path.stat().st_size
-        self.send_response(HTTPStatus.OK)
+        file_size = file_path.stat().st_size
+        requested_range = parse_media_byte_range(self.headers.get("Range"), file_size)
+        if requested_range is MEDIA_RANGE_INVALID:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        partial = requested_range is not None
+        start, end = requested_range if partial else (0, max(0, file_size - 1))
+        content_length = end - start + 1 if file_size else 0
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if partial else HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         if not head_only:
             with file_path.open("rb") as source:
-                shutil.copyfileobj(source, self.wfile, length=MEDIA_STREAM_CHUNK_BYTES)
+                source.seek(start)
+                copy_media_range(source, self.wfile, content_length)
 
     def serve_media_preview(self, request_path, head_only=False):
         file_path = resolve_media_preview_file_path(request_path)

@@ -1646,6 +1646,7 @@ class ApiEndpointTests(unittest.TestCase):
             media_path.write_bytes(expected)
             handler = object.__new__(MemoryStargraphHandler)
             handler.wfile = RecordingWriter()
+            handler.headers = {}
             handler.send_response = mock.Mock()
             handler.send_header = mock.Mock()
             handler.end_headers = mock.Mock()
@@ -1661,6 +1662,35 @@ class ApiEndpointTests(unittest.TestCase):
             with mock.patch("server.MEDIA_ROOTS", [root]):
                 handler.serve_media_file("/media/products/memory-stargraph/large.png", head_only=True)
             self.assertEqual(handler.wfile.parts, [])
+
+            handler.headers = {"Range": f"bytes={server.MEDIA_STREAM_CHUNK_BYTES - 20}-{server.MEDIA_STREAM_CHUNK_BYTES + 20}"}
+            handler.send_response.reset_mock()
+            handler.send_header.reset_mock()
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                handler.serve_media_file("/media/products/memory-stargraph/large.png")
+            self.assertEqual(b"".join(handler.wfile.parts), expected[server.MEDIA_STREAM_CHUNK_BYTES - 20 : server.MEDIA_STREAM_CHUNK_BYTES + 21])
+            handler.send_response.assert_called_once_with(HTTPStatus.PARTIAL_CONTENT)
+            self.assertIn(
+                mock.call(
+                    "Content-Range",
+                    f"bytes {server.MEDIA_STREAM_CHUNK_BYTES - 20}-{server.MEDIA_STREAM_CHUNK_BYTES + 20}/{len(expected)}",
+                ),
+                handler.send_header.call_args_list,
+            )
+
+            handler.wfile.parts.clear()
+            handler.headers = {"Range": "bytes=99999999-"}
+            handler.send_response.reset_mock()
+            handler.send_header.reset_mock()
+            with mock.patch("server.MEDIA_ROOTS", [root]):
+                handler.serve_media_file("/media/products/memory-stargraph/large.png")
+            self.assertEqual(handler.wfile.parts, [])
+            handler.send_response.assert_called_once_with(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.assertIn(mock.call("Content-Range", f"bytes */{len(expected)}"), handler.send_header.call_args_list)
+
+        self.assertEqual(server.parse_media_byte_range("bytes=-50", 100), (50, 99))
+        self.assertEqual(server.parse_media_byte_range("bytes=90-", 100), (90, 99))
+        self.assertIs(server.parse_media_byte_range("bytes=0-1,4-5", 100), server.MEDIA_RANGE_INVALID)
 
     def test_entity_timeline_view_endpoint_is_read_only(self):
         fake_store = FakeStore()

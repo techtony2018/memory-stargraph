@@ -838,6 +838,15 @@ Original `/media/` responses now stream files in fixed 1 MiB blocks instead of r
 - A separate full-speed local HTTP A/B transferred 82,259,376 bytes per batch. Three direction-balanced rounds had 420.7- versus 363.2-millisecond median batch wall time and 340.2- versus 259.7-millisecond median request time, confirming no throughput regression.
 - Regression coverage verifies the 1 MiB write ceiling, exact byte reconstruction, and zero-body HEAD behavior. The full suite passed 658 tests in 41.144 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Single-range original-media responses
+
+The local media route now honors one HTTP byte range, including bounded, open-ended, and suffix forms. Valid requests return `206`, `Accept-Ranges`, and exact `Content-Range` metadata while retaining the 1 MiB streaming ceiling. Unsatisfiable or multi-range requests fail closed with `416`; ordinary GET and HEAD behavior remains compatible.
+
+- Before the change, `Range: bytes=0-65535` returned `200` and the complete 10,282,422-byte hiking image or 5,589,133-byte PDF. The accepted endpoint returns exactly 65,536 bytes, reducing transfer by 99.36% and 98.83% respectively.
+- Start, suffix, open-ended, and full-response samples all matched the corresponding source byte slices by SHA-256. An out-of-bounds request returned an empty `416` response with `Content-Range: bytes */10282422`.
+- A real Chrome image load without a Range header remained `200`, rendered the original 5712 by 3213 source at its requested CSS dimensions, advertised range support, and produced no page errors.
+- Regression coverage locks bounded, open-ended, suffix, unsatisfiable, and multi-range behavior alongside exact streamed bytes and HEAD semantics. The full suite passed 658 tests in 46.125 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
