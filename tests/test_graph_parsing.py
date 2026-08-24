@@ -2993,10 +2993,12 @@ cover_image: companies/example-inc/logo.jpg
     def test_yoda_prompt_builds_direct_and_targeted_context_concurrently_in_order(self):
         store = GraphStore()
         barrier = threading.Barrier(2, timeout=1)
+        direct_slugs = []
 
-        def load_direct(_slugs):
+        def load_direct(slugs):
             barrier.wait()
-            return {"reports/source": "# DIRECT SOURCE"}
+            direct_slugs.extend(slugs)
+            return {slug: f"# DIRECT SOURCE {slug}" for slug in slugs}
 
         def load_targeted(*_args, **_kwargs):
             barrier.wait()
@@ -3008,7 +3010,14 @@ cover_image: companies/example-inc/logo.jpg
             mock.patch.object(
                 store,
                 "get_yoda_search_output",
-                return_value="[0.90] reports/source -- # Source",
+                return_value="\n".join(
+                    [
+                        "[0.90] platforms/tony-guan-x -- # Tony X",
+                        "[0.89] people/garry-tan -- # Garry Tan",
+                        "[0.88] media/x-tonyguan2010 -- # Tony Media",
+                        "[0.87] people/linkedin/realtony -- # Tony LinkedIn",
+                    ]
+                ),
             ),
             mock.patch.object(store, "get_yoda_source_pages", side_effect=load_direct),
             mock.patch.object(store, "build_yoda_targeted_context", side_effect=load_targeted),
@@ -3017,7 +3026,7 @@ cover_image: companies/example-inc/logo.jpg
             counts = {}
             prompt = store.build_yoda_prompt(
                 "products/memory-stargraph",
-                "How is Source related?",
+                "Which posts were reposted by Garry Tan?",
                 stable_context={
                     "selected_node": "# Memory Stargraph",
                     "graph": "",
@@ -3028,10 +3037,11 @@ cover_image: companies/example-inc/logo.jpg
                 counts=counts,
             )
 
-        self.assertLess(prompt.index("# DIRECT SOURCE"), prompt.index("TARGETED CONTEXT"))
+        self.assertLess(prompt.index("# DIRECT SOURCE platforms/tony-guan-x"), prompt.index("TARGETED CONTEXT"))
+        self.assertEqual(direct_slugs, ["platforms/tony-guan-x", "people/garry-tan"])
         self.assertIn("direct_reads", trace)
         self.assertIn("targeted_relationships", trace)
-        self.assertEqual(counts["direct_reads"], 1)
+        self.assertEqual(counts["direct_reads"], 2)
         self.assertEqual(counts["targeted_entities"], 1)
 
     def test_ask_yoda_reuses_stable_node_context_across_different_questions(self):

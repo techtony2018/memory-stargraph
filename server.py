@@ -7014,7 +7014,12 @@ class GraphStore:
         search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
         if not search_slugs:
             search_slugs = parse_slugs(str(search_output or ""))
-        likely_slugs = [candidate for candidate in search_slugs if candidate != slug and "/" in candidate][:min(4, yoda_depth)]
+        direct_read_limit = 2 if is_targeted_relationship_question(effective_question) else min(4, yoda_depth)
+        likely_slugs = [
+            candidate
+            for candidate in search_slugs
+            if candidate != slug and "/" in candidate
+        ][:direct_read_limit]
         counts["search_results"] = len(search_slugs)
         counts["direct_reads"] = len(likely_slugs)
 
