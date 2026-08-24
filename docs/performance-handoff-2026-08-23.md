@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `a3c2e0d`
-- Current performance code commit: `a3c2e0d` (`perf: coalesce concurrent Yoda context`)
-- Previous pushed commit: `381ca92` (`perf: coalesce concurrent Yoda source reads`)
+- Current merged and pushed source: `8e15094`
+- Current performance code commit: `8e15094` (`perf: overlap Yoda status reconciliation`)
+- Previous pushed commit: `a3c2e0d` (`perf: coalesce concurrent Yoda context`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 600 tests passed in 43.176 seconds.
+- Latest verification: 601 tests passed in 43.310 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -53,6 +53,8 @@ After the concurrent Ask Yoda retrieval coalescing follow-up, the full suite pas
 After the concurrent Ask Yoda source-page coalescing follow-up, the full suite passed 598 tests in 42.759 seconds with the same static checks passing.
 
 After the concurrent Ask Yoda stable-context coalescing follow-up, the full suite passed 600 tests in 43.176 seconds with the same static checks passing.
+
+After the Ask Yoda status-reconciliation overlap follow-up, the full suite passed 601 tests in 43.310 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -263,6 +265,15 @@ Ask Yoda's five-minute stable selected-node, broad-graph, and backlink context c
 - Correctness: both callers received the same complete payload, the waiter launched no duplicate backend build, and regression tests cover coalescing, expiry pruning, capacity bounds, cache invalidation, and warm follow-up reuse.
 - The benchmark invoked no model and caused no product-service, GBrain-data, resolver, or deployment mutation.
 
+### Concurrent Ask Yoda status reconciliation
+
+Ask Yoda now builds authoritative current-TODO context and completed operational-remediation reconciliation concurrently. A lock preserves exactly one shared TODO-root read, and the final prompt keeps its prior deterministic section order.
+
+- Before: two alternating read-only samples took 4.391 and 4.462 seconds for the two sections in sequence.
+- After: two parallel samples took 4.242 and 3.860 seconds, reducing median wall time by about 8.5%.
+- Full product-case cold prompt construction changed from 12.489 seconds to 11.202 seconds, a 10.3% sample improvement; warm construction changed from 5.137 to 4.848 seconds.
+- Correctness: current-TODO text, operational text, counts, final prompt length, and grounding were unchanged. Tests verify true concurrent execution and deterministic current-before-operational output order.
+
 ## Earlier Performance Work
 
 These prior commits are already pushed and should remain intact:
@@ -301,6 +312,10 @@ Adding `--snippet-chars 300` to `gbrain search` was not implemented.
 - One alternating run favored the flag: 1.661-second median versus 1.820 seconds.
 - The reverse-order run favored the default: 1.715-second median versus 1.794 seconds.
 - The contradictory result indicates ordinary backend/process variance, not a measured improvement.
+
+Changing all non-targeted broad graph retrieval from depth 2 to depth 1 was not implemented. In the alternating ten-case provider-down matrix, depth 1 preserved measured grounding and slightly lowered the mean, but regressed median cold prompt construction from 7.192 to 7.751 seconds. It also removes second-hop evidence globally, so the mixed latency result did not justify the quality risk.
+
+Replacing full backlinks with `graph-query --direction in --depth 1` was not implemented. It reduced formatted bytes by roughly five to six times and retained 93.1-100% of sampled backlink edges, but did not improve latency: the high-degree sample regressed from 1.417 to 2.337 seconds and ordinary samples were flat. Compact output alone does not remove backend traversal cost.
 
 ## Next Bottleneck
 
