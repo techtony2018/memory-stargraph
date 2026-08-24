@@ -2817,6 +2817,26 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual(result["diagnostics"]["context_counts"]["targeted_entities"], 1)
         self.assertEqual(result["diagnostics"]["context_counts"]["relationship_source_reads"], 1)
 
+    def test_yoda_targeted_context_skips_entity_already_covered_by_direct_reads(self):
+        store = GraphStore()
+
+        with mock.patch("server.run_gbrain") as run:
+            context = store.build_yoda_targeted_context(
+                "Which of my X posts were reposted by Garry Tan?",
+                excluded_slugs={"people/tony-guan", "people/garry-tan"},
+            )
+
+        self.assertEqual(context["text"], "")
+        self.assertEqual(
+            context["counts"],
+            {
+                "targeted_entities": 0,
+                "targeted_backlink_reads": 0,
+                "relationship_source_reads": 0,
+            },
+        )
+        run.assert_not_called()
+
     def test_ask_yoda_short_followup_reuses_prior_user_intent_and_constrains_broad_graph(self):
         store = GraphStore()
         history = [

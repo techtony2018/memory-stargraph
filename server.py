@@ -6612,6 +6612,10 @@ class GraphStore:
 
     def build_yoda_targeted_context(self, question, excluded_slugs=None):
         excluded = set(excluded_slugs or [])
+        excluded_identities = {
+            normalized_search_identity(str(slug).rsplit("/", 1)[-1])
+            for slug in excluded
+        }
         phrases = extract_question_entities(question)
         lines = []
         relationship_sources = []
@@ -6620,6 +6624,8 @@ class GraphStore:
         backlink_reads = 0
 
         for phrase in phrases:
+            if normalized_search_identity(phrase) in excluded_identities:
+                continue
             try:
                 search_output = run_gbrain("search", phrase, "--limit", "5")
             except Exception:  # noqa: BLE001
