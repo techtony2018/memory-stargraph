@@ -524,6 +524,16 @@ Concurrent first graph queries for the same slug, relationship type, direction, 
 - Regression coverage proves eight same-query callers invoke `gbrain graph-query` exactly once and preserves the existing database-URL-missing loaded-graph fallback.
 - The full suite passed 663 tests in 46.161 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
 
+### Shared relationship reads during concurrent entity detail
+
+Cold entity-detail relationship enrichment now consumes the same graph-query and Backlinks read contracts used by the first-class relationship views. Concurrent detail requests therefore share one backend call per relationship source and populate the existing 30-second output caches instead of bypassing them. Partial failure handling and the bounded relationship-type snapshot remain unchanged.
+
+- A three-round alternating fresh-process A/B sent eight synchronized entity-detail requests for `people/tony-guan` on every run.
+- Median batch completion fell from 6.352 to 5.245 seconds, a 17.4% improvement. The median of per-run request medians fell from 5.727 to 5.204 seconds, a more modest 9.1% improvement because seed-graph and detail hydration remain shared endpoint costs.
+- Every run returned eight `200` responses with one exact 12,346-byte length and one SHA-256 hash.
+- Regression coverage proves eight concurrent detail relationship readers execute one graph query and one Backlinks read in total; existing immediate-detail expansion reuse remains intact.
+- The full suite passed 664 tests in 44.948 seconds; Python compilation, JavaScript syntax, and `git diff --check` passed.
+
 ### Bounded high-degree graph glows
 
 The canvas renderer no longer gives every direct neighbor an expensive radial glow when the focused node is a high-degree hub. Focus, hover, visible top hubs, globally high-degree nodes, and direct neighbors with degree at least 5 retain the glow at normal zoom. All direct neighbors retain it for focused nodes with degree 80 or lower, and zooming to 165% restores it for detailed inspection.

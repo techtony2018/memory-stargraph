@@ -6931,19 +6931,16 @@ class GraphStore:
         edge_types = defaultdict(set)
         complete = True
         try:
-            graph_output = run_gbrain(
-                "graph-query",
+            graph_output = self.graph_query(
                 slug,
-                "--direction",
-                "out",
-                "--depth",
-                "1",
+                direction="out",
+                depth="1",
             )
             merge_edge_types(edge_types, parse_graph_query_link_types(graph_output, slug))
         except Exception:  # noqa: BLE001
             complete = False
         try:
-            backlinks_output = run_gbrain("backlinks", slug)
+            backlinks_output = self.backlinks(slug)
             merge_edge_types(edge_types, parse_backlink_types(backlinks_output, slug))
         except Exception:  # noqa: BLE001
             complete = False

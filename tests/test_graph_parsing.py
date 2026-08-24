@@ -1903,6 +1903,47 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(dict(cached_edge_types), dict(edge_types))
 
+    def test_direct_relationship_types_coalesces_concurrent_reads(self):
+        store = GraphStore()
+        callers = threading.Barrier(8)
+        graph_started = threading.Event()
+        release_graph = threading.Event()
+
+        def fake_run(*args, **_kwargs):
+            if args == (
+                "graph-query",
+                "people/tony-guan",
+                "--direction",
+                "out",
+                "--depth",
+                "1",
+            ):
+                graph_started.set()
+                release_graph.wait(timeout=1)
+                return "[depth 0] people/tony-guan\n  --member_of-> categories/people (depth 1)\n"
+            if args == ("backlinks", "people/tony-guan"):
+                return '[{"from_slug":"posts/example","to_slug":"people/tony-guan","link_type":"authored_by"}]'
+            raise AssertionError(args)
+
+        def read_relationship_types():
+            callers.wait(timeout=1)
+            return store.direct_relationship_types("people/tony-guan")
+
+        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(read_relationship_types) for _ in range(8)]
+                self.assertTrue(graph_started.wait(timeout=1))
+                time.sleep(0.05)
+                release_graph.set()
+                outputs = [future.result(timeout=2) for future in futures]
+
+        expected = {
+            ("categories/people", "people/tony-guan"): {"member_of"},
+            ("people/tony-guan", "posts/example"): {"authored_by"},
+        }
+        self.assertEqual([dict(output) for output in outputs], [expected] * 8)
+        self.assertEqual(run.call_count, 2)
+
     def test_timeline_caches_successful_reads_and_invalidates_after_write(self):
         store = GraphStore()
 
