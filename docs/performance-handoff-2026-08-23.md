@@ -16,11 +16,11 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `592fbef` (includes concurrent remote MCP activation fix `69baafc`)
-- Current performance code commit: `8509431` (`perf: coalesce concurrent primary searches`)
+- Current merged and pushed source: `750b2cc`
+- Current performance code commit: `750b2cc` (`perf: resolve unique exact labels locally`)
 - Previous pushed commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 567 tests passed in 40.592 seconds.
+- Latest verification: 596 tests passed in 42.170 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
