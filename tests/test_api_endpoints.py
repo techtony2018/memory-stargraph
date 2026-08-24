@@ -1890,6 +1890,21 @@ class ApiEndpointTests(unittest.TestCase):
             fake_gbrain.mock_calls,
         )
 
+    def test_autopilot_findings_reuses_missing_tool_capability_across_filters(self):
+        store = server.GraphStore()
+        missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")
+        with (
+            mock.patch("server.gbrain_call_tool", side_effect=missing_tool) as fake_tool,
+            mock.patch("server.run_gbrain", return_value="No pages found.\n") as fake_gbrain,
+        ):
+            first = store.list_autopilot_findings({"limit": 1, "offset": 0})
+            second = store.list_autopilot_findings({"limit": 20, "offset": 0})
+
+        self.assertEqual(first["backend_status"], "gbrain_tag_fallback")
+        self.assertEqual(second["backend_status"], "gbrain_tag_fallback")
+        self.assertEqual(fake_tool.call_count, 1)
+        self.assertEqual(fake_gbrain.call_count, 4)
+
     def test_autopilot_findings_tag_fallback_lists_bounded_pages(self):
         store = server.GraphStore()
         missing_tool = RuntimeError("Unknown tool: autopilot_findings_list")

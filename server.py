@@ -7536,21 +7536,28 @@ class GraphStore:
         cached = self.autopilot_findings_cache.get(cache_key)
         if cached is not None:
             return cached
-        try:
-            result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
-        except RuntimeError as exc:
-            message = str(exc)
-            missing_operation = (
-                "GBrain backend does not expose autopilot_findings_list" in message
-                or "Unknown tool: autopilot_findings_list" in message
-                or (
-                    "unknown_operation" in message
-                    and "autopilot_findings_list" in message
-                )
-            )
-            if not missing_operation:
-                raise
+        capability_key = "autopilot_findings_list:capability"
+        tool_supported = self.autopilot_findings_cache.get(capability_key)
+        if tool_supported is False:
             result = list_autopilot_findings_from_gbrain_pages(payload)
+        else:
+            try:
+                result = gbrain_call_tool("autopilot_findings_list", payload, timeout=30)
+                self.autopilot_findings_cache.put(capability_key, True)
+            except RuntimeError as exc:
+                message = str(exc)
+                missing_operation = (
+                    "GBrain backend does not expose autopilot_findings_list" in message
+                    or "Unknown tool: autopilot_findings_list" in message
+                    or (
+                        "unknown_operation" in message
+                        and "autopilot_findings_list" in message
+                    )
+                )
+                if not missing_operation:
+                    raise
+                self.autopilot_findings_cache.put(capability_key, False)
+                result = list_autopilot_findings_from_gbrain_pages(payload)
         if not isinstance(result, dict):
             return {"findings": [], "total": 0}
         findings = result.get("findings")
