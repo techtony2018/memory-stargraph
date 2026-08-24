@@ -1328,6 +1328,12 @@ async function runLazySearch(query) {
       reportSearchTiming(searchStartedAt);
       return;
     }
+    const loadedPreviewSlug = uniqueLoadedSearchPreview(submittedQuery);
+    if (loadedPreviewSlug) {
+      showSearchSelectionFromGraph(loadedPreviewSlug, { updateLocation: false, recordHistory: false });
+      requestRender();
+      setSearchFeedback(`Searching live evidence for "${submittedQuery}". Showing high-confidence loaded match: ${loadedPreviewSlug}.`);
+    }
     const searchTimeoutMs = looksLikeTodoId(submittedQuery) ? Math.max(SEARCH_TIMEOUT_MS, 30000) : SEARCH_TIMEOUT_MS;
     const response = await withSearchTimeout(apiGet(`/api/search?q=${encodeURIComponent(submittedQuery)}`), submittedQuery, searchTimeoutMs);
     if (!response.ok) {
@@ -1627,7 +1633,7 @@ function reportSearchTiming(searchStartedAt, topSlug = state.focusSlug) {
   setSearchFeedback(`Search completed in ${elapsed}ms.${resultText}`, "success");
 }
 
-function showSearchSelectionFromGraph(slug) {
+function showSearchSelectionFromGraph(slug, options = {}) {
   const node = state.nodeMap.get(slug);
   state.focusSlug = slug;
   updateAskYodaButtons();
@@ -1650,8 +1656,19 @@ function showSearchSelectionFromGraph(slug) {
   secondRing.textContent = "Select the node to load second-ring entities.";
   detailSecondRing.appendChild(secondRing);
   setHover(slug);
-  replaceLocationSlug(slug);
-  recordSelectionHistory(slug);
+  if (options.updateLocation !== false) replaceLocationSlug(slug);
+  if (options.recordHistory !== false) recordSelectionHistory(slug);
+}
+
+function uniqueLoadedSearchPreview(query) {
+  const queryTerms = normalizeSearchText(query).split(/\s+/).filter(Boolean);
+  if (queryTerms.length < 3) return null;
+  const matches = state.nodes.filter((node) => {
+    if (isHidden(node.slug)) return false;
+    const text = normalizeSearchText(`${node.label || ""} ${node.slug || ""}`);
+    return queryTerms.every((term) => text.includes(term));
+  });
+  return matches.length === 1 ? matches[0].slug : null;
 }
 
 async function tryExactSlugSearch(slug, options = {}) {
