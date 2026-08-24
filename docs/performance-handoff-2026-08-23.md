@@ -16,12 +16,12 @@
 - Follow-up performance code commit: `ae3eda9` (`perf: reuse persistent GBrain read session`)
 - Graph-context performance code commit: `d20d7fd` (`perf: accelerate bounded Yoda graph context`)
 - Read-lane performance code commit: `592fbef` (`perf: queue short persistent GBrain reads`)
-- Current merged and pushed source: `689a561`
-- Current performance code commit: `689a561` (`perf: narrow Yoda relationship source reads`)
-- Previous pushed commit: `5c8251a` (`perf: skip covered Yoda entity lookups`)
+- Current merged and pushed source: `618f59e`
+- Current performance code commit: `618f59e` (`perf: resolve exact evidence titles locally`)
+- Previous pushed commit: `689a561` (`perf: narrow Yoda relationship source reads`)
 - Earlier stale-refresh commit: `eeb3c2e` (`perf: refresh primary searches off request path`)
 - Earlier pushed commit verified at the start of this window: `395cb22` (`perf: cache repeated primary searches`)
-- Latest verification: 603 tests passed in 46.262 seconds.
+- Latest verification: 604 tests passed in 45.575 seconds.
 - Static verification passed: Python compilation, JavaScript syntax checks, and `git diff --check`.
 
 After the resumed iteration, the full suite passed 578 tests in 43.069 seconds. Python compilation, JavaScript syntax checks, and `git diff --check` also passed against the merged source.
@@ -63,6 +63,8 @@ After the Ask Yoda status-search overlap follow-up, the full suite passed 602 te
 After the covered-entity targeted-lookup follow-up, the full suite passed 603 tests in 46.978 seconds with the same static checks passing.
 
 After the targeted relationship direct-read fanout follow-up, the full suite passed 603 tests in 46.262 seconds with the same static checks passing.
+
+After the exact prewarmed evidence-title Search follow-up, the full suite passed 604 tests in 45.575 seconds with the same static checks passing.
 
 Do not stage, overwrite, revert, or include these unrelated Product Owner files in a performance commit:
 
@@ -315,6 +317,14 @@ Named-entity relationship questions now read the first two broader-retrieval sou
 - Four-page direct reads had a 2.789-second median in the alternating fanout benchmark; three pages took 2.169 seconds and two pages took 1.402 seconds.
 - The real relationship prompt improved from 8.017 to 7.403 seconds, a further 7.7% sample reduction and 63.8% versus the original 20.427-second profile.
 - The prompt shrank from 19,653 to 16,284 characters while retaining the selected platform and exact `people/garry-tan` entity. Tests verify the two-slug fanout and preserve targeted fallback coverage.
+
+### Exact prewarmed evidence-title Search
+
+Search now resolves a query locally when it uniquely matches a complete title in all four fresh prewarmed evidence lists: TODOs, Learnings, Reports, and Runs. Missing cache types, expired lists, ambiguous titles, and non-exact queries retain the complete live Search path.
+
+- Before: the exact current Product Owner Run title took 3.318, 1.873, and 1.738 seconds; median 1.873 seconds. The correct Run ranked first in all three cases among broader results.
+- After: the same title took 9.535, 8.988, and 7.752 milliseconds; median 8.988 milliseconds, a 99.5% reduction.
+- Correctness: all 3/3 calls returned the same unique Run and made zero GBrain calls. The result exposes an explicit `search_exact_evidence_title` coverage marker.
 
 ## Earlier Performance Work
 
