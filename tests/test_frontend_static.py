@@ -1611,6 +1611,22 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("loadPersistentYodaLogs()", deferred_block)
         self.assertIn("refreshAutopilotFindingsBadge()", deferred_block)
 
+    def test_entity_detail_prefetches_timeline_and_media_concurrently(self):
+        script = (ROOT / "public/app.js").read_text()
+        load_start = script.index("async function loadEntity(slug, options = {})")
+        load_end = script.index("async function refreshTimelineBadge", load_start)
+        load_block = script[load_start:load_end]
+
+        entity_start = load_block.index("const entityResponsePromise = apiGet")
+        timeline_start = load_block.index("const timelineResponsePromise = apiGet")
+        media_start = load_block.index("const mediaResponsePromise = apiGet")
+        entity_await = load_block.index("const response = await entityResponsePromise")
+        self.assertLess(entity_start, timeline_start)
+        self.assertLess(timeline_start, entity_await)
+        self.assertLess(media_start, entity_await)
+        self.assertIn("refreshTimelineBadge(entity.slug, loadId, timelineResponsePromise)", load_block)
+        self.assertIn("loadSelectionMediaPreview(entity.slug, loadId, mediaResponsePromise)", load_block)
+
     def test_console_theme_is_compact_hud_style(self):
         styles = (ROOT / "public" / "styles.css").read_text()
         markup = (ROOT / "public" / "index.html").read_text()

@@ -2694,10 +2694,10 @@ function renderSelectionMediaLoading(slug = state.focusSlug || "") {
   selectionMediaPreview.closest(".selection-blueprint")?.classList.add("has-media");
 }
 
-async function loadSelectionMediaPreview(slug, loadId) {
+async function loadSelectionMediaPreview(slug, loadId, responsePromise = null) {
   renderSelectionMediaLoading(slug);
   try {
-    const response = await apiGet(`/api/entity-media/${encodeURIComponent(slug)}`);
+    const response = await (responsePromise || apiGet(`/api/entity-media/${encodeURIComponent(slug)}`));
     if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
     const media = response.ok ? response.data.media || [] : [];
     rememberNodeMediaStatus(slug, media);
@@ -7449,7 +7449,11 @@ async function loadEntity(slug, options = {}) {
     }
     await ensureExpanded(slug);
     if (loadId !== state.entityLoadId) return { status: "stale", slug };
-    const response = await apiGet(`/api/entity/${encodeURIComponent(slug)}`);
+    const encodedSlug = encodeURIComponent(slug);
+    const entityResponsePromise = apiGet(`/api/entity/${encodedSlug}`);
+    const timelineResponsePromise = apiGet(`/api/entity-timeline-view/${encodedSlug}`).catch(() => null);
+    const mediaResponsePromise = apiGet(`/api/entity-media/${encodedSlug}`).catch(() => null);
+    const response = await entityResponsePromise;
     if (!response.ok) {
       const requested = requestedNode || state.nodeMap.get(slug);
       state.focusSlug = slug;
@@ -7492,8 +7496,8 @@ async function loadEntity(slug, options = {}) {
       ? `${summaryText} ${collapseNote}`
       : summaryText;
     updateSource(source);
-    void refreshTimelineBadge(entity.slug, loadId);
-    void loadSelectionMediaPreview(entity.slug, loadId);
+    void refreshTimelineBadge(entity.slug, loadId, timelineResponsePromise);
+    void loadSelectionMediaPreview(entity.slug, loadId, mediaResponsePromise);
     state.visibleLabelSlugs = [
       ...new Set([
         ...state.visibleLabelSlugs,
@@ -7557,9 +7561,10 @@ async function loadEntity(slug, options = {}) {
   }
 }
 
-async function refreshTimelineBadge(slug, loadId = state.entityLoadId) {
+async function refreshTimelineBadge(slug, loadId = state.entityLoadId, responsePromise = null) {
   try {
-    const response = await apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`);
+    const response = await (responsePromise || apiGet(`/api/entity-timeline-view/${encodeURIComponent(slug)}`));
+    if (!response) throw new Error("Timeline request failed");
     if (loadId !== state.entityLoadId || state.focusSlug !== slug) return;
     setTimelineBadge(slug, response.ok && timelineOutputHasEntries(response.data?.output));
   } catch (_error) {
