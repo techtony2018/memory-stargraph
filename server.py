@@ -317,7 +317,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.201"
+UI_VERSION = "V1.0.202"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -2292,11 +2292,12 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
         if availability is False:
             raise RuntimeError(f"GBrain backend does not expose {tool_name}")
     started = time.monotonic()
-    try:
-        return PERSISTENT_GBRAIN_SEARCH.call_tool(tool_name, payload, timeout=timeout)
-    except Exception:
-        if tool_name in MUTATING_GBRAIN_TOOL_NAMES:
-            raise
+    if tool_name in PERSISTENT_GBRAIN_TOOL_NAMES:
+        try:
+            return PERSISTENT_GBRAIN_SEARCH.call_tool(tool_name, payload, timeout=timeout)
+        except Exception:
+            if tool_name in MUTATING_GBRAIN_TOOL_NAMES:
+                raise
     remaining = max(0.1, float(timeout) - (time.monotonic() - started))
     try:
         output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=remaining)
@@ -3766,6 +3767,21 @@ MUTATING_GBRAIN_TOOL_NAMES = frozenset(
         "put_page",
         "remove_link",
         "remove_tag",
+    }
+)
+PERSISTENT_GBRAIN_TOOL_NAMES = frozenset(
+    {
+        "add_link",
+        "add_tag",
+        "add_timeline_entry",
+        "delete_page",
+        "get_page",
+        "get_timeline",
+        "get_versions",
+        "put_page",
+        "remove_link",
+        "remove_tag",
+        "think",
     }
 )
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10

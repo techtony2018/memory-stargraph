@@ -1,13 +1,13 @@
 {
   "assets": {
     "app.js": {
-      "brotli_size": 64872,
-      "source_sha256": "efbbcfaacf8e4dedfb5b7285c4ec7ebcf3b2bb5035255af48987e0d9b2db8c7d",
+      "brotli_size": 64873,
+      "source_sha256": "68b140d27fdc74eb115a3878817a3cdf8d3ced665612621abe10d27ed2fca3fa",
       "source_size": 343324
     },
     "index.html": {
       "brotli_size": 5130,
-      "source_sha256": "68205e39426b06d1fbc01f391147db6c817d2cb4c3f1d06a15e3bba1f099cb1d",
+      "source_sha256": "866bf9ecfcda4b58e7390caeef209333ad8d082c40b4593d8220e00e45ac17e0",
       "source_size": 26604
     },
     "styles.css": {

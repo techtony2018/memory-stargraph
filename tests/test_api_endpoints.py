@@ -632,6 +632,29 @@ class ApiEndpointTests(unittest.TestCase):
 
             local.assert_not_called()
 
+    def test_gbrain_call_tool_keeps_large_custom_reads_on_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps({"engine": "postgres"}), encoding="utf-8"
+            )
+            with (
+                mock.patch.dict(server.os.environ, {"GBRAIN_HOME": str(home)}, clear=True),
+                mock.patch.object(server.PERSISTENT_GBRAIN_SEARCH, "call_tool") as local_mcp,
+                mock.patch(
+                    "server.run_gbrain",
+                    return_value='{"takes":[{"id":"take-1"}]}',
+                ) as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                result = server.gbrain_call_tool("takes_list", {"limit": 500})
+
+            self.assertEqual(result["takes"], [{"id": "take-1"}])
+            local_mcp.assert_not_called()
+            local.assert_called_once()
+
     def test_remote_gbrain_tool_caller_accepts_sse_json_rpc_response(self):
         response = self._RawResponse(
             'event: message\ndata: {"jsonrpc":"2.0","id":"one","result":{"ok":true}}\n\n',
