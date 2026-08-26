@@ -381,6 +381,20 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(metrics["last_error"], "synthetic fallback")
         self.assertGreaterEqual(metrics["tool_latency_ms_average"], 0)
 
+    def test_graph_store_tag_read_uses_local_persistent_session(self):
+        store = GraphStore()
+        with mock.patch(
+            "server.PERSISTENT_GBRAIN_SEARCH.call_tool",
+            return_value=["capture-link", "active", "active"],
+        ) as call_tool:
+            self.assertEqual(
+                store.get_entity_tags("runs/example"),
+                ["active", "capture-link"],
+            )
+        call_tool.assert_called_once_with(
+            "get_tags", {"slug": "runs/example"}, timeout=20
+        )
+
     def test_run_gbrain_routes_supported_read_commands_to_persistent_session(self):
         persistent = mock.Mock(active=True)
         persistent.read_cli_output.side_effect = ["query", "page", "[]\n", "rows\n"]

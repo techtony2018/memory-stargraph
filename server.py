@@ -7183,7 +7183,9 @@ class GraphStore:
         return raw
 
     def get_entity_tags(self, slug):
-        value = gbrain_call_tool("get_tags", {"slug": slug})
+        value = PERSISTENT_GBRAIN_SEARCH.call_tool(
+            "get_tags", {"slug": slug}, timeout=20
+        )
         if isinstance(value, dict):
             value = value.get("tags")
         if not isinstance(value, list):
