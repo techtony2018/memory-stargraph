@@ -189,31 +189,20 @@ def worker_api_post_json(endpoint: str, payload: dict[str, object], timeout: int
 
 
 def gbrain_get(slug: str) -> str | None:
+    content = worker_api_get(slug)
+    if content is not None:
+        return content
     result = run_gbrain(["get", slug], timeout=90)
-    if result.returncode != 0:
-        return worker_api_get(slug)
-    return result.stdout
+    return result.stdout if result.returncode == 0 else None
 
 
 def gbrain_put(slug: str, markdown: str) -> None:
-    result = run_gbrain(["put", slug], input_text=markdown, timeout=180)
-    if result.returncode != 0:
-        endpoint = f"/api/entity-save/{quote(slug, safe='')}"
-        if worker_api_post_json(endpoint, {"content": markdown}, timeout=180):
-            return
-        raise RuntimeError(
-            f"gbrain put and Memory Stargraph HTTP save failed for {slug}: "
-            f"{(result.stderr or result.stdout).strip()}"
-        )
+    endpoint = f"/api/entity-save/{quote(slug, safe='')}"
+    if not worker_api_post_json(endpoint, {"content": markdown}, timeout=180):
+        raise RuntimeError(f"Memory Stargraph HTTP save failed for {slug}")
 
 
 def gbrain_link(source: str, target: str, link_type: str) -> bool:
-    result = run_gbrain(
-        ["link", source, target, "--link-type", link_type, "--link-source", "memory-stargraph-todo-compaction"],
-        timeout=120,
-    )
-    if result.returncode == 0:
-        return True
     endpoint = f"/api/entity-link/{quote(source, safe='')}"
     return worker_api_post_json(
         endpoint,

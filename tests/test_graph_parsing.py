@@ -1948,9 +1948,9 @@ class GraphParsingTests(unittest.TestCase):
         store = GraphStore()
 
         with mock.patch(
-            "server.run_gbrain",
-            side_effect=["No timeline entries.", None, "2026-08-23: Added event"],
-        ) as run:
+            "server.gbrain_call_tool",
+            side_effect=[[], {"ok": True}, [{"date": "2026-08-23", "summary": "Added event"}]],
+        ) as call_tool:
             first = store.timeline("products/memory-stargraph")
             second = store.timeline("products/memory-stargraph")
             store.add_timeline_event(
@@ -1960,13 +1960,13 @@ class GraphParsingTests(unittest.TestCase):
             )
             refreshed = store.timeline("products/memory-stargraph")
 
-        self.assertEqual(first, "No timeline entries.")
+        self.assertEqual(first, "[]\n")
         self.assertEqual(second, first)
-        self.assertEqual(refreshed, "2026-08-23: Added event")
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual(run.call_args_list[0].args, ("timeline", "products/memory-stargraph"))
-        self.assertEqual(run.call_args_list[1].args[:2], ("timeline-add", "products/memory-stargraph"))
-        self.assertEqual(run.call_args_list[2].args, ("timeline", "products/memory-stargraph"))
+        self.assertIn("Added event", refreshed)
+        self.assertEqual(call_tool.call_count, 3)
+        self.assertEqual(call_tool.call_args_list[0].args, ("get_timeline", {"slug": "products/memory-stargraph"}))
+        self.assertEqual(call_tool.call_args_list[1].args[0], "add_timeline_entry")
+        self.assertEqual(call_tool.call_args_list[2].args, ("get_timeline", {"slug": "products/memory-stargraph"}))
 
     def test_history_caches_concurrent_reads_and_invalidates(self):
         store = GraphStore()
@@ -1974,12 +1974,12 @@ class GraphParsingTests(unittest.TestCase):
         release = threading.Event()
 
         def first_history(*args):
-            self.assertEqual(args, ("history", "people/tony-guan"))
+            self.assertEqual(args, ("get_versions", {"slug": "people/tony-guan"}))
             started.set()
             release.wait(timeout=1)
-            return "v2 2026-08-24\nv1 2026-08-23"
+            return [{"version": "v2"}, {"version": "v1"}]
 
-        with mock.patch("server.run_gbrain", side_effect=first_history) as run:
+        with mock.patch("server.gbrain_call_tool", side_effect=first_history) as call_tool:
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = [
                     executor.submit(store.history, "people/tony-guan")
@@ -1989,26 +1989,26 @@ class GraphParsingTests(unittest.TestCase):
                 release.set()
                 outputs = [future.result(timeout=2) for future in futures]
 
-        self.assertEqual(outputs, ["v2 2026-08-24\nv1 2026-08-23"] * 8)
-        self.assertEqual(run.call_count, 1)
+        self.assertTrue(all('"version": "v2"' in output for output in outputs))
+        self.assertEqual(call_tool.call_count, 1)
 
         store.invalidate()
-        with mock.patch("server.run_gbrain", return_value="v3 2026-08-24") as run:
-            self.assertEqual(store.history("people/tony-guan"), "v3 2026-08-24")
-        self.assertEqual(run.call_count, 1)
+        with mock.patch("server.gbrain_call_tool", return_value=[{"version": "v3"}]) as call_tool:
+            self.assertIn('"version": "v3"', store.history("people/tony-guan"))
+        self.assertEqual(call_tool.call_count, 1)
 
     def test_timeline_coalesces_concurrent_reads(self):
         store = GraphStore()
         started = threading.Event()
         release = threading.Event()
 
-        def fake_run(*args):
-            self.assertEqual(args, ("timeline", "products/memory-stargraph"))
+        def fake_call(*args):
+            self.assertEqual(args, ("get_timeline", {"slug": "products/memory-stargraph"}))
             started.set()
             release.wait(timeout=1)
-            return "No timeline entries."
+            return []
 
-        with mock.patch("server.run_gbrain", side_effect=fake_run) as run:
+        with mock.patch("server.gbrain_call_tool", side_effect=fake_call) as call_tool:
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = [
                     executor.submit(store.timeline, "products/memory-stargraph")
@@ -2018,8 +2018,8 @@ class GraphParsingTests(unittest.TestCase):
                 release.set()
                 outputs = [future.result(timeout=2) for future in futures]
 
-        self.assertEqual(outputs, ["No timeline entries."] * 8)
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(outputs, ["[]\n"] * 8)
+        self.assertEqual(call_tool.call_count, 1)
 
     def test_entity_raw_coalesces_concurrent_reads(self):
         store = GraphStore()
@@ -3108,6 +3108,7 @@ cover_image: companies/example-inc/logo.jpg
 
         with (
             mock.patch("server.run_gbrain") as run,
+            mock.patch("server.gbrain_call_tool", return_value={"ok": True}) as call_tool,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
             mock.patch("server.MEDIA_ROOTS", [media_root]),
             mock.patch.object(store, "invalidate") as invalidate,
@@ -3127,12 +3128,6 @@ cover_image: companies/example-inc/logo.jpg
 
         run.assert_has_calls(
             [
-                mock.call("link", "people/tony-guan", "companies/azul-systems", "--link-type", "employed by", "--context", "past role"),
-                mock.call("unlink", "people/tony-guan", "companies/azul-systems", "--link-type", "employed by"),
-                mock.call("tag", "people/tony-guan", "founder"),
-                mock.call("tag", "people/tony-guan", "java"),
-                mock.call("untag", "people/tony-guan", "old"),
-                mock.call("timeline-add", "people/tony-guan", "2026-06-29", "Updated graph operations", "--detail", "Details", "--source", "memory-stargraph"),
                 mock.call("graph-query", "people/tony-guan", "--direction", "both", "--depth", "1", timeout=30),
                 mock.call("query", "What should I know? people/tony-guan", "--adaptive-return", "true", "--limit", "8", "--relational", "true"),
                 mock.call("get", "people/tony-guan"),
@@ -3145,8 +3140,43 @@ cover_image: companies/example-inc/logo.jpg
                 mock.call("files", "upload", str(source), "--page", "people/tony-guan"),
                 mock.call("files", "list", "people/tony-guan"),
                 mock.call("put", "people/tony-guan", input_text=mock.ANY),
-                mock.call("history", "people/tony-guan"),
                 mock.call("embed", "people/tony-guan"),
+            ],
+            any_order=True,
+        )
+        call_tool.assert_has_calls(
+            [
+                mock.call(
+                    "add_link",
+                    {
+                        "from": "people/tony-guan",
+                        "to": "companies/azul-systems",
+                        "link_type": "employed by",
+                        "context": "past role",
+                    },
+                ),
+                mock.call(
+                    "remove_link",
+                    {
+                        "from": "people/tony-guan",
+                        "to": "companies/azul-systems",
+                        "link_type": "employed by",
+                    },
+                ),
+                mock.call("add_tag", {"slug": "people/tony-guan", "tag": "founder"}),
+                mock.call("add_tag", {"slug": "people/tony-guan", "tag": "java"}),
+                mock.call("remove_tag", {"slug": "people/tony-guan", "tag": "old"}),
+                mock.call(
+                    "add_timeline_entry",
+                    {
+                        "slug": "people/tony-guan",
+                        "date": "2026-06-29",
+                        "summary": "Updated graph operations",
+                        "detail": "Details",
+                        "source": "memory-stargraph",
+                    },
+                ),
+                mock.call("get_versions", {"slug": "people/tony-guan"}),
             ],
             any_order=True,
         )

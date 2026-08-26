@@ -317,7 +317,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.200"
+UI_VERSION = "V1.0.201"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1647,7 +1647,7 @@ class PersistentGBrainSearch:
         if not GBRAIN.exists():
             raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
         process = subprocess.Popen(
-            [str(GBRAIN), "serve", "--surface", "starter"],
+            [str(GBRAIN), "serve", "--surface", "full"],
             cwd=ROOT,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1684,14 +1684,41 @@ class PersistentGBrainSearch:
             {"name": name, "arguments": payload},
             deadline,
         )
-        if result.get("isError"):
-            raise RuntimeError(f"persistent GBrain {name} tool failed")
         content = result.get("content") if isinstance(result.get("content"), list) else []
-        text_item = next(
-            (item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"),
-            "null",
-        )
-        return json.loads(text_item)
+        text_items = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        if result.get("isError"):
+            detail = "\n".join(str(item) for item in text_items if item).strip()
+            raise RuntimeError(
+                f"persistent GBrain {name} tool failed: {detail or 'unknown MCP error'}"
+            )
+        if "structuredContent" in result:
+            return result["structuredContent"]
+        if not text_items:
+            return None
+        text_item = str(text_items[-1])
+        try:
+            return json.loads(text_item)
+        except json.JSONDecodeError:
+            return text_item
+
+    def call_tool(self, name, payload=None, timeout=30):
+        started = time.monotonic()
+        timeout_seconds = max(0.1, float(timeout))
+        if not self.lock.acquire(timeout=timeout_seconds):
+            raise RuntimeError("persistent GBrain MCP session is busy")
+        deadline = started + timeout_seconds
+        try:
+            self._start_locked(deadline)
+            return self._call_tool_locked(str(name), dict(payload or {}), deadline)
+        except Exception:
+            self._close_locked()
+            raise
+        finally:
+            self.lock.release()
 
     def _list_pages_locked(self, payload, deadline):
         requested = payload.get("limit")
@@ -2264,8 +2291,15 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
         availability = local_gbrain_tool_available(tool_name)
         if availability is False:
             raise RuntimeError(f"GBrain backend does not expose {tool_name}")
+    started = time.monotonic()
     try:
-        output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=timeout)
+        return PERSISTENT_GBRAIN_SEARCH.call_tool(tool_name, payload, timeout=timeout)
+    except Exception:
+        if tool_name in MUTATING_GBRAIN_TOOL_NAMES:
+            raise
+    remaining = max(0.1, float(timeout) - (time.monotonic() - started))
+    try:
+        output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=remaining)
     except RuntimeError as exc:
         message = str(exc)
         for line in reversed(message.splitlines()):
@@ -3323,13 +3357,22 @@ def run_gbrain_think_yoda(prompt, config, return_details=False):
     details = yoda_details("gbrain_think", model, config["timeout"])
     question = extract_yoda_prompt_field(prompt, "Question") or prompt
     selected_slug = extract_yoda_prompt_field(prompt, "Selected node")
-    command = ["think", question]
+    payload = {"question": question}
     if selected_slug:
-        command.extend(["--anchor", selected_slug])
+        payload["anchor"] = selected_slug
     if model:
-        command.extend(["--model", model])
+        payload["model"] = model
     try:
-        answer = run_gbrain(*command, timeout=config["timeout"])
+        result = gbrain_call_tool("think", payload, timeout=config["timeout"])
+        if isinstance(result, dict):
+            answer = str(
+                result.get("answer")
+                or result.get("output")
+                or result.get("response")
+                or ""
+            ).strip()
+        else:
+            answer = str(result or "").strip()
     except Exception as exc:  # noqa: BLE001
         details.update({"model_status": "api_error", "error_summary": str(exc)})
         return {"output": None, **details} if return_details else None
@@ -3712,6 +3755,17 @@ OPTIONAL_GBRAIN_TOOL_NAMES = frozenset(
         "resolver_feedback_health",
         "resolver_proposals_list",
         "take_proposals_list",
+    }
+)
+MUTATING_GBRAIN_TOOL_NAMES = frozenset(
+    {
+        "add_link",
+        "add_tag",
+        "add_timeline_entry",
+        "delete_page",
+        "put_page",
+        "remove_link",
+        "remove_tag",
     }
 )
 SETTINGS_EVIDENCE_CACHE_SECONDS = 10
@@ -7095,7 +7149,7 @@ class GraphStore:
         return ensure_media_references_available(parse_media_references(raw))
 
     def save_entity_raw(self, slug, content):
-        run_gbrain("put", slug, input_text=content)
+        gbrain_call_tool("put_page", {"slug": slug, "content": content})
         self.invalidate()
 
     def create_entity(self, name, description="", category="entities"):
@@ -7104,7 +7158,7 @@ class GraphStore:
             raise ValueError("name is required")
         slug = entity_slug_from_name(clean_name, category)
         markdown = create_entity_markdown(clean_name, description, category)
-        run_gbrain("put", slug, input_text=markdown)
+        gbrain_call_tool("put_page", {"slug": slug, "content": markdown})
         self.invalidate()
         return slug
 
@@ -7116,7 +7170,7 @@ class GraphStore:
             self.invalidate()
             return
         try:
-            run_gbrain("delete", slug)
+            gbrain_call_tool("delete_page", {"slug": slug})
         except RuntimeError as exc:
             message = str(exc)
             if "page_not_found" not in message and "Page not found" not in message:
@@ -7125,33 +7179,33 @@ class GraphStore:
         self.invalidate()
 
     def add_relationship(self, source_slug, target_slug, link_type, context=""):
-        command = ["link", source_slug, target_slug, "--link-type", link_type]
+        payload = {"from": source_slug, "to": target_slug, "link_type": link_type}
         if context:
-            command.extend(["--context", context])
-        run_gbrain(*command)
+            payload["context"] = context
+        gbrain_call_tool("add_link", payload)
         self.invalidate()
 
     def remove_relationship(self, source_slug, target_slug, link_type=""):
-        command = ["unlink", source_slug, target_slug]
+        payload = {"from": source_slug, "to": target_slug}
         if link_type:
-            command.extend(["--link-type", link_type])
-        run_gbrain(*command)
+            payload["link_type"] = link_type
+        gbrain_call_tool("remove_link", payload)
         self.invalidate()
 
     def update_tags(self, slug, add_tags=None, remove_tags=None):
         for tag in add_tags or []:
-            run_gbrain("tag", slug, tag)
+            gbrain_call_tool("add_tag", {"slug": slug, "tag": tag})
         for tag in remove_tags or []:
-            run_gbrain("untag", slug, tag)
+            gbrain_call_tool("remove_tag", {"slug": slug, "tag": tag})
         self.invalidate()
 
     def add_timeline_event(self, slug, date, summary, detail="", source=""):
-        command = ["timeline-add", slug, date, summary]
+        payload = {"slug": slug, "date": date, "summary": summary}
         if detail:
-            command.extend(["--detail", detail])
+            payload["detail"] = detail
         if source:
-            command.extend(["--source", source])
-        run_gbrain(*command)
+            payload["source"] = source
+        gbrain_call_tool("add_timeline_entry", payload)
         self.invalidate()
 
     def ask_gbrain(self, slug, question):
@@ -8076,7 +8130,7 @@ class GraphStore:
             return cached
         output, _load_status = self.history_cache.load_once(
             slug,
-            lambda: run_gbrain("history", slug),
+            lambda: format_mcp_json(gbrain_call_tool("get_versions", {"slug": slug})),
             timeout=20,
         )
         if output is None:
@@ -8089,7 +8143,7 @@ class GraphStore:
             return cached
         output, _load_status = self.timeline_cache.load_once(
             slug,
-            lambda: run_gbrain("timeline", slug),
+            lambda: format_mcp_json(gbrain_call_tool("get_timeline", {"slug": slug})),
             timeout=20,
         )
         if output is None:

@@ -62,6 +62,13 @@ ROUTES = [
         "mutates_gbrain": False,
         "curl_shape": "curl -sS <base-url>/api/health",
     },
+    {
+        "action": "resolver-events",
+        "method": "GET",
+        "endpoint": "/api/resolver/events",
+        "mutates_gbrain": False,
+        "curl_shape": "curl -sS --fail <base-url>/api/resolver/events?limit=<N>&producer=stargraph",
+    },
 ]
 
 

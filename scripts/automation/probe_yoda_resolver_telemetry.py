@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -56,26 +55,21 @@ def event_metadata(event: dict[str, Any]) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
-def read_authoritative_events(*, limit: int = 50) -> list[dict[str, Any]]:
-    payload = json.dumps({"limit": limit, "producer": "stargraph"})
-    result = subprocess.run(
-        ["gbrain", "call", "resolver_events_list", payload],
-        check=True,
-        capture_output=True,
-        text=True,
+def read_authoritative_events(
+    *, service_url: str = "http://127.0.0.1:8788", limit: int = 50
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"limit": limit, "producer": "stargraph"})
+    response = request_json(
+        f"{service_url.rstrip('/')}/api/resolver/events?{query}", timeout=60
     )
-    start = result.stdout.find("{")
-    if start < 0:
-        raise RuntimeError(f"gbrain resolver event readback was not JSON: {result.stdout!r}")
-    response = json.loads(result.stdout[start:])
     events = response.get("events") or []
     return events if isinstance(events, list) else []
 
 
-def find_event(event_id: str, *, timeout: int) -> dict[str, Any]:
+def find_event(event_id: str, *, service_url: str, timeout: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        for event in read_authoritative_events():
+        for event in read_authoritative_events(service_url=service_url):
             if str(event.get("event_id") or "") == event_id:
                 return event
         time.sleep(1)
@@ -130,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     event_id = str(response.get("request_id") or "").strip()
     if not event_id:
         raise RuntimeError(f"Ask Yoda response did not include request_id: {response!r}")
-    event = find_event(event_id, timeout=args.timeout)
+    event = find_event(event_id, service_url=args.service_url, timeout=args.timeout)
     observed = verify_classification(event, mode=args.mode, pair_id=args.pair_id)
     print(json.dumps({
         "ok": True,

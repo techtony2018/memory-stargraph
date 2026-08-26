@@ -546,7 +546,7 @@ class ApiEndpointTests(unittest.TestCase):
 
             local.assert_not_called()
 
-    def test_gbrain_call_tool_without_remote_config_retains_local_cli(self):
+    def test_gbrain_call_tool_without_remote_config_prefers_local_mcp(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             config_dir = home / ".gbrain"
@@ -560,6 +560,11 @@ class ApiEndpointTests(unittest.TestCase):
                     {"GBRAIN_HOME": str(home)},
                     clear=True,
                 ),
+                mock.patch.object(
+                    server.PERSISTENT_GBRAIN_SEARCH,
+                    "call_tool",
+                    return_value={"slug": "agents/timmy", "type": "agent"},
+                ) as local_mcp,
                 mock.patch(
                     "server.run_gbrain",
                     return_value='{"slug":"agents/timmy","type":"agent"}',
@@ -571,7 +576,61 @@ class ApiEndpointTests(unittest.TestCase):
                 )
 
             self.assertEqual(result["slug"], "agents/timmy")
+            local_mcp.assert_called_once_with(
+                "get_page", {"slug": "agents/timmy"}, timeout=30
+            )
+            local.assert_not_called()
+
+    def test_gbrain_call_tool_read_falls_back_to_local_cli_when_mcp_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps({"engine": "postgres"}), encoding="utf-8"
+            )
+            with (
+                mock.patch.dict(server.os.environ, {"GBRAIN_HOME": str(home)}, clear=True),
+                mock.patch.object(
+                    server.PERSISTENT_GBRAIN_SEARCH,
+                    "call_tool",
+                    side_effect=RuntimeError("MCP unavailable"),
+                ),
+                mock.patch(
+                    "server.run_gbrain",
+                    return_value='{"slug":"agents/timmy","type":"agent"}',
+                ) as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                result = server.gbrain_call_tool("get_page", {"slug": "agents/timmy"})
+
+            self.assertEqual(result["slug"], "agents/timmy")
             local.assert_called_once()
+
+    def test_gbrain_call_tool_write_fails_closed_without_cli_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config_dir = home / ".gbrain"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps({"engine": "postgres"}), encoding="utf-8"
+            )
+            with (
+                mock.patch.dict(server.os.environ, {"GBRAIN_HOME": str(home)}, clear=True),
+                mock.patch.object(
+                    server.PERSISTENT_GBRAIN_SEARCH,
+                    "call_tool",
+                    side_effect=TimeoutError("uncertain write result"),
+                ),
+                mock.patch("server.run_gbrain") as local,
+            ):
+                server._REMOTE_GBRAIN_TOOL_CALLER = None
+                with self.assertRaisesRegex(TimeoutError, "uncertain write result"):
+                    server.gbrain_call_tool(
+                        "put_page", {"slug": "notes/example", "content": "# Example"}
+                    )
+
+            local.assert_not_called()
 
     def test_remote_gbrain_tool_caller_accepts_sse_json_rpc_response(self):
         response = self._RawResponse(
@@ -1985,7 +2044,9 @@ class ApiEndpointTests(unittest.TestCase):
                 "# Memory Stargraph",
             ]
         )
-        with mock.patch("server.run_gbrain", return_value="model-backed answer") as run:
+        with mock.patch(
+            "server.gbrain_call_tool", return_value={"answer": "model-backed answer"}
+        ) as call_tool:
             result = server.run_gbrain_think_yoda(
                 prompt,
                 {"model": "openai:gpt-5.2", "timeout": 60},
@@ -1994,13 +2055,13 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.assertEqual(result["output"], "model-backed answer")
         self.assertEqual(result["model_status"], "answered")
-        run.assert_called_once_with(
+        call_tool.assert_called_once_with(
             "think",
-            "What is Memory Stargraph?",
-            "--anchor",
-            "products/memory-stargraph",
-            "--model",
-            "openai:gpt-5.2",
+            {
+                "question": "What is Memory Stargraph?",
+                "anchor": "products/memory-stargraph",
+                "model": "openai:gpt-5.2",
+            },
             timeout=60,
         )
 

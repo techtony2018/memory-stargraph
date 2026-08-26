@@ -40,18 +40,26 @@ class ResolverTelemetryProbeTests(unittest.TestCase):
                 pair_id="",
             )
 
-    def test_authoritative_gbrain_readback_parses_tool_output(self):
-        completed = mock.Mock()
-        completed.stdout = 'notice\n{"events":[{"event_id":"evt-1","metadata":"{\\"environment\\":\\"test\\"}"}]}'
-        with mock.patch("subprocess.run", return_value=completed) as run:
-            events = probe.read_authoritative_events(limit=7)
+    def test_authoritative_readback_uses_stargraph_endpoint(self):
+        with mock.patch(
+            "scripts.automation.probe_yoda_resolver_telemetry.request_json",
+            return_value={
+                "events": [
+                    {
+                        "event_id": "evt-1",
+                        "metadata": '{"environment":"test"}',
+                    }
+                ]
+            },
+        ) as request:
+            events = probe.read_authoritative_events(
+                service_url="https://stargraph.example", limit=7
+            )
 
         self.assertEqual(events[0]["event_id"], "evt-1")
-        run.assert_called_once_with(
-            ["gbrain", "call", "resolver_events_list", '{"limit": 7, "producer": "stargraph"}'],
-            check=True,
-            capture_output=True,
-            text=True,
+        request.assert_called_once_with(
+            "https://stargraph.example/api/resolver/events?limit=7&producer=stargraph",
+            timeout=60,
         )
 
 

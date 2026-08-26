@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shlex
 import subprocess
 from urllib.parse import quote
 
@@ -11,6 +13,7 @@ from urllib.parse import quote
 ROOT_SLUG = "notes/memory-starmap-capture-list"
 ALLOWED_FILTERS = {None, "planned", "capturing", "completed", "failed"}
 COLUMNS = ("id", "status", "source kind", "source", "target", "node", "updated", "notes")
+DEFAULT_WORKER_API_BASE_URL = "http://127.0.0.1:8788"
 
 
 def run_gbrain(*args: str) -> str:
@@ -20,6 +23,46 @@ def run_gbrain(*args: str) -> str:
     if completed.returncode:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "gbrain get failed")
     return completed.stdout
+
+
+def read_stargraph_entity(slug: str) -> str | None:
+    base_url = os.environ.get(
+        "MEMORY_STARGRAPH_WORKER_API_URL", DEFAULT_WORKER_API_BASE_URL
+    ).rstrip("/")
+    curl_flags = shlex.split(
+        os.environ.get("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS", "")
+    )
+    try:
+        completed = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "--fail",
+                *curl_flags,
+                "--max-time",
+                "45",
+                f"{base_url}/api/entity-raw/{quote(slug, safe='')}",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    content = payload.get("content") if isinstance(payload, dict) else None
+    return content if isinstance(content, str) else None
+
+
+def read_root() -> str:
+    content = read_stargraph_entity(ROOT_SLUG)
+    return content if content is not None else run_gbrain("get", ROOT_SLUG)
 
 
 def split_markdown_row(line: str) -> list[str]:
@@ -75,7 +118,7 @@ def slug_link(slug: str) -> str:
 def read_capture_backlog(status: str | None = None, capture_id: str | None = None) -> dict:
     if status not in ALLOWED_FILTERS:
         raise ValueError("status must be planned, capturing, completed, or failed")
-    rows = parse_capture_rows(run_gbrain("get", ROOT_SLUG))
+    rows = parse_capture_rows(read_root())
     selected = [
         row
         for row in rows
