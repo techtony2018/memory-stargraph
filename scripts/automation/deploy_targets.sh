@@ -77,19 +77,27 @@ tracked_files=(
 verify_url() {
   local base="$1"
   local curl_flags="${2:-}"
+  local failed=0
   echo "verify: $base"
   # shellcheck disable=SC2086
-  curl $curl_flags -sS --max-time 10 "$base/api/health" | grep -E "\"ui_version\"[[:space:]]*:[[:space:]]*\"$version\""
+  curl $curl_flags -sS --max-time 10 "$base/api/health" \
+    | grep -E "\"ui_version\"[[:space:]]*:[[:space:]]*\"$version\"" >/dev/null \
+    || failed=1
   # shellcheck disable=SC2086
-  curl $curl_flags -sS --max-time 10 "$base/" | grep -E "styles.css\\?v=${version#V}|app.js\\?v=${version#V}|>${version}<" >/dev/null
+  curl $curl_flags -sS --max-time 10 "$base/" \
+    | grep -E "styles.css\\?v=${version#V}|app.js\\?v=${version#V}|>${version}<" >/dev/null \
+    || failed=1
   # shellcheck disable=SC2086
   local app_tmp
   app_tmp="$(mktemp)"
   # Avoid curl|head under pipefail: head can close the pipe early and turn a
   # successful fetch into curl exit 23.
-  curl $curl_flags -sS --max-time 10 "$base/app.js?v=${version#V}" -o "$app_tmp"
-  head -1 "$app_tmp" | grep "const UI_VERSION = \"$version\""
+  curl $curl_flags -sS --max-time 10 "$base/app.js?v=${version#V}" -o "$app_tmp" \
+    || failed=1
+  head -1 "$app_tmp" | grep "const UI_VERSION = \"$version\"" >/dev/null \
+    || failed=1
   rm -f "$app_tmp"
+  return "$failed"
 }
 
 verify_url_with_retries() {

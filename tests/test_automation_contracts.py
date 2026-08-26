@@ -276,6 +276,7 @@ class AutomationContractTests(unittest.TestCase):
             "verify_url_with_retries",
             "restart_local_dashboard",
             "verify_local_runtime_stable",
+            'return "$failed"',
             "MEMORY_STARGRAPH_DASHBOARD_LAUNCHD_LABEL",
             'git -C "$repo_root" rev-parse "$commit^{commit}"',
             "com.tony.memory-stargraph.recurring-worker-bridge",
