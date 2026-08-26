@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -30,6 +29,11 @@ from scripts.automation.backlog_compaction import (
     split_markdown_row,
     strip_section,
 )
+from scripts.automation.worker_persistence import (
+    WorkerRoute,
+    _raw_readback_matches,
+    resolve_worker_route,
+)
 
 
 ROOT_SLUG = "notes/memory-starmap-todo-list"
@@ -38,7 +42,6 @@ ARCHIVE_PREFIX = f"{ROOT_SLUG}/completed-archive-"
 ARCHIVE_SIZE = 50
 TODO_COLUMNS = ["id", "status", "priority", "title", "node", "updated", "notes"]
 INCOMPLETE_STATUSES = {"planned", "implementing", "failed"}
-DEFAULT_WORKER_API_BASE_URL = "http://127.0.0.1:8788"
 TODO_SPEC = BacklogSpec(
     root_slug=ROOT_SLUG,
     section_heading="Todo Items",
@@ -146,14 +149,20 @@ def run_gbrain(args: list[str], input_text: str | None = None, timeout: int = 12
         return subprocess.CompletedProcess(args, 124, exc.stdout or "", exc.stderr or f"timed out after {timeout}s")
 
 
-def worker_api_base_url() -> str:
-    return os.environ.get("MEMORY_STARGRAPH_WORKER_API_URL", DEFAULT_WORKER_API_BASE_URL).rstrip("/")
+def worker_api_route() -> WorkerRoute:
+    return resolve_worker_route()
 
 
-def run_curl(args: list[str], input_text: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+def run_curl(
+    args: list[str],
+    input_text: str | None = None,
+    timeout: int = 120,
+    route: WorkerRoute | None = None,
+) -> subprocess.CompletedProcess[str]:
+    selected_route = route or worker_api_route()
     try:
         return subprocess.run(
-            ["curl", "-sS", "--fail", *args],
+            ["curl", "-sS", "--fail", *selected_route.curl_flags, *args],
             input=input_text,
             text=True,
             capture_output=True,
@@ -165,8 +174,9 @@ def run_curl(args: list[str], input_text: str | None = None, timeout: int = 120)
 
 
 def worker_api_get(slug: str) -> str | None:
-    url = f"{worker_api_base_url()}/api/entity-raw/{quote(slug, safe='')}"
-    result = run_curl(["--max-time", "45", url], timeout=60)
+    route = worker_api_route()
+    url = f"{route.base_url}/api/entity-raw/{quote(slug, safe='')}"
+    result = run_curl(["--max-time", "45", url], timeout=60, route=route)
     if result.returncode != 0:
         return None
     try:
@@ -178,12 +188,14 @@ def worker_api_get(slug: str) -> str | None:
 
 
 def worker_api_post_json(endpoint: str, payload: dict[str, object], timeout: int = 120) -> bool:
-    url = f"{worker_api_base_url()}{endpoint}"
+    route = worker_api_route()
+    url = f"{route.base_url}{endpoint}"
     body = json.dumps(payload, ensure_ascii=False)
     result = run_curl(
         ["--max-time", str(timeout), "-X", "POST", "-H", "Content-Type: application/json", "-d", "@-", url],
         input_text=body,
         timeout=timeout + 15,
+        route=route,
     )
     return result.returncode == 0
 
@@ -200,6 +212,11 @@ def gbrain_put(slug: str, markdown: str) -> None:
     endpoint = f"/api/entity-save/{quote(slug, safe='')}"
     if not worker_api_post_json(endpoint, {"content": markdown}, timeout=180):
         raise RuntimeError(f"Memory Stargraph HTTP save failed for {slug}")
+    readback = worker_api_get(slug)
+    if readback is None:
+        raise RuntimeError(f"Memory Stargraph HTTP readback failed for {slug}")
+    if not _raw_readback_matches(markdown, readback):
+        raise RuntimeError(f"Memory Stargraph HTTP readback mismatch for {slug}")
 
 
 def gbrain_link(source: str, target: str, link_type: str) -> bool:
