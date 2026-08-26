@@ -31,6 +31,7 @@ from scripts.automation.backlog_compaction import (
 )
 from scripts.automation.worker_persistence import (
     WorkerRoute,
+    _frontmatter_values,
     _raw_readback_matches,
     resolve_worker_route,
 )
@@ -105,13 +106,16 @@ Root backlog: [[{ROOT_SLUG}]]
 """
 
 
-def render_failed_collection(rows: list[dict[str, str]]) -> str:
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+def render_failed_collection(
+    rows: list[dict[str, str]],
+    captured_at: str | None = None,
+) -> str:
+    captured_at = captured_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     return f"""---
 type: collection
 title: Memory Starmap Failed Items
 source_kind: memory-stargraph-automation
-captured_at: '{now}'
+captured_at: '{captured_at}'
 tags:
   - automation
   - memory-stargraph
@@ -263,7 +267,20 @@ def apply_plan(root_markdown: str, plan: CompactionPlan) -> dict[str, object]:
             if child:
                 gbrain_link(ROOT_SLUG, child, "has_todo")
 
-    gbrain_put(FAILED_COLLECTION_SLUG, render_failed_collection(plan.failed_rows))
+    existing_failed_collection = worker_api_get(FAILED_COLLECTION_SLUG)
+    existing_failed_values = (
+        _frontmatter_values(existing_failed_collection)
+        if existing_failed_collection is not None
+        else {}
+    )
+    existing_captured_at = existing_failed_values.get("captured_at")
+    gbrain_put(
+        FAILED_COLLECTION_SLUG,
+        render_failed_collection(
+            plan.failed_rows,
+            captured_at=str(existing_captured_at) if existing_captured_at else None,
+        ),
+    )
     gbrain_link(ROOT_SLUG, FAILED_COLLECTION_SLUG, "has_failed_collection")
     for row in plan.failed_rows:
         child = node_slug(row)

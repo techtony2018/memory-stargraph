@@ -14,6 +14,7 @@ from scripts.automation.compact_sg_todo_backlog import (
     parse_todo_rows,
     plan_compaction,
     render_todo_table,
+    render_failed_collection,
     worker_api_get,
     worker_api_post_json,
     worker_api_route,
@@ -102,6 +103,14 @@ class TodoBacklogCompactionTests(unittest.TestCase):
 
         self.assertEqual(parsed[0]["title"], "Fix A | B")
         self.assertEqual(parsed[0]["notes"], "Completed with A | B evidence")
+
+    def test_failed_collection_can_preserve_immutable_capture_time_on_refresh(self):
+        rendered = render_failed_collection(
+            [make_row("SG-0166", "failed")],
+            captured_at="2026-08-26T10:43:05+00:00",
+        )
+
+        self.assertIn("captured_at: '2026-08-26T10:43:05+00:00'", rendered)
 
     def test_gbrain_operations_use_configured_tls_route_and_flags(self):
         calls = []
