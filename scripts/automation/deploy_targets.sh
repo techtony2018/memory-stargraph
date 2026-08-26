@@ -7,8 +7,10 @@ export PATH
 version="${1:?usage: deploy_targets.sh V1.0.xx [commit]}"
 commit="${2:-HEAD}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+commit="$(git -C "$repo_root" rev-parse "$commit^{commit}")"
 config_file="${MEMORY_STARGRAPH_AUTOMATION_CONFIG:-${CODEX_HOME:-$HOME/.codex}/automations/memory-stargraph-wish-to-reallity/deployment-targets.env}"
 alert_monitor="$repo_root/scripts/automation/memory_stargraph_alert_monitor.py"
+dashboard_label="${MEMORY_STARGRAPH_DASHBOARD_LAUNCHD_LABEL:-com.tony.memory-stargraph}"
 recurring_bridge_label="${MEMORY_STARGRAPH_RECURRING_BRIDGE_LAUNCHD_LABEL:-com.tony.memory-stargraph.recurring-worker-bridge}"
 
 if [[ ! -f "$config_file" ]]; then
@@ -105,6 +107,54 @@ verify_url_with_retries() {
       sleep "$delay_seconds"
     fi
   done
+  return 1
+}
+
+restart_local_dashboard() {
+  if launchctl print "gui/$(id -u)/$dashboard_label" >/dev/null 2>&1; then
+    echo "reload dashboard launchd service: $dashboard_label"
+    launchctl kickstart -k "gui/$(id -u)/$dashboard_label"
+  elif [[ -n "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL" ]]; then
+    curl -sS -X POST "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL"
+  else
+    sh -c "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND"
+  fi
+}
+
+verify_local_runtime_stable() {
+  local base="$1"
+  local curl_flags="$2"
+  local port="$3"
+  local attempts="${4:-12}"
+  local delay_seconds="${5:-2}"
+  local stable_checks="${6:-3}"
+  local attempt pid stable current_pid
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t | head -1 || true)"
+    if [[ -n "$pid" ]] \
+      && verify_url "$base" "$curl_flags" \
+      && lsof -a -p "$pid" -d cwd -Fn | grep -F "n$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR" >/dev/null; then
+      stable=1
+      while [[ "$stable" -lt "$stable_checks" ]]; do
+        sleep "$delay_seconds"
+        current_pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t | head -1 || true)"
+        if [[ "$current_pid" != "$pid" ]] || ! verify_url "$base" "$curl_flags"; then
+          break
+        fi
+        stable=$((stable + 1))
+      done
+      if [[ "$stable" -eq "$stable_checks" ]]; then
+        echo "stable local dashboard: pid=$pid checks=$stable"
+        lsof -a -p "$pid" -d cwd -Fn
+        return 0
+      fi
+    fi
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      echo "stable verify retry $attempt/$attempts: local dashboard not settled"
+      sleep "$delay_seconds"
+    fi
+  done
+  echo "local dashboard did not remain stable on $version" >&2
   return 1
 }
 
@@ -213,20 +263,11 @@ for path in "${tracked_files[@]}"; do
   fi
   cp "$source_path" "$destination_path"
 done
-if [[ -n "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL" ]]; then
-  curl -sS -X POST "$MEMORY_STARGRAPH_DASHBOARD_RESTART_URL"
-else
-  sh -c "$MEMORY_STARGRAPH_DASHBOARD_RESTART_COMMAND"
-fi
-sleep 4
-verify_url_with_retries "$MEMORY_STARGRAPH_LOCAL_URL" "$MEMORY_STARGRAPH_LOCAL_CURL_FLAGS" 6 3
-local_verified_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 local_port="${MEMORY_STARGRAPH_LOCAL_URL##*:}"
 local_port="${local_port%%/*}"
-local_pid="$(lsof -nP -iTCP:"$local_port" -sTCP:LISTEN -t | head -1 || true)"
-if [[ -n "$local_pid" ]]; then
-  lsof -a -p "$local_pid" -d cwd -Fn | grep -F "n$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR"
-fi
+restart_local_dashboard
+verify_local_runtime_stable "$MEMORY_STARGRAPH_LOCAL_URL" "$MEMORY_STARGRAPH_LOCAL_CURL_FLAGS" "$local_port" 12 2 3
+local_verified_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 reload_recurring_bridge_if_present
 
 configured_target_count=0

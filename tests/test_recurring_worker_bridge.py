@@ -402,6 +402,17 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
         self.assertTrue(any("/api/entity-save/runs%2Fmemory-stargraph-learning-test" in call[-1] for call in calls))
         self.assertTrue(any("/api/entity-raw/runs%2Fmemory-stargraph-learning-test" in call[-1] for call in calls))
 
+    def test_gbrain_get_and_put_prefer_stargraph_api(self):
+        markdown = "---\nstatus: completed\n---\nBody"
+        with (
+            mock.patch.object(bridge, "stargraph_raw", return_value=markdown),
+            mock.patch.object(bridge, "stargraph_save", return_value=True),
+            mock.patch.object(bridge, "run_cmd") as cli,
+        ):
+            self.assertEqual(bridge.gbrain_get("runs/example"), (True, markdown))
+            bridge.gbrain_put("runs/example", markdown)
+        cli.assert_not_called()
+
     def test_markdown_readback_allows_normalized_frontmatter_but_rejects_body_change(self):
         expected = "---\ntype: run\nstatus: completed\ntags:\n- synthetic\n- sg0179\n---\n# Title\n\nBody\n"
         normalized = "---\ntype: run\ntitle: Title\nstatus: completed\ntags:\n  - sg0179\n  - synthetic\n---\n# Title\n\nBody\n"

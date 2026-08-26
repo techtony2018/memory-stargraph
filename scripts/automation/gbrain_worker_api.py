@@ -35,6 +35,20 @@ ROUTES = [
         "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/entity-tags/<URL-encoded-slug>",
     },
     {
+        "action": "read-tags",
+        "method": "GET",
+        "endpoint": "/api/entity-tags/<URL-encoded-slug>",
+        "mutates_gbrain": False,
+        "curl_shape": "curl -sS --fail <base-url>/api/entity-tags/<URL-encoded-slug>",
+    },
+    {
+        "action": "list-pages",
+        "method": "GET",
+        "endpoint": "/api/pages?tag=<tag>&type=<type>&limit=<N>",
+        "mutates_gbrain": False,
+        "curl_shape": "curl -sS --fail '<base-url>/api/pages?tag=<tag>&type=<type>&limit=<N>'",
+    },
+    {
         "action": "add-link",
         "method": "POST",
         "endpoint": "/api/entity-link/<URL-encoded-source-slug>",

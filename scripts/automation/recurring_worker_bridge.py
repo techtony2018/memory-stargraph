@@ -429,19 +429,20 @@ def terminal_result(values: dict[str, str], status: str, result: str, evidence: 
 
 
 def gbrain_get(slug: str, *, timeout: int = 30) -> tuple[bool, str]:
-    result = run_cmd(["gbrain", "get", slug], timeout=timeout)
-    if result.returncode == 0:
-        return True, result.stdout
     raw = stargraph_raw(slug, timeout=timeout)
     if raw is not None:
         return True, raw
+    result = run_cmd(["gbrain", "get", slug], timeout=timeout)
+    if result.returncode == 0:
+        return True, result.stdout
     return False, result.stderr or result.stdout
 
 
 def gbrain_put(slug: str, markdown: str, *, timeout: int = 45) -> None:
-    result = run_cmd(["gbrain", "put", slug, "--content", markdown], timeout=timeout)
-    if result.returncode != 0 and not stargraph_save(slug, markdown, timeout=timeout):
-        raise BridgePhaseError("artifact_persistence", f"gbrain put and Stargraph API save failed for {slug}: {(result.stderr or result.stdout).strip()}")
+    if not stargraph_save(slug, markdown, timeout=timeout):
+        result = run_cmd(["gbrain", "put", slug, "--content", markdown], timeout=timeout)
+        if result.returncode != 0:
+            raise BridgePhaseError("artifact_persistence", f"Stargraph API save and gbrain put failed for {slug}: {(result.stderr or result.stdout).strip()}")
     raw = stargraph_raw(slug, timeout=timeout)
     if raw is None:
         readback = run_cmd(["gbrain", "get", slug], timeout=timeout)

@@ -30,6 +30,7 @@ TABLE_HEADER = "| id | status | source kind | source | target | node | updated |
 TABLE_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- |"
 PACIFIC = ZoneInfo("America/Los_Angeles")
 DEFAULT_STARGRAPH_URL = "http://127.0.0.1:8788"
+WORKER_API_MISSING = object()
 
 
 class NotFoundError(RuntimeError):
@@ -59,6 +60,56 @@ def run_gbrain(*args: str, input_text: str | None = None) -> str:
             raise NotFoundError(message)
         raise RuntimeError(message)
     return completed.stdout
+
+
+def worker_api_base_url() -> str:
+    return (
+        os.environ.get("MEMORY_STARGRAPH_WORKER_API_URL")
+        or os.environ.get("MEMORY_STARGRAPH_URL")
+        or DEFAULT_STARGRAPH_URL
+    ).rstrip("/")
+
+
+def worker_api_json(
+    method: str,
+    endpoint: str,
+    payload: dict | None = None,
+    timeout: int = 120,
+) -> dict | object | None:
+    flags = shlex.split(os.environ.get("MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS", ""))
+    args = ["curl", "-sS", "--fail", *flags, "--max-time", str(timeout)]
+    input_text = None
+    if method == "POST":
+        args.extend(["-X", "POST", "-H", "Content-Type: application/json", "-d", "@-"])
+        input_text = json.dumps(payload or {}, ensure_ascii=False)
+    args.append(f"{worker_api_base_url()}{endpoint}")
+    try:
+        completed = subprocess.run(
+            args,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout + 15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout).lower()
+        return WORKER_API_MISSING if method == "GET" and "404" in detail else None
+    try:
+        decoded = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def worker_api_raw(slug: str) -> str | object | None:
+    payload = worker_api_json("GET", f"/api/entity-raw/{parse.quote(slug, safe='')}")
+    if payload is WORKER_API_MISSING:
+        return payload
+    content = payload.get("content") if isinstance(payload, dict) else None
+    return content if isinstance(content, str) else None
 
 
 def pacific_iso(now: dt.datetime | None = None) -> str:
@@ -377,6 +428,11 @@ def validate_inputs(source: str, source_kind: str, instructions: str, target: st
 
 
 def _get_optional(slug: str) -> str | None:
+    content = worker_api_raw(slug)
+    if isinstance(content, str):
+        return content
+    if content is WORKER_API_MISSING:
+        return None
     try:
         return run_gbrain("get", slug)
     except NotFoundError:
@@ -384,8 +440,13 @@ def _get_optional(slug: str) -> str | None:
 
 
 def _put_verified(slug: str, markdown: str, marker: str) -> str:
-    run_gbrain("put", slug, input_text=markdown)
-    readback = run_gbrain("get", slug)
+    endpoint = f"/api/entity-save/{parse.quote(slug, safe='')}"
+    payload = worker_api_json("POST", endpoint, {"content": markdown}, timeout=180)
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        run_gbrain("put", slug, input_text=markdown)
+    readback = _get_optional(slug)
+    if readback is None:
+        raise RuntimeError(f"GBrain readback for {slug} was unavailable")
     if marker not in readback:
         raise RuntimeError(f"GBrain readback for {slug} did not contain {marker!r}")
     return readback
@@ -405,16 +466,18 @@ def _append_planned_row(parent: str, row: str, stamp: str) -> str:
 
 
 def _link_verified(source: str, target: str, relation: str) -> None:
-    try:
-        run_gbrain("link", source, target, "--link-type", relation, "--link-source", "add-capture-link")
-    except RuntimeError as exc:
-        if "already" not in str(exc).lower():
-            raise
-    raw = run_gbrain("graph", source, "--depth", "1", "--link-type", relation, "--direction", "out")
-    try:
-        edges = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid graph readback for {source}") from exc
+    payload = worker_api_json(
+        "POST",
+        f"/api/entity-link/{parse.quote(source, safe='')}",
+        {"target": target, "link_type": relation, "context": "add-capture-link"},
+    )
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        try:
+            run_gbrain("link", source, target, "--link-type", relation, "--link-source", "add-capture-link")
+        except RuntimeError as exc:
+            if "already" not in str(exc).lower():
+                raise
+    edges = _graph_edges(source, relation)
     if not any(
         edge.get("from_slug") == source and edge.get("to_slug") == target and edge.get("link_type") == relation
         for edge in edges if isinstance(edge, dict)
@@ -423,10 +486,54 @@ def _link_verified(source: str, target: str, relation: str) -> None:
 
 
 def _unlink_best_effort(source: str, target: str, relation: str) -> None:
+    payload = worker_api_json(
+        "POST",
+        f"/api/entity-unlink/{parse.quote(source, safe='')}",
+        {"target": target, "link_type": relation},
+    )
+    if isinstance(payload, dict) and payload.get("ok"):
+        return
     try:
         run_gbrain("unlink", source, target, "--link-type", relation)
     except RuntimeError:
         pass
+
+
+def _graph_edges(source: str, relation: str) -> list[dict]:
+    payload = worker_api_json(
+        "POST",
+        f"/api/entity-graph-query/{parse.quote(source, safe='')}",
+        {"link_type": relation, "direction": "outgoing", "depth": "1"},
+    )
+    output = payload.get("output") if isinstance(payload, dict) else None
+    if isinstance(output, str):
+        prefix = f"- depth 1: {source} --"
+        edges = []
+        for line in output.splitlines():
+            if line.startswith(prefix) and "->" in line:
+                relation_text, target_text = line[len(prefix):].split("->", 1)
+            else:
+                native = re.match(r"^\s*--(.+?)->\s+(\S+)\s+\(depth 1\)\s*$", line)
+                if not native:
+                    continue
+                relation_text, target_text = native.group(1), native.group(2)
+            if relation in {item.strip() for item in relation_text.split(",")}:
+                edges.append({
+                    "from_slug": source,
+                    "to_slug": target_text.strip().split(" ", 1)[0],
+                    "link_type": relation,
+                })
+        return edges
+    raw = run_gbrain(
+        "graph", source, "--depth", "1", "--link-type", relation, "--direction", "out"
+    )
+    try:
+        edges = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid graph readback for {source}") from exc
+    if not isinstance(edges, list):
+        raise RuntimeError(f"Invalid graph readback for {source}")
+    return [edge for edge in edges if isinstance(edge, dict)]
 
 
 def _trusted_served_url(base_url: str, served_url: str) -> str:
@@ -670,7 +777,9 @@ def _queue_capture_locked(
     child_finalized = False
     evidence: dict = {}
     try:
-        parent = run_gbrain("get", PARENT_SLUG)
+        parent = _get_optional(PARENT_SLUG)
+        if parent is None:
+            raise QueueFailure(f"Capture root is unavailable: {PARENT_SLUG}")
         rows = parse_capture_rows(parent)
         capture_id = capture_id or next_capture_id(rows)
         child_slug = child_slug or unique_child_slug(PARENT_SLUG, capture_id, source, parent)
@@ -734,7 +843,9 @@ def _queue_capture_locked(
         _put_verified(PARENT_SLUG, final_parent, f"| {capture_id} | planned |")
         _link_verified(PARENT_SLUG, child_slug, "has_capture_request")
         _link_verified(child_slug, PARENT_SLUG, "capture_request_for")
-        verified_child = run_gbrain("get", child_slug)
+        verified_child = _get_optional(child_slug)
+        if verified_child is None:
+            raise RuntimeError("Final child readback was unavailable")
         if any(receipt["reference"] not in verified_child for receipt in receipts):
             raise RuntimeError("Final child receipt readback failed")
         _remove_recovery_bundle(manifest_path)
@@ -757,9 +868,9 @@ def _queue_capture_locked(
                 _unlink_best_effort(PARENT_SLUG, child_slug, "has_capture_request")
                 _unlink_best_effort(child_slug, PARENT_SLUG, "capture_request_for")
                 if parent_written:
-                    run_gbrain("put", PARENT_SLUG, input_text=parent)
+                    _put_verified(PARENT_SLUG, parent, TABLE_HEADER)
                 if provisional:
-                    run_gbrain("put", child_slug, input_text=provisional)
+                    _put_verified(child_slug, provisional, "status: capture-recovery")
             except RuntimeError:
                 evidence["cleanup_error"] = "Could not restore the provisional transaction state."
         evidence = sanitize_evidence(evidence)

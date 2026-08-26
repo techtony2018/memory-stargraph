@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 if __package__ in {None, ""}:
@@ -187,17 +188,28 @@ def result_error(result: subprocess.CompletedProcess[str]) -> str:
 
 
 def put_entity(slug: str, markdown: str) -> None:
-    result = run_gbrain(["put", slug], input_text=markdown, timeout=180)
-    if result.returncode != 0:
-        raise RunnerError(f"gbrain put failed for {slug}: {result_error(result)}")
-    readback = run_gbrain(["get", slug], timeout=120)
-    if readback.returncode != 0:
-        raise RunnerError(f"gbrain get failed for {slug}: {result_error(readback)}")
-    if not _raw_readback_matches(markdown, readback.stdout):
+    payload = capture.worker_api_post_json(
+        f"/api/entity-save/{quote(slug, safe='')}",
+        {"content": markdown},
+        timeout=180,
+    )
+    if not payload or payload.get("error"):
+        result = run_gbrain(["put", slug], input_text=markdown, timeout=180)
+        if result.returncode != 0:
+            raise RunnerError(f"HTTP save and gbrain put failed for {slug}: {result_error(result)}")
+    readback = get_entity(slug)
+    if not _raw_readback_matches(markdown, readback):
         raise RunnerError(f"gbrain readback mismatch for {slug}")
 
 
 def mutate_tag(slug: str, tag: str, action: str) -> None:
+    payload = capture.worker_api_post_json(
+        f"/api/entity-tags/{quote(slug, safe='')}",
+        {"add" if action == "add" else "remove": [tag]},
+        timeout=60,
+    )
+    if payload and not payload.get("error"):
+        return
     command = "tag" if action == "add" else "untag"
     result = run_gbrain([command, slug, tag], timeout=60)
     if result.returncode != 0 and not (action == "remove" and "not found" in result_error(result).lower()):
@@ -205,6 +217,12 @@ def mutate_tag(slug: str, tag: str, action: str) -> None:
 
 
 def read_tags(slug: str) -> list[str]:
+    payload = capture.worker_api_get_json(
+        f"/api/entity-tags/{quote(slug, safe='')}", timeout=60
+    )
+    api_tags = payload.get("tags") if payload else None
+    if isinstance(api_tags, list):
+        return [str(tag).strip() for tag in api_tags if str(tag).strip()]
     result = run_gbrain(["tags", slug], timeout=60)
     if result.returncode != 0:
         raise RunnerError(f"gbrain tags failed for {slug}: {result_error(result)}")
@@ -219,6 +237,23 @@ def read_tags(slug: str) -> list[str]:
 
 
 def list_active_tag_pages() -> list[dict[str, str]]:
+    payload = capture.worker_api_get_json(
+        f"/api/pages?{urlencode({'tag': 'active', 'limit': 1000})}", timeout=60
+    )
+    api_pages = payload.get("pages") if payload else None
+    if isinstance(api_pages, list):
+        return [
+            {
+                "slug": str(page.get("slug") or ""),
+                "type": str(page.get("type") or ""),
+                "updated": str(
+                    page.get("updated") or page.get("updated_at") or page.get("date") or ""
+                )[:10],
+                "title": str(page.get("title") or page.get("slug") or ""),
+            }
+            for page in api_pages
+            if isinstance(page, dict) and page.get("slug")
+        ]
     result = run_gbrain(["list", "--tag", "active"], timeout=60)
     if result.returncode != 0:
         raise RunnerError(f"gbrain active tag list failed: {result_error(result)}")
@@ -319,6 +354,9 @@ def clear_terminal_lifecycle_tags(slugs: list[tuple[str, bool]], status: str, re
 
 
 def get_entity(slug: str, timeout: int = 120) -> str:
+    content = capture.worker_api_get(slug)
+    if content is not None:
+        return content
     result = run_gbrain(["get", slug], timeout=timeout)
     if result.returncode != 0:
         raise RunnerError(f"gbrain get failed for {slug}: {result_error(result)}")
@@ -326,6 +364,24 @@ def get_entity(slug: str, timeout: int = 120) -> str:
 
 
 def list_entities(entity_type: str, limit: int = MAX_ENRICHMENT_CANDIDATES) -> list[dict[str, str]]:
+    payload = capture.worker_api_get_json(
+        f"/api/pages?{urlencode({'type': entity_type, 'limit': limit})}", timeout=30
+    )
+    api_pages = payload.get("pages") if payload else None
+    if isinstance(api_pages, list):
+        rows = [
+            {
+                "slug": str(page.get("slug") or ""),
+                "type": str(page.get("type") or entity_type),
+                "updated": str(
+                    page.get("updated") or page.get("updated_at") or page.get("date") or ""
+                )[:10],
+                "title": str(page.get("title") or page.get("slug") or ""),
+            }
+            for page in api_pages
+            if isinstance(page, dict) and page.get("slug")
+        ]
+        return sorted(rows, key=lambda item: item["slug"])
     result = run_gbrain(["list", "--type", entity_type, "-n", str(limit)], timeout=30)
     if result.returncode != 0:
         raise RunnerError(f"gbrain list failed for type {entity_type}: {result_error(result)}")

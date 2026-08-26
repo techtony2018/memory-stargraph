@@ -301,6 +301,18 @@ def worker_api_get(slug: str) -> str | None:
     return content if isinstance(content, str) else None
 
 
+def worker_api_get_json(endpoint: str, timeout: int = 60) -> dict[str, object] | None:
+    url = f"{worker_api_base_url()}{endpoint}"
+    result = run_curl(["--max-time", str(timeout), url], timeout=timeout + 15)
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def worker_api_post_json(
     endpoint: str,
     payload: dict[str, object],
@@ -333,26 +345,26 @@ def worker_api_post_json(
 
 
 def get_required(slug: str) -> str:
-    result = run_gbrain(["get", slug])
-    if result.returncode == 0:
-        return result.stdout
     content = worker_api_read(slug)
     if isinstance(content, str):
         return content
+    result = run_gbrain(["get", slug])
+    if result.returncode == 0:
+        return result.stdout
     raise RuntimeError(
-        f"gbrain get and Memory Stargraph HTTP raw read failed for {slug}: {result_error(result)}"
+        f"Memory Stargraph HTTP raw read and gbrain get failed for {slug}: {result_error(result)}"
     )
 
 
 def get_optional(slug: str) -> str | None:
-    result = run_gbrain(["get", slug])
-    if result.returncode == 0:
-        return result.stdout
     content = worker_api_read(slug)
     if isinstance(content, str):
         return content
     if content is WORKER_API_MISSING:
         return None
+    result = run_gbrain(["get", slug])
+    if result.returncode == 0:
+        return result.stdout
     error = result_error(result)
     if "not found" in error.lower() or "page_not_found" in error.lower():
         return None
@@ -360,50 +372,54 @@ def get_optional(slug: str) -> str | None:
 
 
 def put_readback(slug: str, markdown: str) -> str:
-    result = run_gbrain(["put", slug], input_text=markdown)
-    if result.returncode:
-        endpoint = f"/api/entity-save/{quote(slug, safe='')}"
-        payload = worker_api_post_json(endpoint, {"content": markdown}, timeout=180)
-        if not payload or payload.get("error"):
+    endpoint = f"/api/entity-save/{quote(slug, safe='')}"
+    payload = worker_api_post_json(endpoint, {"content": markdown}, timeout=180)
+    if not payload or payload.get("error"):
+        result = run_gbrain(["put", slug], input_text=markdown)
+        if result.returncode:
             raise RuntimeError(
-                f"gbrain put and Memory Stargraph HTTP save failed for {slug}: {result_error(result)}"
+                f"Memory Stargraph HTTP save and gbrain put failed for {slug}: {result_error(result)}"
             )
     return get_required(slug)
 
 
 def graph_edges(source: str, relation: str) -> list[dict[str, object]]:
-    result = run_gbrain(
-        ["graph", source, "--depth", "1", "--link-type", relation, "--direction", "out"]
-    )
-    if result.returncode == 0:
-        try:
-            edges = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"invalid graph readback for {source}: {exc}") from exc
-        if not isinstance(edges, list):
-            raise RuntimeError(f"invalid graph readback for {source}: expected a list")
-        return [edge for edge in edges if isinstance(edge, dict)]
     payload = worker_api_post_json(
         f"/api/entity-graph-query/{quote(source, safe='')}",
         {"link_type": relation, "direction": "outgoing", "depth": "1"},
         timeout=120,
     )
     output = payload.get("output") if isinstance(payload, dict) else None
-    if not isinstance(output, str):
+    if isinstance(output, str):
+        edges = []
+        prefix = f"- depth 1: {source} --"
+        for line in output.splitlines():
+            if line.startswith(prefix) and "->" in line:
+                relation_text, target_text = line[len(prefix) :].split("->", 1)
+            else:
+                native = re.match(r"^\s*--(.+?)->\s+(\S+)\s+\(depth 1\)\s*$", line)
+                if not native:
+                    continue
+                relation_text, target_text = native.group(1), native.group(2)
+            target = target_text.strip().split(" ", 1)[0]
+            relations = {item.strip() for item in relation_text.split(",") if item.strip()}
+            if relation in relations:
+                edges.append({"from_slug": source, "to_slug": target, "link_type": relation})
+        return edges
+    result = run_gbrain(
+        ["graph", source, "--depth", "1", "--link-type", relation, "--direction", "out"]
+    )
+    if result.returncode != 0:
         raise RuntimeError(
-            f"gbrain graph and Memory Stargraph HTTP graph-query failed for {source}: {result_error(result)}"
+            f"Memory Stargraph HTTP graph-query and gbrain graph failed for {source}: {result_error(result)}"
         )
-    edges = []
-    prefix = f"- depth 1: {source} --"
-    for line in output.splitlines():
-        if not line.startswith(prefix) or "->" not in line:
-            continue
-        relation_text, target_text = line[len(prefix) :].split("->", 1)
-        target = target_text.strip().split(" ", 1)[0]
-        relations = {item.strip() for item in relation_text.split(",") if item.strip()}
-        if relation in relations:
-            edges.append({"from_slug": source, "to_slug": target, "link_type": relation})
-    return edges
+    try:
+        edges = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid graph readback for {source}: {exc}") from exc
+    if not isinstance(edges, list):
+        raise RuntimeError(f"invalid graph readback for {source}: expected a list")
+    return [edge for edge in edges if isinstance(edge, dict)]
 
 
 def verify_link(source: str, target: str, relation: str, present: bool) -> None:
@@ -422,51 +438,41 @@ def verify_link(source: str, target: str, relation: str, present: bool) -> None:
 
 
 def link(source: str, target: str, relation: str) -> None:
-    result = run_gbrain(
-        [
-            "link",
-            source,
-            target,
-            "--link-type",
-            relation,
-            "--link-source",
-            "memory-stargraph-capture-backlog",
-        ]
+    payload = worker_api_post_json(
+        f"/api/entity-link/{quote(source, safe='')}",
+        {
+            "target": target,
+            "link_type": relation,
+            "context": "memory-stargraph-capture-backlog",
+        },
+        timeout=120,
     )
-    if result.returncode and "already" not in result_error(result).lower():
-        payload = worker_api_post_json(
-            f"/api/entity-link/{quote(source, safe='')}",
-            {
-                "target": target,
-                "link_type": relation,
-                "context": "memory-stargraph-capture-backlog",
-            },
-            timeout=120,
+    if not payload or payload.get("error"):
+        result = run_gbrain(
+            [
+                "link", source, target, "--link-type", relation,
+                "--link-source", "memory-stargraph-capture-backlog",
+            ]
         )
-        if not payload or payload.get("error"):
+        if result.returncode and "already" not in result_error(result).lower():
             raise RuntimeError(result_error(result))
     verify_link(source, target, relation, True)
 
 
 def unlink(source: str, target: str, relation: str) -> None:
-    result = run_gbrain(
-        [
-            "unlink",
-            source,
-            target,
-            "--link-type",
-            relation,
-            "--link-source",
-            "memory-stargraph-capture-backlog",
-        ]
+    payload = worker_api_post_json(
+        f"/api/entity-unlink/{quote(source, safe='')}",
+        {"target": target, "link_type": relation},
+        timeout=120,
     )
-    if result.returncode and "not found" not in result_error(result).lower():
-        payload = worker_api_post_json(
-            f"/api/entity-unlink/{quote(source, safe='')}",
-            {"target": target, "link_type": relation},
-            timeout=120,
+    if not payload or payload.get("error"):
+        result = run_gbrain(
+            [
+                "unlink", source, target, "--link-type", relation,
+                "--link-source", "memory-stargraph-capture-backlog",
+            ]
         )
-        if not payload or payload.get("error"):
+        if result.returncode and "not found" not in result_error(result).lower():
             raise RuntimeError(result_error(result))
     verify_link(source, target, relation, False)
 

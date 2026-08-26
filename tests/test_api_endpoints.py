@@ -1587,6 +1587,27 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("history", call_names)
         self.assertIn("refresh_embedding", call_names)
 
+    def test_worker_read_endpoints_return_tags_and_bounded_pages(self):
+        fake_store = mock.Mock()
+        fake_store.get_entity_tags.return_value = ["active", "capture-link"]
+        fake_store.list_pages.return_value = [
+            {"slug": "runs/a", "type": "run", "title": "Run A", "updated": "2026-08-25"}
+        ]
+        with mock.patch("server.STORE", fake_store):
+            tag_status, tag_data = self.dispatch_get("/api/entity-tags/runs%2Fa")
+            page_status, page_data = self.dispatch_get(
+                "/api/pages?tag=active&type=run&limit=250"
+            )
+
+        self.assertEqual(tag_status, 200)
+        self.assertEqual(tag_data["tags"], ["active", "capture-link"])
+        fake_store.get_entity_tags.assert_called_once_with("runs/a")
+        self.assertEqual(page_status, 200)
+        self.assertEqual(page_data["pages"][0]["slug"], "runs/a")
+        fake_store.list_pages.assert_called_once_with(
+            tag="active", entity_type="run", limit="250"
+        )
+
     def test_backlinks_endpoint_returns_compact_page_when_requested(self):
         fake_store = FakeStore()
         fake_store.backlink_page = mock.Mock(return_value=({

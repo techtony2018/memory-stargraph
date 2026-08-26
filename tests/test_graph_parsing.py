@@ -353,8 +353,33 @@ class GraphParsingTests(unittest.TestCase):
             output = run_gbrain("search", "memory stargraph", timeout=6)
 
         self.assertEqual(output, "fallback")
+        persistent.record_cli_fallback.assert_called_once()
+        self.assertEqual(persistent.record_cli_fallback.call_args.args[0], "search")
         self.assertEqual(fallback.call_args.args, ("search", "memory stargraph"))
         self.assertGreater(fallback.call_args.kwargs["timeout"], 5.5)
+
+    def test_persistent_session_exposes_tool_and_fallback_metrics(self):
+        session = PersistentGBrainSearch()
+        with mock.patch.object(
+            session,
+            "_request_locked",
+            return_value={"structuredContent": {"content": "body"}},
+        ):
+            self.assertEqual(
+                session._call_tool_locked("get_page", {"slug": "notes/example"}, float("inf")),
+                {"content": "body"},
+            )
+        session.record_cli_fallback("get", RuntimeError("synthetic fallback"))
+
+        metrics = session.status()["metrics"]
+        self.assertEqual(metrics["tool_calls"], 1)
+        self.assertEqual(metrics["tool_successes"], 1)
+        self.assertEqual(metrics["tool_errors"], 0)
+        self.assertEqual(metrics["tool_calls_by_name"], {"get_page": 1})
+        self.assertEqual(metrics["cli_fallbacks"], 1)
+        self.assertEqual(metrics["cli_fallbacks_by_command"], {"get": 1})
+        self.assertEqual(metrics["last_error"], "synthetic fallback")
+        self.assertGreaterEqual(metrics["tool_latency_ms_average"], 0)
 
     def test_run_gbrain_routes_supported_read_commands_to_persistent_session(self):
         persistent = mock.Mock(active=True)

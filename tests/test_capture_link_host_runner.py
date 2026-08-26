@@ -995,6 +995,35 @@ tags:
                 ["capture-link", "completed", "curator", "host-runner"],
             )
 
+    def test_read_tags_and_page_list_prefer_worker_api(self):
+        with (
+            mock.patch.object(
+                runner.capture,
+                "worker_api_get_json",
+                side_effect=[
+                    {"ok": True, "tags": ["active", "capture-link"]},
+                    {
+                        "ok": True,
+                        "pages": [
+                            {
+                                "slug": "runs/a",
+                                "type": "run",
+                                "updated_at": "2026-08-25T10:00:00Z",
+                                "title": "Run A",
+                            }
+                        ],
+                    },
+                ],
+            ),
+            mock.patch.object(runner, "run_gbrain") as gbrain,
+        ):
+            self.assertEqual(runner.read_tags("runs/a"), ["active", "capture-link"])
+            self.assertEqual(
+                runner.list_active_tag_pages(),
+                [{"slug": "runs/a", "type": "run", "updated": "2026-08-25", "title": "Run A"}],
+            )
+        gbrain.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

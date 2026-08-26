@@ -137,6 +137,29 @@ class WorkerApiRouteTests(unittest.TestCase):
         finally:
             config_path.unlink(missing_ok=True)
 
+    def test_graph_edges_parses_native_persistent_mcp_output(self):
+        output = (
+            "[depth 0] notes/root\n"
+            "  --has_capture_request-> notes/child (depth 1)\n"
+        )
+        with (
+            mock.patch.object(
+                capture,
+                "worker_api_post_json",
+                return_value={"ok": True, "output": output},
+            ),
+            mock.patch.object(capture, "run_gbrain") as cli,
+        ):
+            self.assertEqual(
+                capture.graph_edges("notes/root", "has_capture_request"),
+                [{
+                    "from_slug": "notes/root",
+                    "to_slug": "notes/child",
+                    "link_type": "has_capture_request",
+                }],
+            )
+        cli.assert_not_called()
+
 
 class FakeWorkerApi:
     def __init__(self, backend: FakeGBrain):
@@ -633,8 +656,8 @@ class CaptureBacklogTests(unittest.TestCase):
             mock.patch.object(capture, "run_curl", return_value=failed_http),
         ):
             with self.assertRaisesRegex(
-                RuntimeError,
-                "gbrain get and Memory Stargraph HTTP raw read failed",
+            RuntimeError,
+            "Memory Stargraph HTTP raw read and gbrain get failed",
             ):
                 capture.get_required(capture.ROOT_SLUG)
 

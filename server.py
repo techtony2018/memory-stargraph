@@ -317,7 +317,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.202"
+UI_VERSION = "V1.0.203"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -351,6 +351,8 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "add-link", "method": "POST", "endpoint": "/api/entity-link/<slug>", "mutates_gbrain": True},
     {"action": "remove-link", "method": "POST", "endpoint": "/api/entity-unlink/<slug>", "mutates_gbrain": True},
     {"action": "tags", "method": "POST", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": True},
+    {"action": "read-tags", "method": "GET", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": False},
+    {"action": "list-pages", "method": "GET", "endpoint": "/api/pages", "mutates_gbrain": False},
     {"action": "timeline-view", "method": "GET", "endpoint": "/api/entity-timeline-view/<slug>", "mutates_gbrain": False},
     {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
     {"action": "attach-file", "method": "POST", "endpoint": "/api/entity-attach-file/<slug>", "mutates_gbrain": True},
@@ -1547,10 +1549,73 @@ def format_mcp_graph_query(paths, payload):
 class PersistentGBrainSearch:
     def __init__(self):
         self.lock = threading.Lock()
+        self.metrics_lock = threading.Lock()
         self.process = None
         self.request_id = 0
         self.active = False
         self.prewarming = False
+        self.metrics = {
+            "process_start_attempts": 0,
+            "process_starts": 0,
+            "process_restarts": 0,
+            "tool_calls": 0,
+            "tool_successes": 0,
+            "tool_errors": 0,
+            "tool_timeouts": 0,
+            "tool_latency_ms_total": 0.0,
+            "tool_latency_ms_max": 0.0,
+            "tool_calls_by_name": {},
+            "cli_fallbacks": 0,
+            "cli_fallbacks_by_command": {},
+            "last_error": None,
+            "last_error_at": None,
+        }
+
+    def _record_tool_call(self, name, elapsed_ms, exc=None):
+        with self.metrics_lock:
+            self.metrics["tool_calls"] += 1
+            by_name = self.metrics["tool_calls_by_name"]
+            by_name[name] = int(by_name.get(name, 0)) + 1
+            self.metrics["tool_latency_ms_total"] += elapsed_ms
+            self.metrics["tool_latency_ms_max"] = max(
+                self.metrics["tool_latency_ms_max"], elapsed_ms
+            )
+            if exc is None:
+                self.metrics["tool_successes"] += 1
+            else:
+                self.metrics["tool_errors"] += 1
+                if isinstance(exc, TimeoutError):
+                    self.metrics["tool_timeouts"] += 1
+                self.metrics["last_error"] = str(exc)[:300]
+                self.metrics["last_error_at"] = iso_now()
+
+    def record_cli_fallback(self, command, exc):
+        with self.metrics_lock:
+            self.metrics["cli_fallbacks"] += 1
+            by_command = self.metrics["cli_fallbacks_by_command"]
+            command = str(command or "unknown")
+            by_command[command] = int(by_command.get(command, 0)) + 1
+            self.metrics["last_error"] = str(exc)[:300]
+            self.metrics["last_error_at"] = iso_now()
+
+    def metrics_snapshot(self):
+        with self.metrics_lock:
+            metrics = dict(self.metrics)
+            metrics["tool_calls_by_name"] = dict(metrics["tool_calls_by_name"])
+            metrics["cli_fallbacks_by_command"] = dict(
+                metrics["cli_fallbacks_by_command"]
+            )
+        calls = int(metrics["tool_calls"])
+        metrics["tool_latency_ms_average"] = round(
+            float(metrics["tool_latency_ms_total"]) / calls, 3
+        ) if calls else 0.0
+        metrics["tool_latency_ms_total"] = round(
+            float(metrics["tool_latency_ms_total"]), 3
+        )
+        metrics["tool_latency_ms_max"] = round(
+            float(metrics["tool_latency_ms_max"]), 3
+        )
+        return metrics
 
     def _close_locked(self):
         process = self.process
@@ -1584,6 +1649,7 @@ class PersistentGBrainSearch:
                 "active": self.active,
                 "ready": process is not None and process.poll() is None,
                 "busy": True,
+                "metrics": self.metrics_snapshot(),
             }
         try:
             process = self.process
@@ -1591,6 +1657,7 @@ class PersistentGBrainSearch:
                 "active": self.active,
                 "ready": process is not None and process.poll() is None,
                 "busy": False,
+                "metrics": self.metrics_snapshot(),
             }
         finally:
             self.lock.release()
@@ -1643,6 +1710,8 @@ class PersistentGBrainSearch:
     def _start_locked(self, deadline):
         if self.process is not None and self.process.poll() is None:
             return
+        with self.metrics_lock:
+            self.metrics["process_start_attempts"] += 1
         self._close_locked()
         if not GBRAIN.exists():
             raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
@@ -1677,33 +1746,50 @@ class PersistentGBrainSearch:
             + "\n"
         )
         process.stdin.flush()
+        with self.metrics_lock:
+            self.metrics["process_starts"] += 1
+            self.metrics["process_restarts"] = max(
+                0, self.metrics["process_starts"] - 1
+            )
 
     def _call_tool_locked(self, name, payload, deadline):
-        result = self._request_locked(
-            "tools/call",
-            {"name": name, "arguments": payload},
-            deadline,
-        )
-        content = result.get("content") if isinstance(result.get("content"), list) else []
-        text_items = [
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
-        if result.get("isError"):
-            detail = "\n".join(str(item) for item in text_items if item).strip()
-            raise RuntimeError(
-                f"persistent GBrain {name} tool failed: {detail or 'unknown MCP error'}"
-            )
-        if "structuredContent" in result:
-            return result["structuredContent"]
-        if not text_items:
-            return None
-        text_item = str(text_items[-1])
+        started = time.monotonic()
+        recorded_error = None
         try:
-            return json.loads(text_item)
-        except json.JSONDecodeError:
-            return text_item
+            result = self._request_locked(
+                "tools/call",
+                {"name": name, "arguments": payload},
+                deadline,
+            )
+            content = result.get("content") if isinstance(result.get("content"), list) else []
+            text_items = [
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            if result.get("isError"):
+                detail = "\n".join(str(item) for item in text_items if item).strip()
+                raise RuntimeError(
+                    f"persistent GBrain {name} tool failed: {detail or 'unknown MCP error'}"
+                )
+            if "structuredContent" in result:
+                return result["structuredContent"]
+            if not text_items:
+                return None
+            text_item = str(text_items[-1])
+            try:
+                return json.loads(text_item)
+            except json.JSONDecodeError:
+                return text_item
+        except Exception as exc:
+            recorded_error = exc
+            raise
+        finally:
+            self._record_tool_call(
+                str(name),
+                round((time.monotonic() - started) * 1000, 3),
+                recorded_error,
+            )
 
     def call_tool(self, name, payload=None, timeout=30):
         started = time.monotonic()
@@ -1854,8 +1940,8 @@ def run_gbrain(*args, input_text=None, timeout=20):
     if input_text is None and args and args[0] in persistent_commands and PERSISTENT_GBRAIN_SEARCH.active:
         try:
             return PERSISTENT_GBRAIN_SEARCH.read_cli_output(args, timeout)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            PERSISTENT_GBRAIN_SEARCH.record_cli_fallback(args[0], exc)
     remaining = max(0.1, float(timeout) - (time.monotonic() - started))
     return run_gbrain_subprocess(*args, input_text=input_text, timeout=remaining)
 
@@ -2295,9 +2381,10 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
     if tool_name in PERSISTENT_GBRAIN_TOOL_NAMES:
         try:
             return PERSISTENT_GBRAIN_SEARCH.call_tool(tool_name, payload, timeout=timeout)
-        except Exception:
+        except Exception as exc:
             if tool_name in MUTATING_GBRAIN_TOOL_NAMES:
                 raise
+            PERSISTENT_GBRAIN_SEARCH.record_cli_fallback(f"call:{tool_name}", exc)
     remaining = max(0.1, float(timeout) - (time.monotonic() - started))
     try:
         output = run_gbrain("call", tool_name, json.dumps(payload or {}), timeout=remaining)
@@ -3776,6 +3863,7 @@ PERSISTENT_GBRAIN_TOOL_NAMES = frozenset(
         "add_timeline_entry",
         "delete_page",
         "get_page",
+        "get_tags",
         "get_timeline",
         "get_versions",
         "put_page",
@@ -7094,6 +7182,23 @@ class GraphStore:
         )
         return raw
 
+    def get_entity_tags(self, slug):
+        value = gbrain_call_tool("get_tags", {"slug": slug})
+        if isinstance(value, dict):
+            value = value.get("tags")
+        if not isinstance(value, list):
+            raise RuntimeError("GBrain get_tags returned invalid tags")
+        return sorted({str(tag).strip() for tag in value if str(tag).strip()})
+
+    def list_pages(self, *, tag="", entity_type="", limit=100):
+        args = ["list"]
+        if tag:
+            args.extend(["--tag", str(tag)])
+        if entity_type:
+            args.extend(["--type", str(entity_type)])
+        args.extend(["-n", str(parse_bounded_int(limit, 100, 1, 1000))])
+        return parse_page_list(run_gbrain(*args, timeout=30))
+
     def get_entities_raw(self, slugs, max_workers=4):
         ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))
         if not ordered_slugs:
@@ -9964,6 +10069,24 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
+        if parsed.path == "/api/pages":
+            query = parse_qs(parsed.query)
+            try:
+                pages = STORE.list_pages(
+                    tag=(query.get("tag") or [""])[0].strip(),
+                    entity_type=(query.get("type") or [""])[0].strip(),
+                    limit=(query.get("limit") or ["100"])[0],
+                )
+                return self.end_json({"ok": True, "pages": pages})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+        if parsed.path.startswith("/api/entity-tags/"):
+            slug = unquote(parsed.path.split("/api/entity-tags/", 1)[1]).strip("/")
+            try:
+                tags = STORE.get_entity_tags(slug)
+                return self.end_json({"ok": True, "slug": slug, "tags": tags})
+            except Exception as exc:  # noqa: BLE001
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-raw/"):
             slug = unquote(parsed.path.split("/api/entity-raw/", 1)[1]).strip("/")
             try:

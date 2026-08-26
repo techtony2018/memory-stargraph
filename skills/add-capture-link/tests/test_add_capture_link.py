@@ -92,11 +92,53 @@ class AddCaptureLinkTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.backend = FakeGBrain.empty_capture_root()
+        worker_api_env = mock.patch.dict(
+            os.environ,
+            {
+                "MEMORY_STARGRAPH_WORKER_API_URL": "http://127.0.0.1:9",
+                "MEMORY_STARGRAPH_WORKER_API_CURL_FLAGS": "",
+            },
+        )
+        worker_api_env.start()
+        self.addCleanup(worker_api_env.stop)
 
     def file(self, name: str, data: bytes = b"content") -> Path:
         path = self.root / name
         path.write_bytes(data)
         return path
+
+    def test_worker_reads_and_writes_prefer_stargraph_endpoint(self):
+        markdown = "---\nstatus: planned\n---\n# Planned\n"
+        with (
+            mock.patch.object(module, "worker_api_raw", return_value=markdown),
+            mock.patch.object(module, "worker_api_json", return_value={"ok": True}) as api,
+            mock.patch.object(module, "run_gbrain") as gbrain,
+        ):
+            self.assertEqual(module._get_optional("notes/example"), markdown)
+            self.assertEqual(
+                module._put_verified("notes/example", markdown, "status: planned"),
+                markdown,
+            )
+        api.assert_called_once()
+        gbrain.assert_not_called()
+
+    def test_graph_readback_accepts_native_persistent_mcp_output(self):
+        with (
+            mock.patch.object(
+                module,
+                "worker_api_json",
+                return_value={
+                    "ok": True,
+                    "output": "[depth 0] notes/root\n  --contains-> notes/child (depth 1)\n",
+                },
+            ),
+            mock.patch.object(module, "run_gbrain") as cli,
+        ):
+            self.assertEqual(
+                module._graph_edges("notes/root", "contains"),
+                [{"from_slug": "notes/root", "to_slug": "notes/child", "link_type": "contains"}],
+            )
+        cli.assert_not_called()
 
     def upload_side_effect(self, backend, fail_upload_number=None):
         count = 0
