@@ -914,12 +914,18 @@ tags:
             "runs/a\trun\t2026-08-08\tActive A\nreports/b\treport\t2026-08-08\tActive B\n",
             "",
         )
-        with mock.patch.object(runner, "run_gbrain", return_value=empty):
+        with (
+            mock.patch.object(runner.capture, "worker_api_get_json", return_value=None),
+            mock.patch.object(runner, "run_gbrain", return_value=empty),
+        ):
             self.assertEqual(runner.list_active_tag_pages(), [])
             evidence = runner.global_active_tag_readback()
             self.assertTrue(evidence["active_tags_clear"])
             self.assertEqual(evidence["active_tag_count"], 0)
-        with mock.patch.object(runner, "run_gbrain", return_value=active):
+        with (
+            mock.patch.object(runner.capture, "worker_api_get_json", return_value=None),
+            mock.patch.object(runner, "run_gbrain", return_value=active),
+        ):
             self.assertEqual(
                 runner.list_active_tag_pages(),
                 [
@@ -942,12 +948,16 @@ tags:
             "transport unavailable",
         )
         with (
+            mock.patch.object(runner.capture, "worker_api_get_json", return_value=None),
             mock.patch.object(runner, "run_gbrain", return_value=active),
             mock.patch.object(runner.time, "sleep"),
         ):
             with self.assertRaisesRegex(runner.RunnerError, "global active tag readback not clear"):
                 runner.global_active_tag_readback()
-        with mock.patch.object(runner, "run_gbrain", return_value=unavailable):
+        with (
+            mock.patch.object(runner.capture, "worker_api_get_json", return_value=None),
+            mock.patch.object(runner, "run_gbrain", return_value=unavailable),
+        ):
             with self.assertRaisesRegex(runner.RunnerError, "gbrain active tag list failed"):
                 runner.global_active_tag_readback()
 
@@ -989,7 +999,10 @@ tags:
             "capture-link, completed, curator, host-runner\n",
             "",
         )
-        with mock.patch.object(runner, "run_gbrain", return_value=completed):
+        with (
+            mock.patch.object(runner.capture, "worker_api_get_json", return_value=None),
+            mock.patch.object(runner, "run_gbrain", return_value=completed),
+        ):
             self.assertEqual(
                 runner.read_tags("slug"),
                 ["capture-link", "completed", "curator", "host-runner"],
