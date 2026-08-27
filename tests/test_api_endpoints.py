@@ -2724,6 +2724,17 @@ class ApiEndpointTests(unittest.TestCase):
         finally:
             server.runtime_gbrain_version.cache_clear()
 
+    def test_runtime_gbrain_version_retries_transient_unavailable_probe(self):
+        server.runtime_gbrain_version.cache_clear()
+        try:
+            failed = subprocess.CompletedProcess(["gbrain", "--version"], 1, stdout="", stderr="starting")
+            completed = subprocess.CompletedProcess(["gbrain", "--version"], 0, stdout="gbrain 0.46.28.0\n", stderr="")
+            with mock.patch("server.subprocess.run", side_effect=[failed, completed]) as run:
+                self.assertEqual(server.runtime_gbrain_version(), "V0.46.28.0")
+            self.assertEqual(run.call_count, 2)
+        finally:
+            server.runtime_gbrain_version.cache_clear()
+
     def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
         class FixedDateTime(dt.datetime):
             @classmethod

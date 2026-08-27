@@ -8446,7 +8446,7 @@ def attachment_storage_status():
 
 
 @lru_cache(maxsize=1)
-def runtime_gbrain_version():
+def _cached_runtime_gbrain_version():
     try:
         result = subprocess.run(
             [str(GBRAIN), "--version"],
@@ -8461,6 +8461,17 @@ def runtime_gbrain_version():
         return ""
     match = re.search(r"\b(\d+\.\d+\.\d+(?:\.\d+)?)\b", f"{result.stdout}\n{result.stderr}")
     return f"V{match.group(1)}" if match else ""
+
+
+def runtime_gbrain_version():
+    version = _cached_runtime_gbrain_version()
+    if version:
+        return version
+    _cached_runtime_gbrain_version.cache_clear()
+    return _cached_runtime_gbrain_version()
+
+
+runtime_gbrain_version.cache_clear = _cached_runtime_gbrain_version.cache_clear
 
 
 def setup_diagnostics():
