@@ -39,7 +39,13 @@ try {
   const versions = await page.evaluate(() => ({
     stargraph: document.querySelector("#uiVersion")?.textContent?.trim() || "",
     gbrain: document.querySelector("#gbrainVersion")?.textContent?.trim() || "",
-    visible: Boolean(document.querySelector("#gbrainVersion")?.offsetParent),
+    visible: (() => {
+      const node = document.querySelector("#gbrainVersion");
+      if (!node) return false;
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    })(),
   }));
   if (versions.stargraph !== "V1.0.204" || !/^GBrain V\d+/.test(versions.gbrain) || !versions.visible) {
     throw new Error(`Runtime version row is not current and visible: ${JSON.stringify(versions)}`);
@@ -103,7 +109,12 @@ try {
       right: box?.right || 0,
       bottom: box?.bottom || 0,
       title: title?.textContent?.trim() || "",
-      toggleVisible: Boolean(toggle?.offsetParent),
+      toggleVisible: (() => {
+        if (!toggle) return false;
+        const rect = toggle.getBoundingClientRect();
+        const style = getComputedStyle(toggle);
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      })(),
       expanded: toggle?.getAttribute("aria-expanded"),
     };
   });
