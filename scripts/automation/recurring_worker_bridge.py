@@ -21,6 +21,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.automation import retrieval_quality_benchmark
+from scripts.automation.worker_persistence import _frontmatter_values
 
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -59,6 +60,9 @@ ROLE_REPORT_PREFIX = {
 }
 TODO_PREFIX = "notes/memory-starmap-todo-list/"
 LEARNING_PREFIX = "notes/memory-stargraph-learnings/"
+DURABLE_WEEKLY_REPORT_PREFIX = "reports/memory-stargraph-sre-weekly-resilience-"
+DURABLE_WEEKLY_RUN_PREFIX = "runs/memory-stargraph-sre-weekly-resilience-"
+MAX_DURABLE_REPORT_ROWS = 5000
 
 
 class BridgeError(RuntimeError):
@@ -696,13 +700,115 @@ def latest_weekly_restore_report() -> tuple[str, str]:
     return "", ""
 
 
-def parse_restore_rehearsal(observed_at: str) -> dict[str, object]:
+def list_durable_weekly_report_slugs() -> tuple[list[str], str]:
+    result = run_cmd([
+        "gbrain", "list", "--type", "report", "--limit", str(MAX_DURABLE_REPORT_ROWS), "--sort", "updated_desc",
+    ], timeout=45)
+    if result.returncode != 0:
+        return [], "unavailable"
+    rows = [line for line in result.stdout.splitlines() if "\t" in line]
+    if len(rows) >= MAX_DURABLE_REPORT_ROWS:
+        return [], "truncated"
+    slugs = [line.split("\t", 1)[0] for line in rows]
+    return sorted({slug for slug in slugs if slug.startswith(DURABLE_WEEKLY_REPORT_PREFIX)}), "complete"
+
+
+def _completed_weekly_restore_attestation(report_slug: str) -> tuple[dict[str, object] | None, str]:
+    report_ok, report_markdown = gbrain_get(report_slug, timeout=30)
+    if not report_ok:
+        return None, "report_read_failed"
+    report_fields = _frontmatter_values(report_markdown)
+    if report_fields.get("type") != "report" or report_fields.get("mode") != "weekly_resilience":
+        return None, "not_weekly_report"
+    if report_fields.get("status") != "completed":
+        return None, "report_not_completed"
+    run_slug = report_fields.get("run")
+    if not isinstance(run_slug, str) or not run_slug.startswith(DURABLE_WEEKLY_RUN_PREFIX):
+        return None, "invalid_run_reference"
+    completed_at_raw = report_fields.get("completed_at")
+    if not isinstance(completed_at_raw, str):
+        return None, "missing_completion_timestamp"
+    try:
+        completed_at = parse_time(completed_at_raw)
+    except BridgeError:
+        return None, "invalid_completion_timestamp"
+
+    report_lower = report_markdown.lower()
+    checksum_verified = (
+        "checksum_matched: true" in report_lower
+        or "checksums matched" in report_lower
+        or ("sha-256" in report_lower and ("source/copy matched" in report_lower or "checksum" in report_lower and "passed" in report_lower))
+    )
+    cleanup_verified = "cleanup_verified: true" in report_lower or "cleanup verification passed" in report_lower
+    if not checksum_verified:
+        return None, "checksum_unverified"
+    if not cleanup_verified:
+        return None, "cleanup_unverified"
+
+    run_ok, run_markdown = gbrain_get(run_slug, timeout=30)
+    if not run_ok:
+        return None, "run_read_failed"
+    run_fields = _frontmatter_values(run_markdown)
+    terminal_status = run_fields.get("terminal_status")
+    if run_fields.get("type") != "run" or run_fields.get("mode") != "weekly_resilience":
+        return None, "not_weekly_run"
+    if run_fields.get("status") != "completed" or not isinstance(terminal_status, str) or not terminal_status.startswith("completed"):
+        return None, "run_not_completed"
+    if run_fields.get("report") != report_slug:
+        return None, "run_report_mismatch"
+    run_completed_at_raw = run_fields.get("completed_at")
+    try:
+        run_completed_at = parse_time(run_completed_at_raw) if isinstance(run_completed_at_raw, str) else None
+    except BridgeError:
+        return None, "invalid_run_completion_timestamp"
+    if run_completed_at is None or run_completed_at != completed_at:
+        return None, "completion_timestamp_mismatch"
+    return {
+        "report_slug": report_slug,
+        "run_slug": run_slug,
+        "completed_at": completed_at,
+        "checksum_matched": True,
+        "cleanup_verified": True,
+    }, "accepted"
+
+
+def latest_durable_weekly_restore_attestation() -> tuple[dict[str, object] | None, dict[str, object]]:
+    slugs, listing_status = list_durable_weekly_report_slugs()
+    if listing_status != "complete":
+        return None, {
+            "listing_status": listing_status,
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "rejection_reasons": {},
+        }
+    accepted: list[dict[str, object]] = []
+    reasons: dict[str, int] = {}
+    for slug in slugs:
+        attestation, reason = _completed_weekly_restore_attestation(slug)
+        if attestation:
+            accepted.append(attestation)
+        else:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    accepted.sort(key=lambda row: (row["completed_at"], row["report_slug"]), reverse=True)
+    return (accepted[0] if accepted else None), {
+        "listing_status": listing_status,
+        "candidate_count": len(slugs),
+        "accepted_count": len(accepted),
+        "rejected_count": len(slugs) - len(accepted),
+        "rejection_reasons": reasons,
+    }
+
+
+def parse_checked_in_restore_rehearsal(observed_at: str) -> dict[str, object]:
     path, text = latest_weekly_restore_report()
     if not text:
         return {
             "status": "missing",
-            "recency_seconds": numeric_sample(None, "seconds", status="missing", source="weekly_sre_report", observed_at=observed_at),
+            "recency_seconds": numeric_sample(None, "seconds", status="missing", source="checked_in_weekly_sre_report", observed_at=observed_at),
             "checksum_matched": False,
+            "cleanup_verified": False,
+            "source_classification": "checked_in_weekly_report_fallback",
             "evidence_path_redacted": "",
         }
     date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", Path(path).name)
@@ -715,10 +821,42 @@ def parse_restore_rehearsal(observed_at: str) -> dict[str, object]:
     status = "ok" if checksum and recency is not None and recency <= 8 * 24 * 3600 else ("stale" if recency is not None else "partial")
     return {
         "status": status,
-        "recency_seconds": numeric_sample(recency, "seconds", status=status, threshold={"warn_above_seconds": 8 * 24 * 3600, "critical_above_seconds": 31 * 24 * 3600}, source="weekly_sre_report", observed_at=observed_at),
+        "recency_seconds": numeric_sample(recency, "seconds", status=status, threshold={"warn_above_seconds": 8 * 24 * 3600, "critical_above_seconds": 31 * 24 * 3600}, source="checked_in_weekly_sre_report", observed_at=observed_at),
         "checksum_matched": checksum,
+        "cleanup_verified": None,
+        "source_classification": "checked_in_weekly_report_fallback",
         "evidence_path_redacted": "automations/memory-stargraph-sre/reports/latest-weekly-resilience",
     }
+
+
+def parse_restore_rehearsal(observed_at: str) -> dict[str, object]:
+    observed = parse_time(observed_at)
+    attestation, selection = latest_durable_weekly_restore_attestation()
+    if attestation:
+        completed_at = attestation["completed_at"]
+        recency = int((observed.astimezone(dt.timezone.utc) - completed_at.astimezone(dt.timezone.utc)).total_seconds())
+        if recency >= 0:
+            status = "ok" if recency <= 8 * 24 * 3600 else "stale"
+            return {
+                "status": status,
+                "recency_seconds": numeric_sample(recency, "seconds", status=status, threshold={"warn_above_seconds": 8 * 24 * 3600, "critical_above_seconds": 31 * 24 * 3600}, source="durable_canonical_weekly_report", observed_at=observed_at),
+                "rehearsal_completed_at": completed_at.astimezone(PACIFIC).isoformat(),
+                "checksum_matched": True,
+                "cleanup_verified": True,
+                "source_classification": "durable_canonical_weekly_report",
+                "evidence_slug": attestation["report_slug"],
+                "run_slug": attestation["run_slug"],
+                "source_readback_at": observed_at,
+                "durable_selection": selection,
+                "fallback_used": False,
+                "evidence_path_redacted": "",
+            }
+        selection = {**selection, "rejected_future_completion": True}
+    fallback = parse_checked_in_restore_rehearsal(observed_at)
+    fallback["durable_selection"] = selection
+    fallback["fallback_used"] = True
+    fallback["source_readback_at"] = observed_at
+    return fallback
 
 
 def parse_latency_baselines(observed_at: str) -> dict[str, object]:

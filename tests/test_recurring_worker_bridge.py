@@ -24,6 +24,34 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
         payload.update(overrides)
         return payload
 
+    def weekly_restore_pair(self, suffix, completed_at, *, run_status="completed", terminal_status="completed_with_skips", cleanup=True, checksum=True):
+        report_slug = f"reports/memory-stargraph-sre-weekly-resilience-{suffix}"
+        run_slug = f"runs/memory-stargraph-sre-weekly-resilience-{suffix}"
+        report = (
+            "---\n"
+            "type: report\n"
+            "mode: weekly_resilience\n"
+            "status: completed\n"
+            f"run: {run_slug}\n"
+            f"completed_at: '{completed_at}'\n"
+            "---\n"
+            "# Weekly Resilience\n\n"
+            + ("SHA-256 source/copy matched.\n" if checksum else "Checksum evidence unavailable.\n")
+            + ("cleanup_verified: true\n" if cleanup else "Cleanup evidence unavailable.\n")
+        )
+        run = (
+            "---\n"
+            "type: run\n"
+            "mode: weekly_resilience\n"
+            f"status: {run_status}\n"
+            f"terminal_status: {terminal_status}\n"
+            f"report: {report_slug}\n"
+            f"completed_at: '{completed_at}'\n"
+            "---\n"
+            "# Weekly Resilience Run\n"
+        )
+        return report_slug, run_slug, report, run
+
     def test_role_and_operation_allowlists_reject_cross_role_work(self):
         with self.assertRaisesRegex(bridge.BridgeError, "unsupported role"):
             bridge.make_request("product_owner", "evidence", "bad-role-0001", "abc123")
@@ -295,6 +323,104 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(evidence["backup"]["status"], "missing")
             self.assertIn("todo_backlog", evidence["evidence_gaps"])
             self.assertIn("backup_latest", evidence["evidence_gaps"])
+
+    def test_restore_rehearsal_prefers_latest_durable_completed_weekly_attestation(self):
+        first = self.weekly_restore_pair("2026-08-26-a", "2026-08-26T10:00:00-07:00")
+        latest = self.weekly_restore_pair("2026-08-26-b", "2026-08-26T14:06:18-07:00")
+        content = {
+            first[0]: first[2],
+            first[1]: first[3],
+            latest[0]: latest[2],
+            latest[1]: latest[3],
+        }
+        with (
+            mock.patch.object(bridge, "list_durable_weekly_report_slugs", return_value=([first[0], latest[0]], "complete")),
+            mock.patch.object(bridge, "gbrain_get", side_effect=lambda slug, timeout=30: (True, content[slug])),
+        ):
+            evidence = bridge.parse_restore_rehearsal("2026-08-27T03:02:00-07:00")
+        self.assertEqual(evidence["status"], "ok")
+        self.assertEqual(evidence["source_classification"], "durable_canonical_weekly_report")
+        self.assertEqual(evidence["evidence_slug"], latest[0])
+        self.assertEqual(evidence["recency_seconds"]["value"], 46542)
+        self.assertTrue(evidence["checksum_matched"])
+        self.assertTrue(evidence["cleanup_verified"])
+        self.assertFalse(evidence["fallback_used"])
+        self.assertEqual(evidence["durable_selection"]["accepted_count"], 2)
+
+    def test_durable_weekly_listing_is_bounded_and_filters_report_prefix(self):
+        completed = mock.Mock(
+            returncode=0,
+            stdout=(
+                "reports/other\treport\t2026-08-27\tOther\n"
+                "reports/memory-stargraph-sre-weekly-resilience-current\treport\t2026-08-26\tWeekly\n"
+            ),
+        )
+        with mock.patch.object(bridge, "run_cmd", return_value=completed) as run:
+            slugs, status = bridge.list_durable_weekly_report_slugs()
+        self.assertEqual(status, "complete")
+        self.assertEqual(slugs, ["reports/memory-stargraph-sre-weekly-resilience-current"])
+        self.assertIn(str(bridge.MAX_DURABLE_REPORT_ROWS), run.call_args.args[0])
+
+    def test_durable_weekly_listing_fails_closed_at_row_bound(self):
+        rows = "\n".join(f"reports/item-{index}\treport\t2026-08-01\tItem" for index in range(bridge.MAX_DURABLE_REPORT_ROWS))
+        with mock.patch.object(bridge, "run_cmd", return_value=mock.Mock(returncode=0, stdout=rows)):
+            slugs, status = bridge.list_durable_weekly_report_slugs()
+        self.assertEqual(status, "truncated")
+        self.assertEqual(slugs, [])
+
+    def test_restore_rehearsal_rejects_failed_run_and_uses_stale_checked_in_fallback(self):
+        failed = self.weekly_restore_pair(
+            "2026-08-26-failed",
+            "2026-08-26T14:06:18-07:00",
+            run_status="failed",
+            terminal_status="failed_restore_verification",
+        )
+        content = {failed[0]: failed[2], failed[1]: failed[3]}
+        with (
+            mock.patch.object(bridge, "list_durable_weekly_report_slugs", return_value=([failed[0]], "complete")),
+            mock.patch.object(bridge, "gbrain_get", side_effect=lambda slug, timeout=30: (True, content[slug])),
+            mock.patch.object(bridge, "latest_weekly_restore_report", return_value=(
+                "automations/memory-stargraph-sre/reports/2026-08-02-weekly-resilience-85.md",
+                "Checksums matched.\n",
+            )),
+        ):
+            evidence = bridge.parse_restore_rehearsal("2026-08-27T03:02:00-07:00")
+        self.assertEqual(evidence["status"], "stale")
+        self.assertEqual(evidence["source_classification"], "checked_in_weekly_report_fallback")
+        self.assertTrue(evidence["fallback_used"])
+        self.assertEqual(evidence["durable_selection"]["rejection_reasons"], {"run_not_completed": 1})
+
+    def test_restore_rehearsal_rejects_malformed_or_unverified_reports(self):
+        missing_cleanup = self.weekly_restore_pair(
+            "2026-08-26-no-cleanup",
+            "2026-08-26T14:06:18-07:00",
+            cleanup=False,
+        )
+        malformed_slug = "reports/memory-stargraph-sre-weekly-resilience-malformed"
+        content = {
+            missing_cleanup[0]: missing_cleanup[2],
+            malformed_slug: "---\ntype: report\nmode: daily_reliability\nstatus: completed\n---\n# Not weekly\n",
+        }
+        with (
+            mock.patch.object(bridge, "list_durable_weekly_report_slugs", return_value=([missing_cleanup[0], malformed_slug], "complete")),
+            mock.patch.object(bridge, "gbrain_get", side_effect=lambda slug, timeout=30: (True, content[slug])),
+            mock.patch.object(bridge, "latest_weekly_restore_report", return_value=("", "")),
+        ):
+            evidence = bridge.parse_restore_rehearsal("2026-08-27T03:02:00-07:00")
+        self.assertEqual(evidence["status"], "missing")
+        self.assertEqual(evidence["durable_selection"]["accepted_count"], 0)
+        self.assertEqual(evidence["durable_selection"]["rejection_reasons"]["cleanup_unverified"], 1)
+        self.assertEqual(evidence["durable_selection"]["rejection_reasons"]["not_weekly_report"], 1)
+
+    def test_restore_rehearsal_missing_durable_listing_keeps_bounded_fallback(self):
+        with (
+            mock.patch.object(bridge, "list_durable_weekly_report_slugs", return_value=([], "unavailable")),
+            mock.patch.object(bridge, "latest_weekly_restore_report", return_value=("", "")),
+        ):
+            evidence = bridge.parse_restore_rehearsal("2026-08-27T03:02:00-07:00")
+        self.assertEqual(evidence["status"], "missing")
+        self.assertEqual(evidence["durable_selection"]["listing_status"], "unavailable")
+        self.assertTrue(evidence["fallback_used"])
 
     def test_decision_bundle_validates_slug_prefixes_and_todo_duplicate_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
