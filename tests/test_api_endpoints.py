@@ -874,13 +874,14 @@ class ApiEndpointTests(unittest.TestCase):
             return cached
 
         fake_store.get_health_graph = health_graph
-        with mock.patch("server.STORE", fake_store):
+        with mock.patch("server.STORE", fake_store), mock.patch("server.runtime_gbrain_version", return_value="V0.46.28.0"):
             status, data = self.dispatch_get("/api/health")
 
         self.assertEqual(status, 200)
         self.assertTrue(data["loaded"])
         self.assertEqual(data["source"]["status"], "cached-startup")
         self.assertEqual(data["stats"]["nodes"], 75)
+        self.assertEqual(data["gbrain_version"], "V0.46.28.0")
         self.assertEqual(fake_store.calls, [("get_health_graph",)])
 
     def test_internal_openclaw_provisioning_requires_bearer_authentication(self):
@@ -2653,6 +2654,75 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(result["backup_freshness"]["status"], "current")
         self.assertEqual(result["counts"]["daily_evidence_current"], 1)
         self.assertEqual(result["counts"]["weekly_evidence_current"], 1)
+
+    def test_terminal_sre_evidence_pairs_selects_newest_valid_terminal_run_per_mode(self):
+        daily_new = "runs/memory-stargraph-sre-daily-reliability-20260826-new"
+        daily_old = "runs/memory-stargraph-sre-daily-reliability-20260825-old"
+        weekly_new = "runs/memory-stargraph-sre-weekly-resilience-20260826-new"
+        pages = [{"slug": slug} for slug in (daily_new, daily_old, weekly_new)]
+        texts = {
+            daily_new: (
+                "---\nstatus: completed\ncompleted_at: 2026-08-26T10:00:00Z\n"
+                "mode: daily_reliability\nreport_slug: reports/daily-new\n"
+                "product_owner_notification_status: acknowledged_by_product_owner\n"
+                "product_owner_notification_pending: false\n---\n"
+            ),
+            "reports/daily-new": f"---\nstatus: completed\nrun_slug: {daily_new}\n---\n",
+            daily_old: (
+                "---\nstatus: completed\ncompleted_at: 2026-08-25T10:00:00Z\n"
+                "mode: daily_reliability\nreport_slug: reports/daily-old\n---\n"
+            ),
+            "reports/daily-old": f"---\nstatus: completed\nrun_slug: {daily_old}\n---\n",
+            weekly_new: (
+                "---\nstatus: completed_with_skips\ncompleted_at: 2026-08-26T09:00:00Z\n"
+                "mode: weekly_resilience\nreport_slug: reports/weekly-new\n---\n"
+            ),
+            "reports/weekly-new": f"---\nstatus: completed_with_skips\nrun_slug: {weekly_new}\n---\n",
+        }
+        store = mock.Mock()
+        store.list_pages.return_value = pages
+
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.safe_gbrain_get_text_bounded", side_effect=lambda slug, *_args, **_kwargs: texts.get(slug, "")),
+        ):
+            records = server.terminal_sre_evidence_pairs()
+
+        self.assertEqual([item["run_slug"] for item in records], [daily_new, weekly_new])
+        self.assertTrue(records[0]["acknowledged"])
+        self.assertFalse(records[1]["acknowledged"])
+
+    def test_terminal_sre_evidence_pairs_fail_closed_on_nonterminal_or_mismatched_evidence(self):
+        planned = "runs/memory-stargraph-sre-daily-reliability-planned"
+        mismatched = "runs/memory-stargraph-sre-weekly-resilience-mismatch"
+        store = mock.Mock()
+        store.list_pages.return_value = [{"slug": planned}, {"slug": mismatched}]
+        texts = {
+            planned: "---\nstatus: implementing\ncompleted_at: 2026-08-26T10:00:00Z\nreport_slug: reports/planned\n---\n",
+            mismatched: "---\nstatus: completed\ncompleted_at: 2026-08-26T09:00:00Z\nreport_slug: reports/mismatch\n---\n",
+            "reports/mismatch": "---\nstatus: completed\nrun_slug: runs/unrelated\n---\n",
+        }
+
+        with (
+            mock.patch("server.STORE", store),
+            mock.patch("server.safe_gbrain_get_text_bounded", side_effect=lambda slug, *_args, **_kwargs: texts.get(slug, "")),
+        ):
+            self.assertEqual(server.terminal_sre_evidence_pairs(), [])
+
+    def test_runtime_gbrain_version_is_bounded_and_truthful(self):
+        server.runtime_gbrain_version.cache_clear()
+        try:
+            completed = subprocess.CompletedProcess(["gbrain", "--version"], 0, stdout="gbrain 0.14.2\n", stderr="")
+            with mock.patch("server.subprocess.run", return_value=completed) as run:
+                self.assertEqual(server.runtime_gbrain_version(), "V0.14.2")
+            run.assert_called_once()
+
+            server.runtime_gbrain_version.cache_clear()
+            failed = subprocess.CompletedProcess(["gbrain", "--version"], 1, stdout="", stderr="unavailable")
+            with mock.patch("server.subprocess.run", return_value=failed):
+                self.assertEqual(server.runtime_gbrain_version(), "")
+        finally:
+            server.runtime_gbrain_version.cache_clear()
 
     def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
         class FixedDateTime(dt.datetime):

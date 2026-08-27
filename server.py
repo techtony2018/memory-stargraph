@@ -317,12 +317,24 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.203"
+UI_VERSION = "V1.0.204"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
 SRE_DAILY_EVIDENCE_MAX_AGE_SECONDS = 36 * 60 * 60
 SRE_WEEKLY_EVIDENCE_MAX_AGE_SECONDS = 10 * 24 * 60 * 60
+SRE_EVIDENCE_CANDIDATE_LIMIT = 12
+SRE_EVIDENCE_READ_WORKERS = 6
+SRE_RUN_PREFIXES = (
+    "runs/memory-stargraph-sre-daily-reliability-",
+    "runs/memory-stargraph-sre-weekly-resilience-",
+)
+SRE_LEGACY_NUMERIC_EVIDENCE_SLUGS = (
+    "runs/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
+    "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
+    "runs/memory-stargraph-sre-weekly-resilience-20260809t143652-0700-85",
+    "reports/memory-stargraph-sre-weekly-resilience-2026-08-09-143652-85",
+)
 TAKE_REVIEW_ACTOR = "memory-stargraph-ui"
 TAKE_REVIEW_MAX_LIMIT = 100
 TAKES_VIEW_FETCH_LIMIT = 500
@@ -6701,6 +6713,7 @@ def finalize_graph(raw_graph):
     return {
         "title": raw_graph.get("title") or "Memory Stargraph",
         "ui_version": UI_VERSION,
+        "gbrain_version": runtime_gbrain_version(),
         "view_schema_version": VIEW_SCHEMA_VERSION,
         "source": raw_graph.get("source") or {"mode": "unknown", "status": "unknown", "message": ""},
         "stats": {
@@ -8432,6 +8445,24 @@ def attachment_storage_status():
     return {"available": False, "mode": "unavailable", "detail": "durable storage unavailable"}
 
 
+@lru_cache(maxsize=1)
+def runtime_gbrain_version():
+    try:
+        result = subprocess.run(
+            [str(GBRAIN), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    if result.returncode != 0:
+        return ""
+    match = re.search(r"\b(\d+\.\d+\.\d+(?:\.\d+)?)\b", f"{result.stdout}\n{result.stderr}")
+    return f"V{match.group(1)}" if match else ""
+
+
 def setup_diagnostics():
     """Return support-safe setup state without config values or node content."""
     graph = STORE.graph or {}
@@ -9268,14 +9299,119 @@ def evidence_recency_status(texts_by_slug, marker, max_age_seconds, observed_at=
     }
 
 
+def terminal_sre_evidence_pairs():
+    try:
+        pages = STORE.list_pages(entity_type="run", limit=100)
+    except Exception:  # noqa: BLE001
+        return []
+    candidate_slugs = []
+    for page in pages if isinstance(pages, list) else []:
+        slug = str(page.get("slug") or "").strip() if isinstance(page, dict) else ""
+        if slug.startswith(SRE_RUN_PREFIXES):
+            candidate_slugs.append(slug)
+        if len(candidate_slugs) >= SRE_EVIDENCE_CANDIDATE_LIMIT:
+            break
+    if not candidate_slugs:
+        return []
+    run_texts = {}
+    with ThreadPoolExecutor(max_workers=min(SRE_EVIDENCE_READ_WORKERS, len(candidate_slugs))) as executor:
+        futures = {
+            slug: executor.submit(safe_gbrain_get_text_bounded, slug, 3, local_first=True)
+            for slug in candidate_slugs
+        }
+        for slug, future in futures.items():
+            try:
+                run_texts[slug] = future.result(timeout=4)
+            except Exception:  # noqa: BLE001
+                run_texts[slug] = ""
+    candidates = []
+    for run_slug, run_text in run_texts.items():
+        if not run_text or str(run_text).startswith("unavailable:"):
+            continue
+        run_meta, _run_body = parse_frontmatter(run_text)
+        status = str(run_meta.get("status") or "").strip().lower()
+        completed_at = parse_iso_timestamp(run_meta.get("completed_at"))
+        if not status.startswith("completed") or completed_at is None:
+            continue
+        mode = str(run_meta.get("mode") or "").strip().lower()
+        if mode not in {"daily_reliability", "weekly_resilience"}:
+            mode = "weekly_resilience" if "weekly-resilience" in run_slug else "daily_reliability"
+        report_slug = safe_evidence_slug(run_meta.get("report") or run_meta.get("report_slug"))
+        if not report_slug.startswith("reports/"):
+            continue
+        candidates.append((run_slug, run_text, run_meta, mode, completed_at, report_slug))
+    if not candidates:
+        return []
+    report_slugs = list(dict.fromkeys(item[5] for item in candidates))
+    report_texts = {}
+    with ThreadPoolExecutor(max_workers=min(SRE_EVIDENCE_READ_WORKERS, len(report_slugs))) as executor:
+        futures = {
+            slug: executor.submit(safe_gbrain_get_text_bounded, slug, 3, local_first=True)
+            for slug in report_slugs
+        }
+        for slug, future in futures.items():
+            try:
+                report_texts[slug] = future.result(timeout=4)
+            except Exception:  # noqa: BLE001
+                report_texts[slug] = ""
+    records = []
+    for run_slug, run_text, run_meta, mode, completed_at, report_slug in candidates:
+        report_text = report_texts.get(report_slug, "")
+        if not report_text or str(report_text).startswith("unavailable:"):
+            continue
+        report_meta, _report_body = parse_frontmatter(report_text)
+        report_status = str(report_meta.get("status") or "").strip().lower()
+        paired_run = str(report_meta.get("run") or report_meta.get("run_slug") or run_slug).strip()
+        if not report_status.startswith("completed") or paired_run != run_slug:
+            continue
+        records.append(
+            {
+                "mode": mode,
+                "run_slug": run_slug,
+                "report_slug": report_slug,
+                "completed_at": completed_at,
+                "acknowledged": (
+                    str(run_meta.get("product_owner_notification_status") or "").strip()
+                    == "acknowledged_by_product_owner"
+                    and run_meta.get("product_owner_notification_pending") is not True
+                ),
+                "texts": {run_slug: str(run_text), report_slug: str(report_text)},
+            }
+        )
+    selected = {}
+    for record in sorted(records, key=lambda item: item["completed_at"], reverse=True):
+        selected.setdefault(record["mode"], record)
+    return [selected[mode] for mode in ("daily_reliability", "weekly_resilience") if mode in selected]
+
+
+def selected_sre_recency(records, mode, max_age_seconds, texts_by_slug, marker):
+    selected = next((record for record in records if record.get("mode") == mode), None)
+    if not selected:
+        return evidence_recency_status(texts_by_slug, marker, max_age_seconds)
+    completed_at = selected["completed_at"]
+    age_seconds = max(0, int((datetime.now(timezone.utc) - completed_at).total_seconds()))
+    return {
+        "status": "current" if age_seconds <= max_age_seconds else "stale",
+        "latest_at": completed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "age_seconds": age_seconds,
+        "run_slug": selected["run_slug"],
+        "report_slug": selected["report_slug"],
+        "acknowledged": bool(selected.get("acknowledged")),
+    }
+
+
 def latest_sre_numeric_evidence():
-    evidence_slugs = [
-        "runs/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
-        "reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d",
-        "runs/memory-stargraph-sre-weekly-resilience-20260809t143652-0700-85",
-        "reports/memory-stargraph-sre-weekly-resilience-2026-08-09-143652-85",
-        "_backups/backup-latest",
+    selected_records = terminal_sre_evidence_pairs()
+    selected_slugs = [
+        slug
+        for record in selected_records
+        for slug in (record["run_slug"], record["report_slug"])
     ]
+    evidence_slugs = list(dict.fromkeys([
+        *SRE_LEGACY_NUMERIC_EVIDENCE_SLUGS[:2],
+        *(selected_slugs or SRE_LEGACY_NUMERIC_EVIDENCE_SLUGS[2:]),
+        "_backups/backup-latest",
+    ]))
     evidence = []
     texts = []
     texts_by_slug = {}
@@ -9299,8 +9435,20 @@ def latest_sre_numeric_evidence():
     has_backup = backup_freshness["status"] == "current"
     has_restore = "restore" in joined and ("checksum" in joined or "rehearsal" in joined)
     has_baseline = "7-day" in joined and "30-day" in joined
-    daily_recency = evidence_recency_status(texts_by_slug, "daily", SRE_DAILY_EVIDENCE_MAX_AGE_SECONDS)
-    weekly_recency = evidence_recency_status(texts_by_slug, "weekly", SRE_WEEKLY_EVIDENCE_MAX_AGE_SECONDS)
+    daily_recency = selected_sre_recency(
+        selected_records,
+        "daily_reliability",
+        SRE_DAILY_EVIDENCE_MAX_AGE_SECONDS,
+        texts_by_slug,
+        "daily",
+    )
+    weekly_recency = selected_sre_recency(
+        selected_records,
+        "weekly_resilience",
+        SRE_WEEKLY_EVIDENCE_MAX_AGE_SECONDS,
+        texts_by_slug,
+        "weekly",
+    )
     has_current_daily = daily_recency["status"] == "current"
     has_current_weekly = weekly_recency["status"] == "current"
     passed = has_schema and has_capacity and has_backup and has_restore and has_baseline and has_current_daily and has_current_weekly
@@ -9359,6 +9507,16 @@ def latest_sre_numeric_evidence():
         "backup_freshness": backup_freshness,
         "daily_evidence": daily_recency,
         "weekly_evidence": weekly_recency,
+        "selected_terminal_runs": [
+            {
+                "mode": record["mode"],
+                "run_slug": record["run_slug"],
+                "report_slug": record["report_slug"],
+                "completed_at": record["completed_at"].replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "acknowledged": bool(record.get("acknowledged")),
+            }
+            for record in selected_records
+        ],
         "summary": summary,
     }
 
@@ -9904,6 +10062,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "ok": True,
                     "title": APP_NAME,
                     "ui_version": UI_VERSION,
+                    "gbrain_version": runtime_gbrain_version(),
                     "loaded": bool(graph),
                     "source": graph.get("source") if graph else None,
                     "stats": graph.get("stats") if graph else None,

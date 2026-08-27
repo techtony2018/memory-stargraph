@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.203";
+const UI_VERSION = "V1.0.204";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -133,6 +133,7 @@ const state = {
   animationTick: 0,
   entityLoadId: 0,
   selectionVersion: 0,
+  selectionContextExpanded: false,
   zoom: 1,
   rotation: { x: -0.34, y: 0.58, vx: 0, vy: 0 },
   drag: { active: false, moved: false, lastX: 0, lastY: 0, pointerId: null },
@@ -203,6 +204,7 @@ const detailTitle = document.getElementById("detailTitle");
 const timelineBadge = document.getElementById("timelineBadge");
 const selectionViewButton = document.getElementById("selectionViewButton");
 const selectionAskYodaButton = document.getElementById("selectionAskYodaButton");
+const selectionContextToggle = document.getElementById("selectionContextToggle");
 const detailType = document.getElementById("detailType");
 const detailSummary = document.getElementById("detailSummary");
 const selectionSlugAlways = document.getElementById("selectionSlugAlways");
@@ -219,6 +221,7 @@ const categoryLimitInput = document.getElementById("categoryLimitInput");
 const clusterLimitInput = document.getElementById("clusterLimitInput");
 const hiddenList = document.getElementById("hiddenList");
 const uiVersion = document.getElementById("uiVersion");
+const gbrainVersion = document.getElementById("gbrainVersion");
 const nodeMenuButton = document.getElementById("nodeMenuButton");
 const contextMenu = document.getElementById("contextMenu");
 const operationModal = document.getElementById("operationModal");
@@ -1552,6 +1555,22 @@ function updateResponsiveSelectionPlacement() {
     }
     detailPanel.classList.remove("is-map-overlay");
   }
+  syncSelectionContextState();
+}
+
+function syncSelectionContextState() {
+  if (!detailPanel || !selectionContextToggle) return;
+  const expanded = compactSelectionQuery.matches && state.selectionContextExpanded;
+  detailPanel.classList.toggle("is-context-expanded", expanded);
+  selectionContextToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  selectionContextToggle.setAttribute("aria-label", expanded ? "Collapse selected node context" : "Expand selected node context");
+  selectionContextToggle.dataset.tooltip = expanded ? "Collapse selected node context." : "Expand selected node context.";
+  selectionContextToggle.textContent = expanded ? "⌃" : "⌄";
+}
+
+function setSelectionContextExpanded(expanded) {
+  state.selectionContextExpanded = Boolean(expanded);
+  syncSelectionContextState();
 }
 
 function isHidden(slug) {
@@ -1738,6 +1757,9 @@ function pickSearchFocus(graph, query) {
 
 function updateUiVersion(graph) {
   uiVersion.textContent = UI_VERSION || graph?.ui_version || "";
+  if (gbrainVersion) {
+    gbrainVersion.textContent = graph?.gbrain_version ? `GBrain ${graph.gbrain_version}` : "GBrain unavailable";
+  }
 }
 
 function buildRuntimeGraph(graph) {
@@ -4052,6 +4074,27 @@ function mergePersistentYodaLogs(entries = []) {
   });
 }
 
+function safeYodaLogFacet(value, fallback = "unknown") {
+  const text = String(value || "").trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9._-]{0,39}$/.test(text) ? text : fallback;
+}
+
+function yodaLogProvenance(log = {}) {
+  const diagnostics = log.diagnostics || {};
+  const rawEnvironment = safeYodaLogFacet(log.environment || diagnostics.environment);
+  const synthetic = Boolean(log.synthetic || log.test_run || rawEnvironment === "test" || rawEnvironment === "synthetic");
+  const environment = synthetic ? "test" : rawEnvironment === "production" ? "production" : "unknown";
+  const pairCandidate = String(log.pair_id || log.test_run || diagnostics.pair_id || "").trim();
+  return {
+    environment,
+    label: environment === "production" ? "Production" : environment === "test" ? "Test / synthetic" : "Unknown provenance",
+    synthetic,
+    pairId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(pairCandidate) ? pairCandidate : "",
+    source: safeYodaLogFacet(diagnostics.source || log.source),
+    status: safeYodaLogFacet(diagnostics.model_status || log.status),
+  };
+}
+
 async function loadPersistentYodaLogs(slug = "") {
   const params = new URLSearchParams();
   if (slug) params.set("slug", slug);
@@ -4063,6 +4106,7 @@ async function loadPersistentYodaLogs(slug = "") {
 
 function formatYodaDiagnosticEntry(slug, log, index) {
   const diagnostics = log.diagnostics || {};
+  const provenance = yodaLogProvenance(log);
   const timings = diagnostics.timings || log.timings || {};
   const contextPhases = diagnostics.context_subphases_ms || {};
   const contextCounts = diagnostics.context_counts || {};
@@ -4071,12 +4115,15 @@ function formatYodaDiagnosticEntry(slug, log, index) {
     `captured_at: ${log.captured_at || "unknown"}`,
     `request_id: ${log.request_id || diagnostics.request_id || "unknown"}`,
     `selected_slug: ${diagnostics.selected_slug || slug}`,
+    `environment: ${provenance.label}`,
+    `synthetic: ${provenance.synthetic}`,
+    `test_pair: ${provenance.pairId || "none"}`,
     `depth: ${diagnostics.depth || state.yodaDepth}`,
-    `source: ${diagnostics.source || log.source || "unknown"}`,
+    `source: ${provenance.source}`,
     `fallback_used: ${Boolean(diagnostics.fallback_used || log.source === "fallback")}`,
     `model_backend: ${diagnostics.model_backend || "unknown"}`,
     `model_name: ${diagnostics.model_name || "default"}`,
-    `model_status: ${diagnostics.model_status || "unknown"}`,
+    `model_status: ${provenance.status}`,
     `openclaw_status: ${diagnostics.openclaw_status || "unknown"}`,
     "timing phases:",
     `  prompt_ms: ${timings.prompt_ms ?? "unknown"}`,
@@ -4130,10 +4177,50 @@ function openYodaLogWindow(options = {}) {
   modalChat.hidden = true;
   modalMarkdown.hidden = false;
   modalMarkdown.innerHTML = "";
+  const toolbar = document.createElement("div");
+  toolbar.className = "yoda-log-toolbar";
   const pre = document.createElement("pre");
   pre.className = "yoda-log-window";
-  const entries = scope === "global" ? globalYodaLogEntries(20) : nodeYodaLogEntries(slug, 8);
-  pre.textContent = formatYodaDiagnosticLog(slug, entries, scope);
+  const entries = scope === "global" ? globalYodaLogEntries(80) : nodeYodaLogEntries(slug, 20);
+  const facets = [
+    { key: "environment", label: "Environment", values: ["production", "test", "unknown"] },
+    { key: "source", label: "Source", values: [...new Set(entries.map(({ entry }) => yodaLogProvenance(entry).source))].sort() },
+    { key: "status", label: "Status", values: [...new Set(entries.map(({ entry }) => yodaLogProvenance(entry).status))].sort() },
+  ];
+  const filters = { environment: "", source: "", status: "" };
+  const renderFilteredLog = () => {
+    const filtered = entries.filter(({ entry }) => {
+      const provenance = yodaLogProvenance(entry);
+      return facets.every(({ key }) => !filters[key] || provenance[key] === filters[key]);
+    });
+    pre.textContent = formatYodaDiagnosticLog(slug, filtered, scope);
+  };
+  facets.forEach(({ key, label, values }) => {
+    const control = document.createElement("label");
+    control.className = "yoda-log-filter";
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    const select = document.createElement("select");
+    select.dataset.filter = key;
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All";
+    select.appendChild(all);
+    values.forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value === "test" ? "Test / synthetic" : value;
+      select.appendChild(option);
+    });
+    select.addEventListener("change", () => {
+      filters[key] = select.value;
+      renderFilteredLog();
+    });
+    control.append(caption, select);
+    toolbar.appendChild(control);
+  });
+  renderFilteredLog();
+  modalMarkdown.appendChild(toolbar);
   modalMarkdown.appendChild(pre);
   operationModal.hidden = false;
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
@@ -7638,6 +7725,7 @@ async function loadEntity(slug, options = {}) {
   try {
     const loadId = (state.entityLoadId || 0) + 1;
     state.entityLoadId = loadId;
+    if (state.focusSlug !== slug) setSelectionContextExpanded(false);
     const requestedNode = state.nodeMap.get(slug);
     const shouldExpand = requestedNode && !requestedNode.expanded;
     showRequestedSelectionLoadingState(slug, requestedNode);
@@ -8009,6 +8097,9 @@ function bindEvents() {
   });
   selectionAskYodaButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("ask-yoda", state.focusSlug);
+  });
+  selectionContextToggle?.addEventListener("click", () => {
+    setSelectionContextExpanded(!state.selectionContextExpanded);
   });
   selectionViewButton?.addEventListener("click", () => {
     if (state.focusSlug) void openNodeModal("view", state.focusSlug);
