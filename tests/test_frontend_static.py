@@ -1747,6 +1747,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("Top result: ${topSlug}", script)
         self.assertIn('void loadEntity(preferredFocus, { source: "search" })', search_block)
         self.assertNotIn('await loadEntity(preferredFocus, { source: "search" })', search_block)
+        self.assertIn("reportSearchTiming(searchStartedAt, preferredFocus)", search_block)
+        self.assertIn('String(state.query || "").trim() === submittedQuery', search_block)
         self.assertIn("showSearchSelectionFromGraph(preferredFocus)", search_block)
         self.assertIn("bounded evidence ranking", script)
         self.assertNotIn("hideFloatingPanels()", search_input_handler)

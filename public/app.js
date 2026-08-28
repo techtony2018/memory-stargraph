@@ -1391,7 +1391,17 @@ async function runLazySearch(query) {
     }
     if (selectionVersion === state.selectionVersion && preferredFocus && state.focusSlug === preferredFocus) {
       showSearchSelectionFromGraph(preferredFocus);
-      void loadEntity(preferredFocus, { source: "search" }).catch(() => {});
+      void loadEntity(preferredFocus, { source: "search" })
+        .then(() => {
+          if (
+            selectionVersion === state.selectionVersion
+            && state.focusSlug === preferredFocus
+            && String(state.query || "").trim() === submittedQuery
+          ) {
+            reportSearchTiming(searchStartedAt, preferredFocus);
+          }
+        })
+        .catch(() => {});
     }
     reportSearchTiming(searchStartedAt, preferredFocus);
   } catch (error) {
