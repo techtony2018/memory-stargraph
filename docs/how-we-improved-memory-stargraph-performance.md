@@ -1,18 +1,17 @@
 # How We Made Memory Stargraph Faster
 
-Release context: Memory Stargraph `V1.0.203`, August 2026.
+Release context: Memory Stargraph `V1.0.205`, August 2026.
 
 ## Executive summary
 
 Memory Stargraph became faster by removing repeated process startup from its
 critical paths, reusing bounded read results, and returning only the data the UI
 actually needs. The most important architectural change was replacing repeated
-`gbrain` CLI subprocess calls with a long-lived MCP session inside Memory
-Stargraph, then exposing that capability to background workers through stable
-HTTP endpoints.
+`gbrain` CLI subprocess calls with long-lived MCP transport inside Memory
+Stargraph, exposing that capability to background workers through stable HTTP
+endpoints, and adding bounded MCP concurrency for Ask Yoda's context fan-out.
 
-The result was not one large rewrite. It was a sequence of measured,
-contract-preserving changes:
+The result was quite satisfying:
 
 - Persistent GBrain search reduced median transport time by 81.75%.
 - Persistent entity reads reduced a representative `get` from about 1.15
@@ -21,12 +20,19 @@ contract-preserving changes:
   to 1.5 KB and improved median modal readiness by 34%.
 - Bounded Search graph growth reduced final node count by 33.4%, response size
   by 30.8%, and median graph-ready time by 31.3%.
-- The latest endpoint-first worker migration reduced a representative entity
+- The endpoint-first worker migration reduced a representative entity
   read from a 1,233 millisecond CLI median to a 116 millisecond HTTP median,
   a 10.65x speedup on the deployed primary host.
+- The Ask Yoda MCP-only release reduced observed end-to-end p50 from 8.748
+  seconds to 1.619 seconds (81.5%, or 5.40x) and p95 from 10.529 seconds to
+  5.609 seconds (46.7%, or 1.88x), while preserving 1.0 retrieval recall.
+- Deployed acceptance completed 8 of 8 structured MCP calls with five ready
+  bounded sessions and zero CLI fallbacks.
 
-All changes preserved the existing GBrain data model and CLI compatibility.
-We did not modify or upgrade GBrain to achieve these gains.
+All changes preserved the existing GBrain data model and administrative CLI
+compatibility. Ask Yoda itself no longer uses a CLI fallback; it now fails
+closed when its structured MCP context is unavailable. We did not modify or
+upgrade GBrain to achieve these gains.
 
 ## The original performance problem
 
@@ -72,15 +78,16 @@ UI
   |
   +--> Memory Stargraph HTTP API
            |
-           +--> persistent GBrain MCP session
+           +--> persistent GBrain MCP sessions
+           +--> bounded five-session Ask Yoda pool
            +--> bounded caches and request coalescing
-           +--> CLI compatibility fallback for supported read failures
+           +--> fail-closed Ask Yoda context reads
 
 Background worker
   |
   +--> Memory Stargraph worker endpoint
            |
-           +--> the same persistent MCP session
+           +--> persistent MCP transport
            +--> durable readback verification
            +--> CLI fallback when the endpoint is unavailable
 ```
@@ -95,7 +102,7 @@ lifecycle overhead out of the request path.
 
 ## The improvements
 
-### 1. Reuse one persistent MCP session
+### 1. Reuse persistent MCP sessions
 
 The server maps compatible CLI-shaped reads onto MCP tools:
 
@@ -109,17 +116,44 @@ The server maps compatible CLI-shaped reads onto MCP tools:
 | `list` | `list_pages` |
 | tag read | `get_tags` |
 
-The session is deliberately bounded:
+The transport is deliberately bounded:
 
-- It has one serialized lane instead of unbounded concurrent access.
-- Short entity reads may wait briefly for the lane.
+- General product reads retain a serialized default lane rather than using
+  unbounded concurrent access.
+- Ask Yoda has a bounded pool of five MCP sessions so its selected-page,
+  graph, backlink, query, direct-read, and targeted-context phases do not
+  contend for one lock.
 - Search and query use a smaller wait budget to protect interactive latency.
 - Process exits, protocol errors, and timeouts close the session before reuse.
-- Compatible read failures can fall back to the existing CLI path.
+- Compatible reads outside Ask Yoda can retain a bounded CLI compatibility
+  path where their contract requires it.
+- Ask Yoda does not shell out: unavailable, malformed, unauthorized, busy, or
+  timed-out MCP context fails closed and is reported as degraded context.
 - Mutating MCP calls fail closed instead of replaying an uncertain write.
 
 This preserved the old command contract while removing most process startup
 cost.
+
+#### Why this became possible: GBrain MCP parity
+
+GBrain `0.46.12.2`, released on 2026-08-16, was the enabling platform
+milestone. Its `CHANGELOG.md` described the change this way:
+
+> **Your agent can now do over MCP what it could only do from the CLI.** An
+> audit of the CLI-versus-MCP surface found the gap was never that MCP filtered
+> tools out — it was CLI commands that never got an operation entry, so a
+> connected agent hit "unknown tool" and fell back to shelling out. This wave
+> closes that: eleven new tools, so an agent can record and resolve predictions,
+> capture a quick note, check queue health, and read search/cache diagnostics
+> without leaving the MCP session.
+
+That distinction mattered. Memory Stargraph did not need a new GBrain storage
+API or a GBrain source patch. The operations already existed; the expanded MCP
+surface made them available to a connected long-lived agent session. Memory
+Stargraph could therefore replace shell fallbacks with structured tool calls
+while keeping GBrain as the source of truth. The Stargraph release used the
+already-installed GBrain `0.46.28.0`; it did not upgrade GBrain as part of this
+work.
 
 ### 2. Move background workers to endpoint-first transport
 
@@ -202,6 +236,39 @@ Broad context is now bounded at depth two, while targeted relationship queries
 retain their specific behavior. Persistent MCP graph traversal reduced a
 representative graph-query median from 1.406 seconds to 42 milliseconds, with
 exact output parity across the benchmark set.
+
+### 6. Make Ask Yoda MCP-only under concurrency
+
+The first persistent implementation still had one important escape hatch.
+Ask Yoda assembled context concurrently, but all MCP calls shared one serialized
+session. When that lane was busy, context arms could fall back to one-shot
+`gbrain` subprocesses. Live V1.0.204 telemetry recorded 43 CLI fallbacks, 39 of
+them page reads. A controlled page-read transport benchmark measured a warm MCP
+median of 20.8 milliseconds versus 1,237.9 milliseconds through a fresh CLI
+process.
+
+V1.0.205 replaced that contention pattern with a bounded five-session pool and
+kept page, query, search, backlinks, traversal, listing, tags, and think results
+structured until the final prompt-formatting boundary. `gbrain_think` is called
+with `save=false` and `take=false`, and Ask Yoda has no
+`run_gbrain_subprocess` fallback.
+
+The deployed acceptance benchmark reported:
+
+| Metric | Before | After | Observed change |
+| --- | ---: | ---: | ---: |
+| End-to-end p50 | 8.748 s | 1.619 s | 81.5% lower, 5.40x faster |
+| End-to-end p95 | 10.529 s | 5.609 s | 46.7% lower, 1.88x faster |
+| Retrieval recall | 1.0 | 1.0 | Preserved |
+| Structured MCP calls | n/a | 8/8 successful | 0 errors/timeouts |
+| CLI fallbacks | 43 observed in prior live telemetry | 0 in acceptance | Removed from Ask Yoda |
+
+The baseline was a cold benchmark and the post-change result was a repeated
+benchmark, so these figures describe the observed product-path improvement,
+not a thermally identical microbenchmark. The separate warm transport test
+isolated the fixed process-startup cost. Together, the measurements show both
+why the old path was slow and what users experienced after the bounded MCP
+pool shipped.
 
 ## Observability added with the optimization
 
@@ -293,13 +360,26 @@ The endpoint-first release passed:
 - Shell syntax validation
 - Independent primary and secondary deployment readback
 
+The Ask Yoda MCP-only release additionally passed:
+
+- 367 focused tests
+- 150 graph parsing tests
+- 80 static tests
+- 698 full-suite tests in 90.691 seconds
+- Python and Node syntax checks
+- Five simultaneous MCP page reads
+- Desktop 1280x900 and mobile 390x844 deployed TLS smoke
+- 8/8 live structured calls, with zero errors, timeouts, busy rejections, or
+  CLI fallbacks
+
 ## What we deliberately did not do
 
 - We did not change the GBrain source code.
 - We did not upgrade GBrain during the optimization.
 - We did not bypass GBrain as the source of truth.
 - We did not auto-approve resolver proposals.
-- We did not remove the CLI compatibility path.
+- We did not remove the CLI as an administrative or worker compatibility
+  surface; we removed it only from Ask Yoda's latency-critical retrieval path.
 - We did not use unbounded concurrency to hide latency.
 - We did not cache every response indefinitely.
 
@@ -313,8 +393,10 @@ The approach generalizes beyond Memory Stargraph:
    serialization, network, and rendering time.
 2. **Remove fixed overhead first.** Reuse an initialized session before tuning
    the query itself.
-3. **Keep the old contract.** Map existing operations onto the faster transport
-   and retain a bounded fallback.
+3. **Keep the old contract.** Map existing operations onto the faster transport.
+   Retain a bounded fallback only where it is needed; when a fallback recreates
+   the dominant fixed cost, prefer explicit fail-closed behavior after the MCP
+   surface reaches parity.
 4. **Return only what the caller renders.** Paginate high-cardinality data and
    omit unused fields.
 5. **Bound graph and fan-out work.** Depth, concurrency, page size, and timeout
@@ -339,14 +421,18 @@ The approach generalizes beyond Memory Stargraph:
 - Capture runner endpoint transport: [`scripts/automation/capture_link_host_runner.py`](../scripts/automation/capture_link_host_runner.py)
 - Add Capture Link endpoint transport: [`skills/add-capture-link/scripts/add_capture_link.py`](../skills/add-capture-link/scripts/add_capture_link.py)
 - Detailed benchmark history: [`docs/performance-handoff-2026-08-23.md`](performance-handoff-2026-08-23.md)
+- Ask Yoda MCP-only acceptance: [reports/memory-stargraph-wish-sg0217-20260828t033324-0700-512d2b9](http://127.0.0.1:8788/?slug=reports%2Fmemory-stargraph-wish-sg0217-20260828t033324-0700-512d2b9)
+- GBrain MCP surface milestone: `CHANGELOG.md` section `0.46.12.2`
 
 ## Closing thought
 
 The biggest performance gain came from changing the unit of reuse. Instead of
 making each command slightly faster, Memory Stargraph stopped rebuilding the
 same execution environment for every command. Once that fixed cost was removed,
-smaller improvements such as pagination, bounded graph traversal, cache reuse,
-and response pruning became easier to see and measure.
+bounded concurrency let Ask Yoda use the same long-lived MCP architecture
+without serializing every context arm. Smaller improvements such as pagination,
+bounded graph traversal, cache reuse, and response pruning then became easier
+to see and measure.
 
 That is the core lesson: optimize the system boundary first, then optimize the
 work inside it.
