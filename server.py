@@ -325,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.205"
+UI_VERSION = "V1.0.206"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -8392,8 +8392,8 @@ class GraphStore:
         command = ["graph-query", slug]
         if link_type:
             command.extend(["--type", link_type])
-        if direction:
-            command.extend(["--direction", direction])
+        if normalized_direction:
+            command.extend(["--direction", normalized_direction])
         if depth:
             command.extend(["--depth", str(depth)])
         def load():

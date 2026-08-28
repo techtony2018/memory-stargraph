@@ -67,7 +67,7 @@ try {
   const state = await page.evaluate((expectedTopSlug) => {
     const appState = window.__MEMORY_STARGRAPH__.getState();
     const coverage = appState.graph.source?.coverage || {};
-    const feedback = document.querySelector("#searchFeedback")?.textContent || "";
+    const feedback = document.querySelector("#hoverLabel")?.textContent || "";
     return {
       apiTopSlug: expectedTopSlug,
       uiTopSlug: coverage.search_slugs?.[0] || "",
@@ -122,7 +122,7 @@ try {
         focusSlug: appState.focusSlug,
         firstVisibleSearchResult: (coverage.search_slugs || []).find((slug) => appState.nodeMap.has(slug)) || "",
         exactTodoStatus: coverage.search_exact_todo_id_status,
-        feedback: document.querySelector("#searchFeedback")?.textContent || "",
+        feedback: document.querySelector("#hoverLabel")?.textContent || "",
         expected,
       };
     }, expectedSlug);

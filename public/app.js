@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.205";
+const UI_VERSION = "V1.0.206";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -165,7 +165,6 @@ const autopilotFlyout = document.getElementById("autopilotFlyout");
 const settingsFlyout = document.getElementById("settingsFlyout");
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
-const searchFeedback = document.getElementById("searchFeedback");
 const matchesOnlyToggle = document.getElementById("matchesOnlyToggle");
 const refreshButton = document.getElementById("refreshButton");
 const flowingEdgesToggle = document.getElementById("flowingEdgesToggle");
@@ -1297,11 +1296,10 @@ function setSearchLoading(active) {
 }
 
 function setSearchFeedback(message, mode = "neutral") {
-  if (searchFeedback) {
-    searchFeedback.textContent = message;
-    searchFeedback.dataset.mode = mode;
+  if (hoverLabel) {
+    hoverLabel.textContent = message;
+    hoverLabel.dataset.mode = mode;
   }
-  if (hoverLabel) hoverLabel.textContent = message;
 }
 
 function reportSearchTerminalState(query, reason = "no-results") {
@@ -2982,8 +2980,23 @@ function cleanWebAddressParts(value) {
 function webAddressHrefForValue(value) {
   const address = String(value || "").trim();
   if (/^https?:\/\//i.test(address)) return address;
-  if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/.*)?$/i.test(address)) return `https://${address}`;
+  if (isPlausibleBareWebAddress(address)) return `https://${address}`;
   return "";
+}
+
+function isPlausibleBareWebAddress(value) {
+  const address = String(value || "").trim();
+  if (!/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"`]*)?$/i.test(address)) return false;
+  const hostname = address.replace(/^www\./i, "").split("/", 1)[0].toLowerCase();
+  const labels = hostname.split(".");
+  const stem = labels.at(-2) || "";
+  const suffix = labels.at(-1) || "";
+  const fileSuffixes = new Set([
+    "bash", "c", "cc", "conf", "cpp", "css", "csv", "go", "h", "hpp", "html", "ini", "java",
+    "js", "json", "jsx", "log", "md", "mjs", "pdf", "php", "py", "rb", "rs", "scss", "sh",
+    "sql", "toml", "ts", "tsx", "txt", "xml", "yaml", "yml", "zsh",
+  ]);
+  return !fileSuffixes.has(suffix) && !/^\d+$/.test(stem);
 }
 
 function appendWebAddressLink(parent, value) {

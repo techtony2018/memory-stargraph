@@ -2144,7 +2144,7 @@ class GraphParsingTests(unittest.TestCase):
         def fake_run(*args):
             self.assertEqual(
                 args,
-                ("graph-query", "people/tony-guan", "--direction", "outgoing", "--depth", "1"),
+                ("graph-query", "people/tony-guan", "--direction", "out", "--depth", "1"),
             )
             started.set()
             release.wait(timeout=1)
@@ -2168,6 +2168,23 @@ class GraphParsingTests(unittest.TestCase):
 
         self.assertEqual(outputs, ["[depth 0] people/tony-guan"] * 8)
         self.assertEqual(run.call_count, 1)
+
+    def test_graph_query_normalizes_ui_directions_for_persistent_gbrain(self):
+        store = GraphStore()
+
+        with mock.patch("server.run_gbrain", return_value="[depth 0] root") as run:
+            store.graph_query("people/outbound", direction="outgoing", depth="1")
+            store.graph_query("people/inbound", direction="incoming", depth="1")
+            store.graph_query("people/both", direction="both", depth="1")
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call("graph-query", "people/outbound", "--direction", "out", "--depth", "1"),
+                mock.call("graph-query", "people/inbound", "--direction", "in", "--depth", "1"),
+                mock.call("graph-query", "people/both", "--direction", "both", "--depth", "1"),
+            ],
+        )
 
     def test_direct_relationship_types_uses_bounded_outbound_query_and_backlinks(self):
         store = GraphStore()

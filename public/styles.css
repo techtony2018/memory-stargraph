@@ -658,6 +658,33 @@ h2 {
   text-overflow: ellipsis;
 }
 
+.canvas-overlay:has(#hoverLabel[data-mode]) {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+#hoverLabel[data-mode] {
+  overflow: visible;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+#hoverLabel[data-mode="partial"] {
+  color: #b8f7d4;
+}
+
+#hoverLabel[data-mode="warning"] {
+  color: #ffc66f;
+}
+
+#hoverLabel[data-mode="success"] {
+  color: #86efac;
+}
+
 .graph-tooltip {
   position: absolute;
   z-index: 30;
@@ -4288,29 +4315,6 @@ body::after {
 
 .search-flyout .search-wrap input {
   width: 100%;
-}
-
-.search-feedback {
-  flex: 1 1 100%;
-  min-width: 0;
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.search-feedback[data-mode="partial"] {
-  color: #b8f7d4;
-}
-
-.search-feedback[data-mode="warning"] {
-  color: #ffc66f;
-}
-
-.search-feedback[data-mode="success"] {
-  color: #86efac;
 }
 
 .autopilot-flyout {

@@ -813,6 +813,7 @@ try {
       "",
       "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, `code`, and ~~old~~ text.",
       "Source file: /Users/tony/work/WeChat/MSN Blogs/blog.txt",
+      "File leaves: scripts/automation/recurring_worker_bridge.py and automations/memory-stargraph-sre/reports/weekly-resilience-85.md; valid domain example.com; explicit URL https://bridge.py.",
       "Timeline link: 2023-11-01T00:00:00.000Z HHS recap [posts/tony-guan-2023-year-in-review-good-fight-good-life-2023-12-31]",
       "Unicode slug link: [人物/张三]",
       "",
@@ -833,6 +834,10 @@ try {
       em: root.querySelector("em")?.textContent,
       code: root.querySelector("code")?.textContent,
       del: root.querySelector("del")?.textContent,
+      barePyLinks: [...root.querySelectorAll("a")].filter((link) => link.textContent === "bridge.py").length,
+      bareMdLinks: [...root.querySelectorAll("a")].filter((link) => link.textContent === "85.md").length,
+      validBareDomainLinks: [...root.querySelectorAll("a")].filter((link) => link.textContent === "example.com" && link.href === "https://example.com/").length,
+      explicitPyUrlLinks: [...root.querySelectorAll("a")].filter((link) => link.textContent === "https://bridge.py" && link.href === "https://bridge.py/").length,
       quote: root.querySelector("blockquote")?.textContent,
       ordered: root.querySelector("ol li")?.textContent,
       tableRows: root.querySelectorAll("table tr").length,
@@ -848,6 +853,10 @@ try {
     markdownFormatting.em !== "italic" ||
     markdownFormatting.code !== "code" ||
     markdownFormatting.del !== "old" ||
+    markdownFormatting.barePyLinks !== 0 ||
+    markdownFormatting.bareMdLinks !== 0 ||
+    markdownFormatting.validBareDomainLinks !== 1 ||
+    markdownFormatting.explicitPyUrlLinks !== 1 ||
     markdownFormatting.quote !== "Quoted note" ||
     markdownFormatting.ordered !== "Ordered item" ||
     markdownFormatting.tableRows !== 2 ||
@@ -1178,7 +1187,7 @@ try {
     const state = window.__MEMORY_STARGRAPH__.getState();
     const coverage = state.graph.source?.coverage || {};
     const topSlug = coverage.search_slugs?.[0] || "";
-    const feedback = document.querySelector("#searchFeedback");
+    const feedback = document.querySelector("#hoverLabel");
     const rect = feedback?.getBoundingClientRect();
     return {
       query: state.query,
@@ -1211,7 +1220,7 @@ try {
   await page.setViewportSize({ width: 390, height: 760 });
   await page.waitForTimeout(200);
   const mobilePartialFeedback = await page.evaluate(() => {
-    const feedback = document.querySelector("#searchFeedback");
+    const feedback = document.querySelector("#hoverLabel");
     const rect = feedback?.getBoundingClientRect();
     return {
       text: feedback?.textContent || "",

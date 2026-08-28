@@ -6,7 +6,7 @@
     <title>Memory Stargraph</title>
     <link rel="icon" type="image/png" sizes="64x64" href="/assets/brand/logo-circle-favicon.png">
     <link rel="apple-touch-icon" href="/assets/brand/logo-circle-transparent-small.png">
-    <link rel="stylesheet" href="/styles.css?v=1.0.205">
+    <link rel="stylesheet" href="/styles.css?v=1.0.206">
   </head>
   <body>
     <div class="app-shell">
@@ -69,7 +69,6 @@
                 <span>Links</span>
                 <input id="minDegreeFilter" type="number" min="0" step="1" value="0">
               </label>
-              <p id="searchFeedback" class="search-feedback" aria-live="polite"></p>
             </div>
             <div id="autopilotFlyout" class="floating-tool-panel autopilot-flyout" hidden aria-label="Autopilot controls">
               <span id="autopilotModeIcon" class="autopilot-mode-icon has-tooltip" aria-hidden="true" data-tooltip="Autopilot mode is active.">
@@ -190,7 +189,7 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
               </button>
               <button id="mapAskYodaButton" class="new-node-icon-button map-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node." disabled aria-disabled="true">
-                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.205" alt="" aria-hidden="true">
+                <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.206" alt="" aria-hidden="true">
               </button>
             </div>
             <div id="filterDrawerHandle" class="filter-sidebar-drawer has-tooltip" role="button" tabindex="0" aria-label="Show graph filters" data-tooltip="Show graph filters."></div>
@@ -218,7 +217,7 @@
               </section>
             </div>
             <div class="canvas-overlay">
-              <p id="hoverLabel">Loading star map…</p>
+              <p id="hoverLabel" role="status" aria-live="polite">Loading star map…</p>
             </div>
             <div id="busyIndicator" class="busy-indicator" role="status" aria-live="polite" aria-busy="false" hidden>
               <span class="busy-spinner" aria-hidden="true"></span>
@@ -231,7 +230,7 @@
               <img class="graph-wordmark" src="/assets/brand/wordmark-line-small.webp" alt="Memory Stargraph">
             </a>
             <div class="runtime-version-group" aria-label="Runtime versions">
-              <a id="uiVersion" class="ui-version ui-version-link has-tooltip" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" data-tooltip="Open the Memory Stargraph GitHub repository.">V1.0.205</a>
+              <a id="uiVersion" class="ui-version ui-version-link has-tooltip" href="https://github.com/techtony2018/memory-stargraph" target="_blank" rel="noreferrer" data-tooltip="Open the Memory Stargraph GitHub repository.">V1.0.206</a>
               <span id="gbrainVersion" class="gbrain-version has-tooltip" data-tooltip="Detected GBrain runtime version.">GBrain unavailable</span>
             </div>
           </div>
@@ -250,7 +249,7 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>
                 </button>
                 <button id="selectionAskYodaButton" class="selection-yoda-button has-tooltip" type="button" aria-label="Ask Yoda about selected node" data-tooltip="Ask Yoda about this node.">
-                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.205" alt="" aria-hidden="true">
+                  <img class="yoda-avatar yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.206" alt="" aria-hidden="true">
                 </button>
                 <button id="historyBackButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Back to previous selected node" data-tooltip="Back to previous selected node." disabled>‹</button>
                 <button id="historyForwardButton" class="icon-button history-nav-button has-tooltip" type="button" aria-label="Forward to next selected node" data-tooltip="Forward to next selected node." disabled>›</button>
@@ -367,6 +366,6 @@
       </section>
     </div>
 
-    <script src="/app.js?v=1.0.205"></script>
+    <script src="/app.js?v=1.0.206"></script>
   </body>
 </html>
