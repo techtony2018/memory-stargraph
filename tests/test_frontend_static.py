@@ -1744,6 +1744,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("hoverLabel.dataset.mode = mode", script)
         self.assertIn('id="hoverLabel" role="status" aria-live="polite"', (ROOT / "public/index.html").read_text())
         self.assertIn('#hoverLabel[data-mode="warning"]', (ROOT / "public/styles.css").read_text())
+        self.assertIn('.graph-canvas-wrap:has(#hoverLabel[data-mode]) > .detail-panel.is-map-overlay:not(.is-context-expanded)', (ROOT / "public/styles.css").read_text())
         self.assertIn("Top result: ${topSlug}", script)
         self.assertIn('void loadEntity(preferredFocus, { source: "search" })', search_block)
         self.assertNotIn('await loadEntity(preferredFocus, { source: "search" })', search_block)

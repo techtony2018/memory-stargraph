@@ -4909,6 +4909,11 @@ body::after {
     box-shadow: 0 12px 30px rgba(2, 5, 16, 0.42);
   }
 
+  .graph-canvas-wrap:has(#hoverLabel[data-mode]) > .detail-panel.is-map-overlay:not(.is-context-expanded) {
+    bottom: 112px;
+    max-height: min(130px, 24%);
+  }
+
   .graph-canvas-wrap > .detail-panel.is-map-overlay.is-context-expanded {
     max-height: calc(100% - 88px);
   }
