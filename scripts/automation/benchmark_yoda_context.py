@@ -191,17 +191,17 @@ def run_case(
         store.yoda_context_cache.clear()
 
     previous_model = server.run_yoda_model
-    previous_gbrain = server.run_gbrain
+    previous_yoda_gbrain = server.yoda_gbrain_call_tool
 
-    def benchmark_gbrain(*args, **kwargs):
-        if case.get("force_slow_graph") and args and args[0] == "graph-query":
-            raise subprocess.TimeoutExpired(args, timeout=kwargs.get("timeout", 0))
-        return previous_gbrain(*args, **kwargs)
+    def benchmark_yoda_gbrain(tool_name, payload=None, timeout=30):
+        if case.get("force_slow_graph") and tool_name == "traverse_graph":
+            raise subprocess.TimeoutExpired(tool_name, timeout=timeout)
+        return previous_yoda_gbrain(tool_name, payload, timeout=timeout)
 
     store.ask_gbrain = lambda slug, question: f"Provider-down fallback for {slug}: {question}"
     try:
         server.run_yoda_model = provider_down
-        server.run_gbrain = benchmark_gbrain
+        server.yoda_gbrain_call_tool = benchmark_yoda_gbrain
         cold = store.ask_yoda(
             str(case["slug"]),
             str(case["cold_question"]),
@@ -214,7 +214,7 @@ def run_case(
         )
     finally:
         server.run_yoda_model = previous_model
-        server.run_gbrain = previous_gbrain
+        server.yoda_gbrain_call_tool = previous_yoda_gbrain
 
     cold_diagnostics = cold["diagnostics"]
     warm_diagnostics = warm["diagnostics"]

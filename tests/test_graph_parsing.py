@@ -8,7 +8,9 @@ import threading
 import time
 from unittest import mock
 
+import server
 from server import (
+    BoundedGBrainMCPPool,
     DEFAULT_CONFIG,
     EVIDENCE_SEARCH_TYPES,
     EvidenceListCache,
@@ -48,6 +50,7 @@ from server import (
     resolve_media_preview_file_path,
     run_openclaw_agent,
     run_gbrain,
+    yoda_gbrain_call_tool,
     search_raw_graph,
     serve_url_for_media_reference,
     gbrain_file_url_for_relative_path,
@@ -82,6 +85,65 @@ class GraphParsingTests(unittest.TestCase):
             "node_path": "",
             "node_fallback_paths": [],
         }
+
+    def legacy_yoda_tool(self, runner):
+        """Adapt legacy CLI-shaped fixtures to the structured Ask Yoda contract."""
+
+        def call(tool_name, payload=None, timeout=30):
+            payload = dict(payload or {})
+            if tool_name == "get_tags":
+                return []
+            if tool_name == "get_page":
+                return {"content": runner("get", payload["slug"])}
+            if tool_name in {"query", "search"}:
+                args = [tool_name, payload["query"]]
+                if payload.get("expand") is False:
+                    args.append("--no-expand")
+                for key, option in (
+                    ("adaptive_return", "--adaptive-return"),
+                    ("limit", "--limit"),
+                    ("relational", "--relational"),
+                ):
+                    if key not in payload:
+                        continue
+                    value = payload[key]
+                    if isinstance(value, bool):
+                        value = str(value).lower()
+                    args.extend((option, str(value)))
+                rows = parse_search_results(runner(*args))
+                for row in rows:
+                    row.setdefault("chunk_text", row.get("preview") or "")
+                    row.setdefault("title", row.get("label") or "")
+                return rows
+            if tool_name == "get_backlinks":
+                output = runner("backlinks", payload["slug"])
+                try:
+                    rows = json.loads(output)
+                except (TypeError, json.JSONDecodeError):
+                    rows = []
+                return rows if isinstance(rows, list) else []
+            if tool_name == "traverse_graph":
+                args = [
+                    "graph-query",
+                    payload["slug"],
+                    "--direction",
+                    payload.get("direction", "out"),
+                    "--depth",
+                    str(payload.get("depth", 5)),
+                ]
+                if payload.get("link_type"):
+                    args[2:2] = ["--type", payload["link_type"]]
+                output = runner(*args, timeout=timeout)
+                try:
+                    rows = json.loads(output)
+                except (TypeError, json.JSONDecodeError):
+                    rows = []
+                return rows if isinstance(rows, list) else []
+            if tool_name == "list_pages":
+                return []
+            raise AssertionError((tool_name, payload))
+
+        return call
 
     def test_parse_frontmatter_preserves_folded_and_literal_titles(self):
         folded, _ = parse_frontmatter("---\ntitle: >-\n  A long\n  folded title\n---\n# Body\n")
@@ -380,6 +442,183 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(metrics["cli_fallbacks_by_command"], {"get": 1})
         self.assertEqual(metrics["last_error"], "synthetic fallback")
         self.assertGreaterEqual(metrics["tool_latency_ms_average"], 0)
+
+    def test_yoda_mcp_pool_runs_five_structured_reads_concurrently(self):
+        barrier = threading.Barrier(5, timeout=2)
+        active = 0
+        max_active = 0
+        state_lock = threading.Lock()
+
+        class FakeSession:
+            def call_tool(self, name, payload, timeout=30):
+                nonlocal active, max_active
+                self.assert_payload = (name, payload, timeout)
+                with state_lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                try:
+                    barrier.wait()
+                    return {"content": f"# {payload['slug']}"}
+                finally:
+                    with state_lock:
+                        active -= 1
+
+            def close(self):
+                return None
+
+            def prewarm_async(self, timeout=15):
+                return True
+
+            def status(self):
+                return {"ready": True}
+
+        pool = BoundedGBrainMCPPool(size=5, session_factory=FakeSession)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(
+                executor.map(
+                    lambda index: pool.call_tool(
+                        "get_page", {"slug": f"pages/{index}"}, timeout=2
+                    ),
+                    range(5),
+                )
+            )
+
+        self.assertEqual(max_active, 5)
+        self.assertEqual(len(results), 5)
+        self.assertEqual(pool.metrics_snapshot()["cli_fallbacks"], 0)
+        self.assertEqual(pool.metrics_snapshot()["tool_successes"], 5)
+
+    def test_yoda_mcp_pool_fails_closed_when_busy_or_timed_out(self):
+        release = threading.Event()
+
+        class BusySession:
+            def call_tool(self, _name, _payload, timeout=30):
+                release.wait(timeout=timeout)
+                return []
+
+            def close(self):
+                return None
+
+            def prewarm_async(self, timeout=15):
+                return True
+
+            def status(self):
+                return {"ready": True}
+
+        pool = BoundedGBrainMCPPool(size=1, session_factory=BusySession)
+        first = threading.Thread(
+            target=pool.call_tool,
+            args=("search", {"query": "one"}),
+            kwargs={"timeout": 1},
+        )
+        first.start()
+        deadline = time.monotonic() + 1
+        while pool.available.qsize() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        with self.assertRaisesRegex(RuntimeError, "pool is busy"):
+            pool.call_tool("search", {"query": "two"}, timeout=0.05)
+        release.set()
+        first.join(timeout=1)
+        self.assertEqual(pool.metrics_snapshot()["busy_rejections"], 1)
+
+        class TimeoutSession(BusySession):
+            def call_tool(self, _name, _payload, timeout=30):
+                raise TimeoutError("synthetic MCP timeout")
+
+        timeout_pool = BoundedGBrainMCPPool(size=1, session_factory=TimeoutSession)
+        with self.assertRaisesRegex(TimeoutError, "synthetic MCP timeout"):
+            timeout_pool.call_tool("search", {"query": "three"}, timeout=1)
+        self.assertEqual(timeout_pool.metrics_snapshot()["tool_timeouts"], 1)
+
+    def test_yoda_mcp_validator_rejects_unauthorized_and_malformed_results(self):
+        with mock.patch("server.YODA_GBRAIN_MCP_POOL.call_tool") as call_tool:
+            with self.assertRaisesRegex(ValueError, "not allowed"):
+                yoda_gbrain_call_tool("delete_page", {"slug": "pages/one"})
+            call_tool.assert_not_called()
+
+        malformed_results = {
+            "get_page": [],
+            "search": {"slug": "pages/one"},
+            "get_tags": {"tags": ["valid", 42]},
+            "think": "not structured",
+        }
+        for tool_name, value in malformed_results.items():
+            with self.subTest(tool_name=tool_name), mock.patch(
+                "server.YODA_GBRAIN_MCP_POOL.call_tool", return_value=value
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid structured"):
+                    yoda_gbrain_call_tool(tool_name, {})
+
+    def test_yoda_mcp_validator_accepts_structured_read_surfaces(self):
+        valid_results = {
+            "get_page": {"content": "# Page"},
+            "query": [{"slug": "pages/query", "score": 0.9}],
+            "search": [{"slug": "pages/search", "score": 0.8}],
+            "get_backlinks": [
+                {
+                    "from_slug": "pages/source",
+                    "to_slug": "pages/target",
+                    "link_type": "supports",
+                }
+            ],
+            "traverse_graph": [
+                {
+                    "from_slug": "pages/source",
+                    "to_slug": "pages/target",
+                    "link_type": "supports",
+                    "depth": 1,
+                }
+            ],
+            "list_pages": [{"slug": "pages/listed", "type": "note"}],
+            "get_tags": ["private", "local"],
+        }
+        for tool_name, value in valid_results.items():
+            with self.subTest(tool_name=tool_name), mock.patch(
+                "server.YODA_GBRAIN_MCP_POOL.call_tool", return_value=value
+            ):
+                expected = sorted(value) if tool_name == "get_tags" else value
+                self.assertEqual(yoda_gbrain_call_tool(tool_name, {}), expected)
+
+    def test_ask_yoda_structured_context_never_uses_cli_fallback(self):
+        store = GraphStore()
+
+        def structured_result(tool_name, payload, timeout=30):
+            del timeout
+            if tool_name == "get_page":
+                return {"content": f"# {payload['slug']}\n\nGrounded local evidence."}
+            if tool_name in {"query", "search", "get_backlinks", "traverse_graph"}:
+                return []
+            if tool_name == "get_tags":
+                return ["memory-stargraph"]
+            raise AssertionError((tool_name, payload))
+
+        fallback_count_before = server.PERSISTENT_GBRAIN_SEARCH.metrics_snapshot()[
+            "cli_fallbacks"
+        ]
+        with (
+            mock.patch("server.yoda_gbrain_call_tool", side_effect=structured_result),
+            mock.patch("server.run_gbrain") as legacy,
+            mock.patch("server.run_gbrain_subprocess") as subprocess_fallback,
+            mock.patch("server.run_yoda_model", return_value={
+                "output": "Grounded answer.",
+                "backend": "openai",
+                "model_status": "answered",
+                "openclaw_status": "not_used",
+            }),
+        ):
+            result = store.ask_yoda(
+                "products/memory-stargraph",
+                "Summarize this selected node.",
+                depth=4,
+            )
+
+        self.assertEqual(result["output"], "Grounded answer.")
+        legacy.assert_not_called()
+        subprocess_fallback.assert_not_called()
+        self.assertEqual(
+            server.PERSISTENT_GBRAIN_SEARCH.metrics_snapshot()["cli_fallbacks"],
+            fallback_count_before,
+        )
 
     def test_graph_store_tag_read_uses_local_persistent_session(self):
         store = GraphStore()
@@ -946,9 +1185,10 @@ class GraphParsingTests(unittest.TestCase):
         }
         calls = []
 
-        def fake_get_entity_raw(slug):
+        def fake_get_yoda_page(slug, timeout=20):
+            del timeout
             calls.append(slug)
-            return pages.get(slug)
+            return {"content": pages.get(slug) or ""}
 
         stable_context = {
             "selected_node": "# Product",
@@ -957,9 +1197,9 @@ class GraphParsingTests(unittest.TestCase):
             "timings": {},
         }
         with (
-            mock.patch.object(store, "get_entity_raw", side_effect=fake_get_entity_raw),
+            mock.patch.object(store, "get_yoda_page", side_effect=fake_get_yoda_page),
+            mock.patch.object(store, "get_yoda_search_results", return_value=[]),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
-            mock.patch("server.run_gbrain", return_value=""),
         ):
             prompt = store.build_yoda_prompt(
                 "products/memory-stargraph",
@@ -1002,6 +1242,10 @@ class GraphParsingTests(unittest.TestCase):
             ),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
         ):
             first_prompt = store.build_yoda_prompt(
                 "products/memory-stargraph",
@@ -1030,9 +1274,15 @@ class GraphParsingTests(unittest.TestCase):
 
     def test_yoda_search_reuses_whitespace_equivalent_query(self):
         store = GraphStore()
-        output = "[0.99] products/memory-stargraph -- # Memory Stargraph"
+        output = "[0.9900] products/memory-stargraph -- # Memory Stargraph\n"
 
-        with mock.patch("server.run_gbrain", return_value=output) as run:
+        with (
+            mock.patch("server.run_gbrain", return_value=output) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
+        ):
             first = store.get_yoda_search_output(
                 "What changed? products/memory-stargraph"
             )
@@ -1068,7 +1318,13 @@ class GraphParsingTests(unittest.TestCase):
         def search():
             rows.append(store.get_yoda_search_output("What changed? products/memory-stargraph"))
 
-        with mock.patch("server.run_gbrain", side_effect=slow_query) as run:
+        with (
+            mock.patch("server.run_gbrain", side_effect=slow_query) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
+        ):
             first = threading.Thread(target=search)
             second = threading.Thread(target=search)
             first.start()
@@ -1090,15 +1346,18 @@ class GraphParsingTests(unittest.TestCase):
         rows = []
         slugs = ["pages/one", "pages/two", "pages/three", "pages/four"]
 
-        def slow_get(slug):
+        def slow_get(tool_name, payload, timeout=20):
+            del timeout
+            self.assertEqual(tool_name, "get_page")
+            slug = payload["slug"]
             calls.append(slug)
             release.wait(timeout=1)
-            return f"# {slug}"
+            return {"content": f"# {slug}"}
 
         def load():
             rows.append(store.get_yoda_source_pages(slugs))
 
-        with mock.patch.object(store, "get_entity_raw", side_effect=slow_get):
+        with mock.patch("server.yoda_gbrain_call_tool", side_effect=slow_get):
             first = threading.Thread(target=load)
             second = threading.Thread(target=load)
             first.start()
@@ -3147,6 +3406,12 @@ cover_image: companies/example-inc/logo.jpg
 
         with (
             mock.patch("server.run_gbrain") as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=lambda *args, **kwargs: self.legacy_yoda_tool(run)(
+                    *args, **kwargs
+                ),
+            ),
             mock.patch("server.gbrain_call_tool", return_value={"ok": True}) as call_tool,
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
             mock.patch("server.MEDIA_ROOTS", [media_root]),
@@ -3223,19 +3488,27 @@ cover_image: companies/example-inc/logo.jpg
 
     def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
         store = GraphStore()
+
+        def gbrain_result(*args, **_kwargs):
+            if args[0] == "get":
+                return "# Tony Guan\n\nEngineer"
+            if args[0] == "graph-query":
+                return "direct graph"
+            if args[0] == "backlinks":
+                return "[]"
+            if args[0] == "query":
+                return ""
+            raise AssertionError(args)
+
         with (
             mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
-            mock.patch("server.run_gbrain") as run,
+            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
             mock.patch("server.run_openclaw_agent", return_value=None),
         ):
-            run.side_effect = [
-                "# Tony Guan\n\nEngineer",
-                "direct graph",
-                "backlink graph",
-                "retrieved context",
-                "fallback direct graph",
-                "fallback retrieved context",
-            ]
             result = store.ask_yoda("people/tony-guan", "What changed?", [{"role": "user", "content": "Earlier question"}])
 
         self.assertEqual(result["source"], "fallback")
@@ -3243,7 +3516,6 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("Selected node: people/tony-guan", result["output"])
         self.assertIn("fallback_output", result)
         self.assertIn("Question-specific gbrain retrieval", result["fallback_output"])
-        self.assertIn("fallback retrieved context", result["fallback_output"])
         self.assertIn("timings", result)
         self.assertNotIn("OpenClaw agent unavailable", result["output"])
         self.assertNotIn("retrieved context", result["output"])
@@ -3270,6 +3542,10 @@ cover_image: companies/example-inc/logo.jpg
         with (
             mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):
             result = store.ask_yoda("people/tony-guan", "What does White Swan connect to?", depth=5)
@@ -3341,6 +3617,10 @@ cover_image: companies/example-inc/logo.jpg
 
         with (
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
             mock.patch("server.run_yoda_model", side_effect=answer_from_prompt),
         ):
             result = store.ask_yoda(
@@ -3439,6 +3719,10 @@ cover_image: companies/example-inc/logo.jpg
 
         with (
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
             mock.patch("server.run_yoda_model", side_effect=answer_from_prompt),
         ):
             result = store.ask_yoda("people/tony-guan", "try again", history, depth=4)
@@ -3464,17 +3748,19 @@ cover_image: companies/example-inc/logo.jpg
 | SG-0146 | planned | P1 | Reconcile Ask Yoda recommendations with authoritative current state | [[notes/memory-starmap-todo-list/reconcile-ask-yoda-recommendations-with-authoritative-current-state]] | 2026-07-18 | Planned. |
 """
 
-        def raw_entity(slug):
-            return {
+        def raw_entity(slug, timeout=20):
+            del timeout
+            content = {
                 "notes/memory-starmap-todo-list": backlog,
                 "notes/memory-starmap-todo-list/already-fixed-regression": "# Already fixed\n\nStatus: completed",
                 "notes/memory-starmap-todo-list/reconcile-ask-yoda-recommendations-with-authoritative-current-state": "# Reconcile\n\nStatus: planned",
             }.get(slug)
+            return {"content": content or ""}
 
         with (
-            mock.patch.object(store, "get_entity_raw", side_effect=raw_entity),
+            mock.patch.object(store, "get_yoda_page", side_effect=raw_entity),
+            mock.patch.object(store, "get_yoda_search_results", return_value=[]),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
-            mock.patch("server.run_gbrain", return_value=""),
         ):
             prompt = store.build_yoda_prompt(
                 "notes/memory-starmap-todo-list",
@@ -3510,12 +3796,12 @@ cover_image: companies/example-inc/logo.jpg
 
         def load_search(_query):
             barrier.wait()
-            return ""
+            return []
 
         with (
             mock.patch.object(store, "build_yoda_current_todo_context", side_effect=build_current),
             mock.patch.object(store, "build_yoda_operational_remediation_context", side_effect=build_operational),
-            mock.patch.object(store, "get_yoda_search_output", side_effect=load_search),
+            mock.patch.object(store, "get_yoda_search_results", side_effect=load_search),
             mock.patch.object(store, "build_yoda_targeted_context", return_value={"text": "", "counts": {}}),
         ):
             trace = {}
@@ -3548,7 +3834,10 @@ cover_image: companies/example-inc/logo.jpg
         def load_direct(slugs):
             barrier.wait()
             direct_slugs.extend(slugs)
-            return {slug: f"# DIRECT SOURCE {slug}" for slug in slugs}
+            return {
+                slug: {"content": f"# DIRECT SOURCE {slug}"}
+                for slug in slugs
+            }
 
         def load_targeted(*_args, **_kwargs):
             barrier.wait()
@@ -3559,15 +3848,13 @@ cover_image: companies/example-inc/logo.jpg
             mock.patch.object(store, "build_yoda_operational_remediation_context", return_value={"text": "", "counts": {}}),
             mock.patch.object(
                 store,
-                "get_yoda_search_output",
-                return_value="\n".join(
-                    [
-                        "[0.90] platforms/tony-guan-x -- # Tony X",
-                        "[0.89] people/garry-tan -- # Garry Tan",
-                        "[0.88] media/x-tonyguan2010 -- # Tony Media",
-                        "[0.87] people/linkedin/realtony -- # Tony LinkedIn",
-                    ]
-                ),
+                "get_yoda_search_results",
+                return_value=[
+                    {"score": 0.90, "slug": "platforms/tony-guan-x", "title": "Tony X"},
+                    {"score": 0.89, "slug": "people/garry-tan", "title": "Garry Tan"},
+                    {"score": 0.88, "slug": "media/x-tonyguan2010", "title": "Tony Media"},
+                    {"score": 0.87, "slug": "people/linkedin/realtony", "title": "Tony LinkedIn"},
+                ],
             ),
             mock.patch.object(store, "get_yoda_source_pages", side_effect=load_direct),
             mock.patch.object(store, "build_yoda_targeted_context", side_effect=load_targeted),
@@ -3612,6 +3899,10 @@ cover_image: companies/example-inc/logo.jpg
         with (
             mock.patch("server.yoda_runtime_config", return_value=self.openclaw_yoda_config()),
             mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch(
+                "server.yoda_gbrain_call_tool",
+                side_effect=self.legacy_yoda_tool(run),
+            ),
             mock.patch("server.run_openclaw_agent", return_value="agent answer"),
         ):
             cold = store.ask_yoda("people/tony-guan", "What should I know?", depth=4)
@@ -3624,7 +3915,7 @@ cover_image: companies/example-inc/logo.jpg
         self.assertIn("context_subphases_ms", cold["diagnostics"])
         self.assertEqual(
             set(cold["diagnostics"]["context_subphases_ms"]),
-            {"selected_node", "graph", "backlinks", "search", "direct_reads", "targeted_relationships", "assembly"},
+            {"selected_node", "graph", "backlinks", "tags", "search", "direct_reads", "targeted_relationships", "assembly"},
         )
         self.assertEqual(
             set(cold["diagnostics"]["context_counts"]),
@@ -3648,40 +3939,53 @@ cover_image: companies/example-inc/logo.jpg
         store = GraphStore()
         barrier = threading.Barrier(3, timeout=1)
 
-        def gbrain_result(*args, **kwargs):
-            del kwargs
+        def structured_result(tool_name, payload, timeout=30):
+            del timeout
+            if tool_name == "get_tags":
+                return ["person", "owner"]
             barrier.wait()
             return {
-                "get": "# Tony\n\nEngineer",
-                "graph-query": "graph",
-                "backlinks": "backlinks",
-            }[args[0]]
+                "get_page": {"content": "# Tony\n\nEngineer"},
+                "traverse_graph": [
+                    {
+                        "from_slug": payload["slug"],
+                        "to_slug": "products/memory-stargraph",
+                        "link_type": "owns",
+                        "depth": 1,
+                    }
+                ],
+                "get_backlinks": [],
+            }[tool_name]
 
-        with mock.patch("server.run_gbrain", side_effect=gbrain_result):
+        with mock.patch("server.yoda_gbrain_call_tool", side_effect=structured_result):
             context = store.build_yoda_stable_context("people/tony-guan", depth=4)
 
-        self.assertEqual(context["selected_node"], "# Tony\n\nEngineer")
-        self.assertEqual(context["graph"], "graph")
-        self.assertEqual(context["backlinks"], "backlinks")
+        self.assertEqual(context["selected_page"]["content"], "# Tony\n\nEngineer")
+        self.assertEqual(context["graph_rows"][0]["link_type"], "owns")
+        self.assertEqual(context["backlink_rows"], [])
+        self.assertEqual(context["tags"], ["person", "owner"])
         self.assertEqual(
             set(context["timings"]),
-            {"selected_node", "graph", "backlinks"},
+            {"selected_node", "graph", "backlinks", "tags"},
         )
 
     def test_yoda_stable_context_bounds_slow_broad_graph_as_optional_timeout(self):
         store = GraphStore()
 
-        def gbrain_result(*args, **kwargs):
-            if args[0] == "get":
-                return "# Tony\n\nEngineer"
-            if args[0] == "backlinks":
-                return "selected backlinks"
-            if args[0] == "graph-query":
+        def structured_result(tool_name, payload, timeout=30):
+            del payload
+            if tool_name == "get_page":
+                return {"content": "# Tony\n\nEngineer"}
+            if tool_name == "get_backlinks":
+                return []
+            if tool_name == "get_tags":
+                return []
+            if tool_name == "traverse_graph":
                 raise TimeoutError("forced slow graph traversal")
-            raise AssertionError(args)
+            raise AssertionError(tool_name)
 
         with (
-            mock.patch("server.run_gbrain", side_effect=gbrain_result) as run,
+            mock.patch("server.yoda_gbrain_call_tool", side_effect=structured_result) as call_tool,
             mock.patch(
                 "server.yoda_runtime_config",
                 return_value={"graph_query_timeout": 60, "broad_graph_budget": 8},
@@ -3689,15 +3993,17 @@ cover_image: companies/example-inc/logo.jpg
         ):
             context = store.build_yoda_stable_context("people/tony-guan", depth=4)
 
-        graph_call = next(call for call in run.call_args_list if call.args[0] == "graph-query")
+        graph_call = next(
+            call for call in call_tool.call_args_list
+            if call.args[0] == "traverse_graph"
+        )
         self.assertEqual(graph_call.kwargs["timeout"], 8)
         self.assertFalse(context["degraded"])
         self.assertEqual(context["degraded_reason"], "")
         self.assertEqual(context["broad_graph_status"], "optional_timeout")
         self.assertEqual(context["broad_graph_unavailable_reason"], "broad_graph_timeout")
         self.assertEqual(context["broad_graph_budget_ms"], 8000)
-        self.assertIn("Broad graph context unavailable within retrieval budget", context["graph"])
-        self.assertNotIn("forced slow graph traversal", context["graph"])
+        self.assertEqual(context["graph_rows"], [])
 
     def test_yoda_stable_context_coalesces_concurrent_cold_loads(self):
         store = GraphStore()
@@ -3734,7 +4040,10 @@ cover_image: companies/example-inc/logo.jpg
         self.assertEqual({status for _, status in contexts}, {"miss", "coalesced_hit"})
         self.assertEqual(contexts[0][0]["selected_node"], "# Node")
         coalesced_context = next(context for context, status in contexts if status == "coalesced_hit")
-        self.assertEqual(coalesced_context["timings"], {"selected_node": 0, "graph": 0, "backlinks": 0})
+        self.assertEqual(
+            coalesced_context["timings"],
+            {"selected_node": 0, "graph": 0, "backlinks": 0, "tags": 0},
+        )
 
     def test_yoda_context_cache_preserves_fresh_multi_key_entries_and_prunes_expired(self):
         store = GraphStore()

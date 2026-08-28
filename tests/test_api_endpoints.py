@@ -1956,14 +1956,17 @@ class ApiEndpointTests(unittest.TestCase):
             "notes/memory-starmap-todo-list/add-broad-graph-timeout-telemetry": "Status: completed\nCompletion Evidence: /api/yoda-logs exposes context_degraded and broad_graph_timeout.",
         }
 
-        def fake_raw(slug):
+        def fake_page(slug, timeout=20):
+            del timeout
             if slug == "notes/memory-starmap-todo-list":
-                return root
-            return children.get(slug, "")
+                return {"content": root}
+            return {"content": children.get(slug, "")}
 
-        store.get_entity_raw = fake_raw
         stable = {"selected_node": "", "graph": "", "backlinks": "", "timings": {}}
-        with mock.patch("server.run_gbrain", return_value=""):
+        with (
+            mock.patch.object(store, "get_yoda_page", side_effect=fake_page),
+            mock.patch.object(store, "get_yoda_search_results", return_value=[]),
+        ):
             prompt = store.build_yoda_prompt(
                 "notes/memory-starmap-todo-list",
                 "What current operational gaps remain around synthetic provenance and broad graph timeout?",
@@ -2090,7 +2093,7 @@ class ApiEndpointTests(unittest.TestCase):
             ]
         )
         with mock.patch(
-            "server.gbrain_call_tool", return_value={"answer": "model-backed answer"}
+            "server.yoda_gbrain_call_tool", return_value={"answer": "model-backed answer"}
         ) as call_tool:
             result = server.run_gbrain_think_yoda(
                 prompt,
@@ -2106,6 +2109,8 @@ class ApiEndpointTests(unittest.TestCase):
                 "question": "What is Memory Stargraph?",
                 "anchor": "products/memory-stargraph",
                 "model": "openai:gpt-5.2",
+                "save": False,
+                "take": False,
             },
             timeout=60,
         )

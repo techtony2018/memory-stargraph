@@ -61,17 +61,19 @@ class YodaContextBenchmarkTests(unittest.TestCase):
             "force_slow_graph": True,
         }
 
-        def gbrain_result(*args, **kwargs):
-            del kwargs
-            if args[0] == "get":
-                return "# Tony Guan"
-            if args[0] == "backlinks":
-                return "[]"
-            if args[0] in {"query", "search"}:
-                return ""
-            raise AssertionError(args)
+        def gbrain_result(tool_name, payload=None, timeout=30):
+            del timeout
+            if tool_name == "get_page":
+                return {"content": "# Tony Guan"}
+            if tool_name in {"get_backlinks", "query", "search", "list_pages"}:
+                return []
+            if tool_name == "get_tags":
+                return []
+            raise AssertionError((tool_name, payload))
 
-        with mock.patch.object(benchmark.server, "run_gbrain", side_effect=gbrain_result):
+        with mock.patch.object(
+            benchmark.server, "yoda_gbrain_call_tool", side_effect=gbrain_result
+        ):
             result = benchmark.run_case(case, store=benchmark.server.GraphStore())
 
         self.assertFalse(result["cold_context_degraded"])

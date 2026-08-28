@@ -11,6 +11,7 @@ import json
 import math
 import mimetypes
 import os
+import queue
 import re
 import selectors
 import shutil
@@ -194,6 +195,7 @@ DEFAULT_CONFIG = {
     "yoda_timeout_seconds": 45,
     "yoda_graph_query_timeout_seconds": 30,
     "yoda_broad_graph_budget_seconds": 8,
+    "yoda_gbrain_mcp_sessions": 5,
     "yoda_node_path": "",
     "yoda_node_fallback_paths": [],
 }
@@ -255,6 +257,12 @@ def apply_runtime_config(config):
         search_session.close()
         if was_active:
             search_session.prewarm_async()
+    yoda_pool = globals().get("YODA_GBRAIN_MCP_POOL")
+    if yoda_pool is not None:
+        was_active = yoda_pool.active
+        yoda_pool.close()
+        if was_active:
+            yoda_pool.prewarm_async()
 
 
 CONFIG = load_config()
@@ -317,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.204"
+UI_VERSION = "V1.0.205"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1925,6 +1933,174 @@ class PersistentGBrainSearch:
 PERSISTENT_GBRAIN_SEARCH = PersistentGBrainSearch()
 
 
+class BoundedGBrainMCPPool:
+    """A fixed set of local MCP sessions for concurrent Ask Yoda reads."""
+
+    def __init__(self, size=None, session_factory=PersistentGBrainSearch):
+        configured_size = size
+        if configured_size is None:
+            configured_size = os.environ.get(
+                "MEMORY_STARGRAPH_YODA_GBRAIN_MCP_SESSIONS",
+                CONFIG.get("yoda_gbrain_mcp_sessions", 5),
+            )
+        self.size = max(1, min(8, int(configured_size)))
+        self.sessions = [session_factory() for _ in range(self.size)]
+        self.available = queue.Queue(maxsize=self.size)
+        for session in self.sessions:
+            self.available.put_nowait(session)
+        self.active = False
+        self.metrics_lock = threading.Lock()
+        self.metrics = {
+            "tool_calls": 0,
+            "tool_successes": 0,
+            "tool_errors": 0,
+            "tool_timeouts": 0,
+            "busy_rejections": 0,
+            "tool_latency_ms_total": 0.0,
+            "tool_latency_ms_max": 0.0,
+            "tool_calls_by_name": {},
+            "last_error": None,
+            "last_error_at": None,
+        }
+
+    def _record(self, name, elapsed_ms, exc=None, *, busy=False):
+        with self.metrics_lock:
+            self.metrics["tool_calls"] += 1
+            by_name = self.metrics["tool_calls_by_name"]
+            by_name[name] = int(by_name.get(name, 0)) + 1
+            self.metrics["tool_latency_ms_total"] += elapsed_ms
+            self.metrics["tool_latency_ms_max"] = max(
+                self.metrics["tool_latency_ms_max"], elapsed_ms
+            )
+            if exc is None:
+                self.metrics["tool_successes"] += 1
+                return
+            self.metrics["tool_errors"] += 1
+            if isinstance(exc, TimeoutError):
+                self.metrics["tool_timeouts"] += 1
+            if busy:
+                self.metrics["busy_rejections"] += 1
+            self.metrics["last_error"] = str(exc)[:300]
+            self.metrics["last_error_at"] = iso_now()
+
+    def call_tool(self, name, payload=None, timeout=30):
+        started = time.monotonic()
+        timeout_seconds = max(0.1, float(timeout))
+        try:
+            session = self.available.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            error = RuntimeError("Ask Yoda GBrain MCP pool is busy")
+            self._record(
+                str(name),
+                round((time.monotonic() - started) * 1000, 3),
+                error,
+                busy=True,
+            )
+            raise error from exc
+        recorded_error = None
+        try:
+            remaining = timeout_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                raise TimeoutError("Ask Yoda GBrain MCP request timed out before dispatch")
+            return session.call_tool(name, payload, timeout=remaining)
+        except Exception as exc:
+            recorded_error = exc
+            raise
+        finally:
+            self.available.put_nowait(session)
+            self._record(
+                str(name),
+                round((time.monotonic() - started) * 1000, 3),
+                recorded_error,
+            )
+
+    def close(self):
+        self.active = False
+        for session in self.sessions:
+            session.close()
+
+    def prewarm_async(self, timeout=15):
+        self.active = True
+        return sum(bool(session.prewarm_async(timeout=timeout)) for session in self.sessions)
+
+    def metrics_snapshot(self):
+        with self.metrics_lock:
+            metrics = dict(self.metrics)
+            metrics["tool_calls_by_name"] = dict(metrics["tool_calls_by_name"])
+        calls = int(metrics["tool_calls"])
+        metrics["tool_latency_ms_average"] = round(
+            float(metrics["tool_latency_ms_total"]) / calls, 3
+        ) if calls else 0.0
+        metrics["tool_latency_ms_total"] = round(
+            float(metrics["tool_latency_ms_total"]), 3
+        )
+        metrics["tool_latency_ms_max"] = round(
+            float(metrics["tool_latency_ms_max"]), 3
+        )
+        metrics["cli_fallbacks"] = 0
+        return metrics
+
+    def status(self):
+        states = [session.status() for session in self.sessions]
+        available = self.available.qsize()
+        return {
+            "active": self.active,
+            "pool_size": self.size,
+            "ready_sessions": sum(bool(state.get("ready")) for state in states),
+            "in_use_sessions": self.size - available,
+            "busy": available == 0,
+            "structured_only": True,
+            "subprocess_fallback": False,
+            "metrics": self.metrics_snapshot(),
+        }
+
+
+YODA_GBRAIN_MCP_TOOL_NAMES = frozenset(
+    {
+        "get_page",
+        "query",
+        "search",
+        "get_backlinks",
+        "traverse_graph",
+        "list_pages",
+        "get_tags",
+        "think",
+    }
+)
+YODA_GBRAIN_ROW_TOOL_NAMES = frozenset(
+    {"query", "search", "get_backlinks", "traverse_graph", "list_pages"}
+)
+YODA_GBRAIN_MCP_POOL = BoundedGBrainMCPPool()
+
+
+def yoda_gbrain_call_tool(tool_name, payload=None, timeout=30):
+    """Call an allowlisted structured MCP tool without any CLI fallback."""
+    name = str(tool_name or "").strip()
+    if name not in YODA_GBRAIN_MCP_TOOL_NAMES:
+        raise ValueError(f"Ask Yoda GBrain MCP tool is not allowed: {name or 'empty'}")
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Ask Yoda GBrain MCP payload must be an object")
+    value = YODA_GBRAIN_MCP_POOL.call_tool(name, dict(payload or {}), timeout=timeout)
+    if name == "get_page":
+        if not isinstance(value, dict) or not isinstance(value.get("content"), str):
+            raise RuntimeError("Ask Yoda GBrain get_page returned invalid structured content")
+        return value
+    if name in YODA_GBRAIN_ROW_TOOL_NAMES:
+        if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+            raise RuntimeError(f"Ask Yoda GBrain {name} returned invalid structured rows")
+        return value
+    if name == "get_tags":
+        tags = value.get("tags") if isinstance(value, dict) else value
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise RuntimeError("Ask Yoda GBrain get_tags returned invalid structured tags")
+        return sorted({tag.strip() for tag in tags if tag.strip()})
+    if name == "think":
+        if not isinstance(value, dict):
+            raise RuntimeError("Ask Yoda GBrain think returned invalid structured content")
+        return value
+    raise RuntimeError(f"Ask Yoda GBrain MCP validator is missing for {name}")
+
+
 def run_gbrain_subprocess(*args, input_text=None, timeout=20):
     if not GBRAIN.exists():
         raise FileNotFoundError(f"gbrain not found at {GBRAIN}")
@@ -3457,13 +3633,13 @@ def run_gbrain_think_yoda(prompt, config, return_details=False):
     details = yoda_details("gbrain_think", model, config["timeout"])
     question = extract_yoda_prompt_field(prompt, "Question") or prompt
     selected_slug = extract_yoda_prompt_field(prompt, "Selected node")
-    payload = {"question": question}
+    payload = {"question": question, "save": False, "take": False}
     if selected_slug:
         payload["anchor"] = selected_slug
     if model:
         payload["model"] = model
     try:
-        result = gbrain_call_tool("think", payload, timeout=config["timeout"])
+        result = yoda_gbrain_call_tool("think", payload, timeout=config["timeout"])
         if isinstance(result, dict):
             answer = str(
                 result.get("answer")
@@ -7226,7 +7402,7 @@ class GraphStore:
             }
             return {slug: futures[slug].result() for slug in ordered_slugs}
 
-    def get_yoda_search_output(self, query):
+    def get_yoda_search_results(self, query):
         normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
         cache_key = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
         cached = self.yoda_search_cache.get(cache_key)
@@ -7234,49 +7410,77 @@ class GraphStore:
             return cached
 
         def load():
-            return run_gbrain(
+            return yoda_gbrain_call_tool(
                 "query",
-                query,
-                "--no-expand",
-                "--adaptive-return",
-                "true",
-                "--limit",
-                "10",
-                "--relational",
-                "true",
-            ) or ""
+                {
+                    "query": normalized_query,
+                    "expand": False,
+                    "adaptive_return": True,
+                    "limit": 10,
+                    "relational": True,
+                },
+                timeout=20,
+            )
 
-        output, _load_status = self.yoda_search_cache.load_once(
+        rows, _load_status = self.yoda_search_cache.load_once(
             cache_key,
             load,
             timeout=20,
         )
-        if output is None:
+        if rows is None:
             raise RuntimeError("GBrain Yoda retrieval was unavailable")
-        return output
+        return rows
+
+    def get_yoda_search_output(self, query):
+        return format_mcp_search_results(self.get_yoda_search_results(query))
+
+    def get_yoda_page(self, slug, timeout=20):
+        normalized_slug = str(slug or "").strip()
+        if not normalized_slug:
+            raise ValueError("Ask Yoda page slug is required")
+        cache_key = hashlib.sha256(normalized_slug.encode("utf-8")).hexdigest()
+        cached = self.yoda_source_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        page, _load_status = self.yoda_source_cache.load_once(
+            cache_key,
+            lambda: yoda_gbrain_call_tool(
+                "get_page",
+                {"slug": normalized_slug, "include_content": True},
+                timeout=timeout,
+            ),
+            timeout=max(1, timeout),
+        )
+        if page is None:
+            raise RuntimeError(f"Ask Yoda page retrieval was unavailable: {normalized_slug}")
+        return page
+
+    def get_yoda_page_content(self, slug, timeout=20):
+        return str(self.get_yoda_page(slug, timeout=timeout)["content"])
 
     def get_yoda_source_pages(self, slugs):
         ordered_slugs = list(dict.fromkeys(str(slug) for slug in slugs if slug))
         if not ordered_slugs:
             return {}
 
-        def load_slug(slug):
-            cache_key = hashlib.sha256(slug.encode("utf-8")).hexdigest()
-            cached = self.yoda_source_cache.get(cache_key)
-            if cached is not None:
-                return cached
-            page, _load_status = self.yoda_source_cache.load_once(
-                cache_key,
-                lambda: self.get_entity_raw(slug),
-                timeout=20,
-            )
-            return page
-
-        workers = min(4, len(ordered_slugs))
+        workers = min(YODA_GBRAIN_MCP_POOL.size, len(ordered_slugs))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {slug: executor.submit(load_slug, slug) for slug in ordered_slugs}
-            pages = {slug: futures[slug].result() for slug in ordered_slugs}
+            futures = {
+                slug: executor.submit(self.get_yoda_page, slug)
+                for slug in ordered_slugs
+            }
+            pages = {}
+            for slug in ordered_slugs:
+                try:
+                    pages[slug] = futures[slug].result()
+                except Exception:  # noqa: BLE001
+                    pages[slug] = None
         return {slug: pages.get(slug) for slug in ordered_slugs}
+
+    def get_yoda_entity_media(self, slug):
+        return ensure_media_references_available(
+            parse_media_references(self.get_yoda_page_content(slug))
+        )
 
     def get_entity_media(self, slug):
         raw = self.get_entity_raw(slug)
@@ -7349,7 +7553,7 @@ class GraphStore:
         normalized_question = question.lower()
 
         if any(token in normalized_question for token in ("media", "image", "images", "photo", "picture", "attachment", "file")):
-            media_items = self.get_entity_media(slug) or []
+            media_items = self.get_yoda_entity_media(slug) or []
             if media_items:
                 media_lines = []
                 for item in media_items[:12]:
@@ -7362,23 +7566,34 @@ class GraphStore:
                 sections.append("Detected media:\nNo media references were found on this node.")
 
         try:
-            graph_output = run_gbrain("graph-query", slug, "--direction", "both", "--depth", "1", timeout=yoda_runtime_config()["graph_query_timeout"])
-            sections.append("Direct relationship context:\n" + str(graph_output or ""))
+            graph_payload = {"slug": slug, "direction": "both", "depth": 1}
+            graph_rows = yoda_gbrain_call_tool(
+                "traverse_graph",
+                graph_payload,
+                timeout=yoda_runtime_config()["graph_query_timeout"],
+            )
+            sections.append(
+                "Direct relationship context:\n"
+                + format_mcp_graph_query(graph_rows, graph_payload)
+            )
         except Exception as exc:  # noqa: BLE001
             sections.append(f"Direct relationship context unavailable: {exc}")
 
         query_text = f"{question} {slug}"
-        search_output = run_gbrain(
+        search_rows = yoda_gbrain_call_tool(
             "query",
-            query_text,
-            "--adaptive-return",
-            "true",
-            "--limit",
-            "8",
-            "--relational",
-            "true",
+            {
+                "query": query_text,
+                "adaptive_return": True,
+                "limit": 8,
+                "relational": True,
+            },
+            timeout=20,
         )
-        sections.append("Question-specific gbrain retrieval:\n" + str(search_output or ""))
+        sections.append(
+            "Question-specific gbrain retrieval:\n"
+            + format_mcp_search_results(search_rows)
+        )
         return "\n\n".join(sections)
 
     def build_yoda_stable_context(self, slug, depth="4"):
@@ -7388,8 +7603,8 @@ class GraphStore:
 
         def timed_selected_node():
             started = time.perf_counter()
-            raw = self.get_entity_raw(slug) or ""
-            return raw, int((time.perf_counter() - started) * 1000)
+            page = self.get_yoda_page(slug)
+            return page, int((time.perf_counter() - started) * 1000)
 
         def timed_graph():
             started = time.perf_counter()
@@ -7397,14 +7612,15 @@ class GraphStore:
             degraded_reason = ""
             broad_graph_status = "available"
             broad_graph_unavailable_reason = ""
+            payload = {
+                "slug": slug,
+                "direction": "both",
+                "depth": yoda_depth,
+            }
             try:
-                output = run_gbrain(
-                    "graph-query",
-                    slug,
-                    "--direction",
-                    "both",
-                    "--depth",
-                    str(yoda_depth),
+                rows = yoda_gbrain_call_tool(
+                    "traverse_graph",
+                    payload,
                     timeout=broad_graph_budget,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -7412,12 +7628,10 @@ class GraphStore:
                 broad_graph_status = "optional_timeout" if broad_graph_unavailable_reason == "broad_graph_timeout" else "unavailable"
                 degraded = broad_graph_status != "optional_timeout"
                 degraded_reason = "" if broad_graph_status == "optional_timeout" else broad_graph_unavailable_reason
-                output = (
-                    "Broad graph context unavailable within retrieval budget. "
-                    "Use selected-node, backlink, search, and targeted relationship evidence below."
-                )
+                rows = []
             return (
-                output,
+                rows,
+                payload,
                 int((time.perf_counter() - started) * 1000),
                 degraded,
                 degraded_reason,
@@ -7428,29 +7642,52 @@ class GraphStore:
         def timed_backlinks():
             started = time.perf_counter()
             try:
-                output = run_gbrain("backlinks", slug)
-            except Exception as exc:  # noqa: BLE001
-                output = f"Backlink context unavailable: {exc}"
-            return output, int((time.perf_counter() - started) * 1000)
+                rows = yoda_gbrain_call_tool(
+                    "get_backlinks", {"slug": slug}, timeout=20
+                )
+                status = "available"
+            except Exception:  # noqa: BLE001
+                rows = []
+                status = "unavailable"
+            return rows, status, int((time.perf_counter() - started) * 1000)
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        def timed_tags():
+            started = time.perf_counter()
+            try:
+                tags = yoda_gbrain_call_tool(
+                    "get_tags", {"slug": slug}, timeout=20
+                )
+                status = "available"
+            except Exception:  # noqa: BLE001
+                tags = []
+                status = "unavailable"
+            return tags, status, int((time.perf_counter() - started) * 1000)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
             selected_future = executor.submit(timed_selected_node)
             graph_future = executor.submit(timed_graph)
             backlinks_future = executor.submit(timed_backlinks)
-            selected_node, selected_ms = selected_future.result()
+            tags_future = executor.submit(timed_tags)
+            selected_page, selected_ms = selected_future.result()
             (
-                graph_output,
+                graph_rows,
+                graph_payload,
                 graph_ms,
                 degraded,
                 degraded_reason,
                 broad_graph_status,
                 broad_graph_unavailable_reason,
             ) = graph_future.result()
-            backlink_output, backlinks_ms = backlinks_future.result()
+            backlink_rows, backlinks_status, backlinks_ms = backlinks_future.result()
+            tags, tags_status, tags_ms = tags_future.result()
         return {
-            "selected_node": selected_node,
-            "graph": graph_output,
-            "backlinks": backlink_output,
+            "selected_page": selected_page,
+            "graph_rows": graph_rows,
+            "graph_payload": graph_payload,
+            "backlink_rows": backlink_rows,
+            "backlinks_status": backlinks_status,
+            "tags": tags,
+            "tags_status": tags_status,
             "degraded": degraded,
             "degraded_reason": degraded_reason,
             "broad_graph_status": broad_graph_status,
@@ -7460,6 +7697,7 @@ class GraphStore:
                 "selected_node": selected_ms,
                 "graph": graph_ms,
                 "backlinks": backlinks_ms,
+                "tags": tags_ms,
             },
         }
 
@@ -7486,7 +7724,7 @@ class GraphStore:
         stable_context = dict(cached_context)
         if cache_status != "miss":
             stable_context["timings"] = {
-                key: 0 for key in ("selected_node", "graph", "backlinks")
+                key: 0 for key in ("selected_node", "graph", "backlinks", "tags")
             }
         return stable_context, cache_status
 
@@ -7507,29 +7745,31 @@ class GraphStore:
             if normalized_search_identity(phrase) in excluded_identities:
                 continue
             try:
-                search_output = run_gbrain("search", phrase, "--limit", "5")
+                search_rows = yoda_gbrain_call_tool(
+                    "search", {"query": phrase, "limit": 5}, timeout=20
+                )
             except Exception:  # noqa: BLE001
                 continue
-            candidate = preferred_entity_slug(search_output, phrase)
+            candidate = preferred_entity_slug(
+                format_mcp_search_results(search_rows), phrase
+            )
             if not candidate or candidate in seen_candidates or candidate in excluded:
                 continue
             seen_candidates.add(candidate)
             lines.extend([f"### {phrase} -> {candidate}"])
             try:
-                entity_raw = run_gbrain("get", candidate)
+                entity_raw = self.get_yoda_page_content(candidate)
             except Exception as exc:  # noqa: BLE001
                 entity_raw = f"Unable to read {candidate}: {exc}"
             if entity_raw:
                 lines.append(str(entity_raw)[:1800])
             try:
-                backlinks_raw = run_gbrain("backlinks", candidate)
+                records = yoda_gbrain_call_tool(
+                    "get_backlinks", {"slug": candidate}, timeout=20
+                )
                 backlink_reads += 1
             except Exception as exc:  # noqa: BLE001
                 lines.append(f"Backlinks unavailable for {candidate}: {exc}")
-                continue
-            records = extract_json_list(str(backlinks_raw or ""))
-            if not isinstance(records, list):
-                lines.append(str(backlinks_raw or "")[:3000])
                 continue
             compact_edges = []
             for record in records[:60]:
@@ -7558,7 +7798,7 @@ class GraphStore:
             lines.append("Relationship source node reads:")
         for source, link_type, candidate in relationship_sources[:6]:
             try:
-                source_raw = run_gbrain("get", source)
+                source_raw = self.get_yoda_page_content(source)
             except Exception as exc:  # noqa: BLE001
                 source_raw = f"Unable to read {source}: {exc}"
             lines.extend(
@@ -7606,7 +7846,11 @@ class GraphStore:
         if not is_todo_question:
             return {"text": "", "counts": {}}
 
-        root_raw = todo_root_loader() if todo_root_loader is not None else self.get_entity_raw(todo_root)
+        root_raw = (
+            todo_root_loader()
+            if todo_root_loader is not None
+            else self.get_yoda_page_content(todo_root)
+        )
         root_raw = root_raw or ""
         rows = parse_memory_starmap_todo_rows(root_raw)
         if not rows:
@@ -7643,9 +7887,12 @@ class GraphStore:
         if child_slugs:
             lines.extend(["", "Direct current TODO child-node reads:"])
         selected_child_slugs = child_slugs[:8]
-        child_pages = self.get_entities_raw(node_slug for _, node_slug in selected_child_slugs)
+        child_pages = self.get_yoda_source_pages(
+            node_slug for _, node_slug in selected_child_slugs
+        )
         for item_id, node_slug in selected_child_slugs:
-            child_raw = child_pages.get(node_slug) or ""
+            child_page = child_pages.get(node_slug) or {}
+            child_raw = str(child_page.get("content") or "")
             if not child_raw:
                 continue
             child_reads += 1
@@ -7692,7 +7939,11 @@ class GraphStore:
         if not any(token in question_text for token in operational_tokens):
             return {"text": "", "counts": {}}
 
-        root_raw = todo_root_loader() if todo_root_loader is not None else self.get_entity_raw(todo_root)
+        root_raw = (
+            todo_root_loader()
+            if todo_root_loader is not None
+            else self.get_yoda_page_content(todo_root)
+        )
         root_raw = root_raw or ""
         rows = parse_memory_starmap_todo_rows(root_raw)
         if not rows:
@@ -7735,9 +7986,12 @@ class GraphStore:
         if child_slugs:
             lines.extend(["", "Direct completed remediation child-node reads:"])
         selected_child_slugs = child_slugs[:6]
-        child_pages = self.get_entities_raw(node_slug for _, node_slug in selected_child_slugs)
+        child_pages = self.get_yoda_source_pages(
+            node_slug for _, node_slug in selected_child_slugs
+        )
         for item_id, node_slug in selected_child_slugs:
-            child_raw = child_pages.get(node_slug) or ""
+            child_page = child_pages.get(node_slug) or {}
+            child_raw = str(child_page.get("content") or "")
             if not child_raw:
                 continue
             child_reads += 1
@@ -7796,13 +8050,28 @@ class GraphStore:
                         "They may be wrong; replace them when current GBrain evidence contradicts them.",
                     ]
                 )
-        raw = stable_context.get("selected_node") or ""
+        selected_page = stable_context.get("selected_page")
+        raw = (
+            str(selected_page.get("content") or "")
+            if isinstance(selected_page, dict)
+            else str(stable_context.get("selected_node") or "")
+        )
         if raw:
             lines.extend(["", "Selected node content:", raw[:6000]])
-        graph_text = str(stable_context.get("graph") or "")
+        graph_rows = stable_context.get("graph_rows")
+        graph_payload = stable_context.get("graph_payload")
+        if isinstance(graph_rows, list) and isinstance(graph_payload, dict):
+            graph_text = format_mcp_graph_query(graph_rows, graph_payload)
+        else:
+            graph_text = str(stable_context.get("graph") or "")
         graph_preview = graph_text[:6000]
         broad_graph_status = str(stable_context.get("broad_graph_status") or "available")
         broad_graph_unavailable_reason = str(stable_context.get("broad_graph_unavailable_reason") or "")
+        if broad_graph_status != "available" and not graph_preview:
+            graph_preview = (
+                "Broad graph context unavailable within retrieval budget. "
+                "Use selected-node, backlink, search, and targeted relationship evidence below."
+            )
         lines.extend(
             [
                 "",
@@ -7820,7 +8089,12 @@ class GraphStore:
                     "- selected-node, backlink, search, direct-read, and targeted relationship evidence remain available when present.",
                 ]
             )
-        backlink_text = str(stable_context.get("backlinks") or "")
+        backlink_rows = stable_context.get("backlink_rows")
+        backlink_text = (
+            format_mcp_json(backlink_rows)
+            if isinstance(backlink_rows, list)
+            else str(stable_context.get("backlinks") or "")
+        )
         backlink_preview = backlink_text[:4000]
         lines.extend(
             [
@@ -7829,13 +8103,30 @@ class GraphStore:
                 backlink_preview,
             ]
         )
+        tags = stable_context.get("tags")
+        if isinstance(tags, list):
+            lines.extend(
+                [
+                    "",
+                    "Selected-node tags:",
+                    ", ".join(tags) if tags else "No tags returned.",
+                ]
+            )
+            if stable_context.get("tags_status") == "unavailable":
+                lines.append("Tag context unavailable from the structured retrieval lane.")
         todo_root_cache = []
         todo_root_lock = threading.Lock()
 
         def load_todo_root():
             with todo_root_lock:
                 if not todo_root_cache:
-                    todo_root_cache.append(self.get_entity_raw("notes/memory-starmap-todo-list") or "")
+                    try:
+                        content = self.get_yoda_page_content(
+                            "notes/memory-starmap-todo-list"
+                        )
+                    except Exception:  # noqa: BLE001
+                        content = ""
+                    todo_root_cache.append(content or "")
                 return todo_root_cache[0]
 
         def build_timed_context(builder):
@@ -7850,10 +8141,12 @@ class GraphStore:
         def load_search_output():
             started = time.perf_counter()
             try:
-                output = self.get_yoda_search_output(f"{effective_question} {slug}")
-            except Exception as exc:  # noqa: BLE001
-                output = f"Broader retrieval unavailable: {exc}"
-            return output, int((time.perf_counter() - started) * 1000)
+                rows = self.get_yoda_search_results(f"{effective_question} {slug}")
+                unavailable = False
+            except Exception:  # noqa: BLE001
+                rows = []
+                unavailable = True
+            return rows, unavailable, int((time.perf_counter() - started) * 1000)
 
         with ThreadPoolExecutor(max_workers=3) as executor:
             current_todo_future = executor.submit(
@@ -7867,7 +8160,7 @@ class GraphStore:
             search_output_future = executor.submit(load_search_output)
             current_todo_context, current_todo_ms = current_todo_future.result()
             operational_context, operational_ms = operational_future.result()
-            search_output, search_ms = search_output_future.result()
+            search_rows, search_unavailable, search_ms = search_output_future.result()
 
         current_todo_text = current_todo_context.get("text") or ""
         if current_todo_text:
@@ -7890,10 +8183,15 @@ class GraphStore:
             counts.update(operational_context.get("counts") or {})
             trace["operational_state"] = operational_ms
         trace["search"] = search_ms
+        search_output = format_mcp_search_results(search_rows)
+        if search_unavailable:
+            search_output = "Broader retrieval unavailable from the structured retrieval lane."
         lines.extend(["", "Broader retrieval context:", str(search_output or "")[:6000]])
-        search_slugs = [item["slug"] for item in parse_search_results(str(search_output or ""))]
-        if not search_slugs:
-            search_slugs = parse_slugs(str(search_output or ""))
+        search_slugs = [
+            str(item.get("slug") or "").strip()
+            for item in search_rows
+            if isinstance(item, dict) and str(item.get("slug") or "").strip()
+        ]
         direct_read_limit = 2 if is_targeted_relationship_question(effective_question) else min(4, yoda_depth)
         likely_slugs = [
             candidate
@@ -7926,9 +8224,11 @@ class GraphStore:
             lines.append("")
             lines.append("Direct reads from likely source nodes:")
             for candidate in likely_slugs:
-                candidate_raw = candidate_pages.get(candidate)
-                if candidate_raw is None:
+                candidate_page = candidate_pages.get(candidate)
+                if not isinstance(candidate_page, dict):
                     candidate_raw = f"Unable to read {candidate}"
+                else:
+                    candidate_raw = str(candidate_page.get("content") or "")
                 lines.extend([f"## {candidate}", str(candidate_raw or "")[:2200]])
         trace["direct_reads"] = direct_reads_ms
         targeted_text = targeted_context.get("text") or ""
@@ -10079,6 +10379,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "stats": graph.get("stats") if graph else None,
                     "attachment_storage": attachment_storage_status(),
                     "persistent_search": PERSISTENT_GBRAIN_SEARCH.status(),
+                    "ask_yoda_mcp": YODA_GBRAIN_MCP_POOL.status(),
                 }
             )
         if parsed.path == "/api/setup-diagnostics":
@@ -10795,6 +11096,7 @@ def main():
             server.socket = context.wrap_socket(server.socket, server_side=True)
             scheme = "https"
         PERSISTENT_GBRAIN_SEARCH.prewarm_async()
+        YODA_GBRAIN_MCP_POOL.prewarm_async()
         start_openclaw_profile_activation_runtime()
         print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
         server.serve_forever()
@@ -10803,6 +11105,7 @@ def main():
     finally:
         server.server_close()
         PERSISTENT_GBRAIN_SEARCH.close()
+        YODA_GBRAIN_MCP_POOL.close()
         stop_openclaw_profile_activation_runtime()
 
 
