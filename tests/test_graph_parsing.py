@@ -488,6 +488,44 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(pool.metrics_snapshot()["cli_fallbacks"], 0)
         self.assertEqual(pool.metrics_snapshot()["tool_successes"], 5)
 
+    def test_yoda_mcp_pool_prewarms_each_session_with_a_safe_data_read(self):
+        calls = []
+
+        class FakeSession:
+            def prewarm_async(
+                self,
+                timeout=15,
+                tool_name=None,
+                tool_payload=None,
+            ):
+                calls.append((timeout, tool_name, tool_payload))
+                return True
+
+            def close(self):
+                return None
+
+            def status(self):
+                return {"ready": True}
+
+        pool = BoundedGBrainMCPPool(size=3, session_factory=FakeSession)
+
+        self.assertEqual(pool.prewarm_async(timeout=7), 3)
+        expected_probe = {
+            "query": "Memory Stargraph",
+            "expand": False,
+            "adaptive_return": True,
+            "limit": 10,
+            "relational": True,
+        }
+        self.assertEqual(
+            calls,
+            [
+                (7, "query", expected_probe),
+                (7, "query", expected_probe),
+                (7, "query", expected_probe),
+            ],
+        )
+
     def test_yoda_mcp_pool_fails_closed_when_busy_or_timed_out(self):
         release = threading.Event()
 

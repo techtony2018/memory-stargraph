@@ -325,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.207"
+UI_VERSION = "V1.0.208"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1912,7 +1912,12 @@ class PersistentGBrainSearch:
             raise ValueError("persistent search requires a search command")
         return self.read_cli_output(args, timeout)
 
-    def prewarm_async(self, timeout=15):
+    def prewarm_async(
+        self,
+        timeout=15,
+        tool_name=None,
+        tool_payload=None,
+    ):
         self.active = True
         if self.prewarming or (self.process is not None and self.process.poll() is None):
             return False
@@ -1923,7 +1928,14 @@ class PersistentGBrainSearch:
                 self.prewarming = False
                 return
             try:
-                self._start_locked(time.monotonic() + timeout)
+                deadline = time.monotonic() + timeout
+                self._start_locked(deadline)
+                if tool_name:
+                    self._call_tool_locked(
+                        str(tool_name),
+                        dict(tool_payload or {}),
+                        deadline,
+                    )
             except Exception:  # noqa: BLE001
                 self._close_locked()
             finally:
@@ -2025,7 +2037,22 @@ class BoundedGBrainMCPPool:
 
     def prewarm_async(self, timeout=15):
         self.active = True
-        return sum(bool(session.prewarm_async(timeout=timeout)) for session in self.sessions)
+        return sum(
+            bool(
+                session.prewarm_async(
+                    timeout=timeout,
+                    tool_name="query",
+                    tool_payload={
+                        "query": "Memory Stargraph",
+                        "expand": False,
+                        "adaptive_return": True,
+                        "limit": 10,
+                        "relational": True,
+                    },
+                )
+            )
+            for session in self.sessions
+        )
 
     def metrics_snapshot(self):
         with self.metrics_lock:
