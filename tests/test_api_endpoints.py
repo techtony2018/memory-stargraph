@@ -2714,6 +2714,18 @@ class ApiEndpointTests(unittest.TestCase):
         ):
             self.assertEqual(server.terminal_sre_evidence_pairs(), [])
 
+    def test_runtime_gbrain_version_reuses_initialized_persistent_server_info(self):
+        server.runtime_gbrain_version.cache_clear()
+        original_version = server.PERSISTENT_GBRAIN_SEARCH.server_version
+        try:
+            server.PERSISTENT_GBRAIN_SEARCH.server_version = "V0.46.28.0"
+            with mock.patch("server.subprocess.run") as run:
+                self.assertEqual(server.runtime_gbrain_version(), "V0.46.28.0")
+            run.assert_not_called()
+        finally:
+            server.PERSISTENT_GBRAIN_SEARCH.server_version = original_version
+            server.runtime_gbrain_version.cache_clear()
+
     def test_runtime_gbrain_version_is_bounded_and_truthful(self):
         server.runtime_gbrain_version.cache_clear()
         try:

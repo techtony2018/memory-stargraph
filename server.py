@@ -325,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.206"
+UI_VERSION = "V1.0.207"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1572,6 +1572,7 @@ class PersistentGBrainSearch:
         self.metrics_lock = threading.Lock()
         self.process = None
         self.request_id = 0
+        self.server_version = ""
         self.active = False
         self.prewarming = False
         self.metrics = {
@@ -1641,6 +1642,7 @@ class PersistentGBrainSearch:
         process = self.process
         self.process = None
         self.request_id = 0
+        self.server_version = ""
         if process is None:
             return
         if process.poll() is None:
@@ -1756,8 +1758,10 @@ class PersistentGBrainSearch:
             },
             deadline,
         )
-        if not isinstance(initialized.get("serverInfo"), dict):
+        server_info = initialized.get("serverInfo")
+        if not isinstance(server_info, dict):
             raise RuntimeError("persistent GBrain search initialization was invalid")
+        self.server_version = normalize_gbrain_version(server_info.get("version"))
         process.stdin.write(
             json.dumps(
                 {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
@@ -8745,6 +8749,14 @@ def attachment_storage_status():
     return {"available": False, "mode": "unavailable", "detail": "durable storage unavailable"}
 
 
+def normalize_gbrain_version(value):
+    normalized = str(value or "").strip().removeprefix("V").removeprefix("v")
+    match = re.search(
+        r"\b(\d+\.\d+\.\d+(?:\.\d+)?)\b", normalized
+    )
+    return f"V{match.group(1)}" if match else ""
+
+
 @lru_cache(maxsize=1)
 def _cached_runtime_gbrain_version():
     try:
@@ -8759,11 +8771,13 @@ def _cached_runtime_gbrain_version():
         return ""
     if result.returncode != 0:
         return ""
-    match = re.search(r"\b(\d+\.\d+\.\d+(?:\.\d+)?)\b", f"{result.stdout}\n{result.stderr}")
-    return f"V{match.group(1)}" if match else ""
+    return normalize_gbrain_version(f"{result.stdout}\n{result.stderr}")
 
 
 def runtime_gbrain_version():
+    persistent_version = normalize_gbrain_version(PERSISTENT_GBRAIN_SEARCH.server_version)
+    if persistent_version:
+        return persistent_version
     version = _cached_runtime_gbrain_version()
     if version:
         return version
