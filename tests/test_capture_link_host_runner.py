@@ -355,6 +355,8 @@ tags:
         self.assertEqual(evidence["metrics"]["attempted_enrichments"], 1)
         self.assertEqual(evidence["metrics"]["successful_enrichments"], 1)
         self.assertIn("people/solo", pages)
+        self.assertTrue(pages["people/solo"].endswith("\n"))
+        self.assertFalse(pages["people/solo"].endswith("\n\n"))
 
     def test_already_sufficient_enrichment_records_exclusion_receipt(self):
         values = runner.validate_request(self.make_request())
@@ -386,6 +388,8 @@ tags:
         self.assertTrue(outcome["verification"]["review_marker_present"])
         self.assertIn("Capture Link Already-Sufficient Review Receipt", pages["organizations/repeated"])
         self.assertIn("already_sufficient_existing_enrichment_review", pages["organizations/repeated"])
+        self.assertTrue(pages["organizations/repeated"].endswith("\n"))
+        self.assertFalse(pages["organizations/repeated"].endswith("\n\n"))
         self.assertIsNotNone(runner.recent_enrichment_review(pages["organizations/repeated"]))
         self.assertEqual(put_entity.call_count, 1)
 

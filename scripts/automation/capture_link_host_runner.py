@@ -1155,11 +1155,11 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
             f"- Deficiencies: {', '.join(deficiencies) if deficiencies else 'none'}\n"
             f"- Expires when: source entity content changes materially, new authoritative public sources appear, or the review window lapses\n"
         )
-        after = before.rstrip() + receipt_section + "\n"
+        after = before.rstrip() + receipt_section
         persistence = put_entity(slug, after)
     else:
         outcome = "enriched_review_metadata"
-        after = before.rstrip() + review_section + "\n"
+        after = before.rstrip() + review_section
         persistence = put_entity(slug, after)
     readback = get_entity(slug)
     if review_marker not in readback:
