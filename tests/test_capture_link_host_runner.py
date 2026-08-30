@@ -78,6 +78,51 @@ tags:
 
         return page_store, mock.patch.object(runner, "get_entity", side_effect=fake_get), mock.patch.object(runner, "put_entity", side_effect=fake_put)
 
+    def test_put_entity_retries_stale_api_readback_without_replaying_save(self):
+        expected = "---\ntype: organization\nstatus: current\n---\n\n# Entity\n\nNew receipt.\n"
+        stale = "---\ntype: organization\nstatus: current\n---\n\n# Entity\n"
+        normalized = "---\nstatus: current\ntype: organization\ncaptured_at: '2026-08-30T00:00:00-07:00'\n---\n\n# Entity\n\nNew receipt."
+        with (
+            mock.patch.object(runner.capture, "worker_api_post_json", return_value={"ok": True}) as save,
+            mock.patch.object(runner.capture, "worker_api_get", side_effect=[stale, normalized]) as read,
+            mock.patch.object(runner, "run_gbrain") as gbrain,
+            mock.patch.object(runner.time, "sleep") as sleep,
+        ):
+            evidence = runner.put_entity("organizations/example", expected)
+
+        self.assertTrue(evidence["readback_verified"])
+        self.assertEqual(evidence["readback_attempt"], 2)
+        self.assertEqual(evidence["readback_source"], "worker_api_entity_raw")
+        save.assert_called_once()
+        self.assertEqual(read.call_count, 2)
+        sleep.assert_called_once_with(runner.ENTITY_PERSISTENCE_READBACK_DELAY_SECONDS)
+        gbrain.assert_not_called()
+
+    def test_put_entity_fails_closed_on_api_save_or_partial_readback_without_replay(self):
+        expected = "---\ntype: organization\n---\n\n# Entity\n\nExpected body.\n"
+        partial = "---\ntype: organization\n---\n\n# Entity\n"
+        with (
+            mock.patch.object(runner.capture, "worker_api_post_json", return_value=None),
+            mock.patch.object(runner.capture, "worker_api_get") as read,
+            mock.patch.object(runner, "run_gbrain") as gbrain,
+        ):
+            with self.assertRaisesRegex(runner.RunnerError, "worker API save failed closed"):
+                runner.put_entity("organizations/example", expected)
+        read.assert_not_called()
+        gbrain.assert_not_called()
+
+        with (
+            mock.patch.object(runner.capture, "worker_api_post_json", return_value={"ok": True}) as save,
+            mock.patch.object(runner.capture, "worker_api_get", return_value=partial) as read,
+            mock.patch.object(runner, "run_gbrain") as gbrain,
+            mock.patch.object(runner.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(runner.RunnerError, "after 4 bounded attempts"):
+                runner.put_entity("organizations/example", expected)
+        save.assert_called_once()
+        self.assertEqual(read.call_count, runner.ENTITY_PERSISTENCE_READBACK_ATTEMPTS)
+        gbrain.assert_not_called()
+
     def test_submit_writes_atomic_confined_request_and_status_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

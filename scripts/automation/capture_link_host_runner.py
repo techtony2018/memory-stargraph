@@ -48,6 +48,8 @@ MAX_CAPTURE_FETCH_SECONDS = 30
 TERMINAL_LIFECYCLE_TAGS = ("active", "implementing")
 TERMINAL_LIFECYCLE_READBACK_ATTEMPTS = 5
 TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS = 1
+ENTITY_PERSISTENCE_READBACK_ATTEMPTS = 4
+ENTITY_PERSISTENCE_READBACK_DELAY_SECONDS = 10
 GLOBAL_ACTIVE_TAG_READBACK_SOURCE = "gbrain list --tag active"
 
 
@@ -187,19 +189,32 @@ def result_error(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout).strip()
 
 
-def put_entity(slug: str, markdown: str) -> None:
+def verify_entity_persistence(slug: str, markdown: str) -> dict[str, object]:
+    for attempt in range(1, ENTITY_PERSISTENCE_READBACK_ATTEMPTS + 1):
+        readback = capture.worker_api_get(slug)
+        if isinstance(readback, str) and _raw_readback_matches(markdown, readback):
+            return {
+                "readback_verified": True,
+                "readback_attempt": attempt,
+                "readback_source": "worker_api_entity_raw",
+            }
+        if attempt < ENTITY_PERSISTENCE_READBACK_ATTEMPTS:
+            time.sleep(ENTITY_PERSISTENCE_READBACK_DELAY_SECONDS)
+    raise RunnerError(
+        f"gbrain readback mismatch for {slug} after "
+        f"{ENTITY_PERSISTENCE_READBACK_ATTEMPTS} bounded attempts"
+    )
+
+
+def put_entity(slug: str, markdown: str) -> dict[str, object]:
     payload = capture.worker_api_post_json(
         f"/api/entity-save/{quote(slug, safe='')}",
         {"content": markdown},
         timeout=180,
     )
     if not payload or payload.get("error"):
-        result = run_gbrain(["put", slug], input_text=markdown, timeout=180)
-        if result.returncode != 0:
-            raise RunnerError(f"HTTP save and gbrain put failed for {slug}: {result_error(result)}")
-    readback = get_entity(slug)
-    if not _raw_readback_matches(markdown, readback):
-        raise RunnerError(f"gbrain readback mismatch for {slug}")
+        raise RunnerError(f"worker API save failed closed for {slug}")
+    return verify_entity_persistence(slug, markdown)
 
 
 def mutate_tag(slug: str, tag: str, action: str) -> None:
@@ -1141,11 +1156,11 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
             f"- Expires when: source entity content changes materially, new authoritative public sources appear, or the review window lapses\n"
         )
         after = before.rstrip() + receipt_section + "\n"
-        put_entity(slug, after)
+        persistence = put_entity(slug, after)
     else:
         outcome = "enriched_review_metadata"
         after = before.rstrip() + review_section + "\n"
-        put_entity(slug, after)
+        persistence = put_entity(slug, after)
     readback = get_entity(slug)
     if review_marker not in readback:
         raise RunnerError(f"enrichment readback failed for {slug}")
@@ -1160,6 +1175,7 @@ def apply_entity_enrichment(values: dict[str, str], candidate: dict[str, object]
             "readback_verified": True,
             "review_marker_present": review_marker in readback,
             "body_changed": before != after,
+            "persistence": persistence,
         },
     }
 
