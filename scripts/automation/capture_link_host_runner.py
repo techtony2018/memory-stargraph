@@ -48,7 +48,7 @@ MAX_CAPTURE_FETCH_SECONDS = 30
 TERMINAL_LIFECYCLE_TAGS = ("active", "implementing")
 TERMINAL_LIFECYCLE_READBACK_ATTEMPTS = 5
 TERMINAL_LIFECYCLE_READBACK_DELAY_SECONDS = 1
-ENTITY_PERSISTENCE_READBACK_ATTEMPTS = 4
+ENTITY_PERSISTENCE_READBACK_ATTEMPTS = 5
 ENTITY_PERSISTENCE_READBACK_DELAY_SECONDS = 10
 GLOBAL_ACTIVE_TAG_READBACK_SOURCE = "gbrain list --tag active"
 
@@ -201,7 +201,7 @@ def verify_entity_persistence(slug: str, markdown: str) -> dict[str, object]:
         if attempt < ENTITY_PERSISTENCE_READBACK_ATTEMPTS:
             time.sleep(ENTITY_PERSISTENCE_READBACK_DELAY_SECONDS)
     raise RunnerError(
-        f"gbrain readback mismatch for {slug} after "
+        f"worker API readback mismatch for {slug} after "
         f"{ENTITY_PERSISTENCE_READBACK_ATTEMPTS} bounded attempts"
     )
 
