@@ -1026,6 +1026,20 @@ class GraphParsingTests(unittest.TestCase):
         self.assertIsNone(store.relationship_output_cache.get(("backlinks", "people/tony-guan")))
         self.assertEqual(store.yoda_context_cache.entries, {})
 
+    def test_entity_save_refresh_discards_stale_raw_cache_repopulation(self):
+        store = GraphStore()
+        graph = {"nodes": [], "edges": []}
+
+        def refresh(force=False):
+            self.assertTrue(force)
+            store.entity_raw_cache.put("people/tony-guan", "pre-save page")
+            return graph
+
+        with mock.patch.object(store, "get_seed_graph", side_effect=refresh):
+            self.assertIs(store.refresh_after_entity_save(), graph)
+
+        self.assertIsNone(store.entity_raw_cache.get("people/tony-guan"))
+
     def test_timed_value_cache_expires_and_bounds_entries(self):
         cache = TimedValueCache(ttl_seconds=10, max_entries=2)
         with mock.patch("server.time.monotonic", return_value=0):

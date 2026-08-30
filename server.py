@@ -325,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.208"
+UI_VERSION = "V1.0.209"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -7523,6 +7523,13 @@ class GraphStore:
         gbrain_call_tool("put_page", {"slug": slug, "content": content})
         self.invalidate()
 
+    def refresh_after_entity_save(self):
+        graph = self.get_seed_graph(force=True)
+        # Graph hydration can race GBrain propagation and repopulate the raw
+        # cache with the pre-save page. Never expose that value as readback.
+        self.entity_raw_cache.clear()
+        return graph
+
     def create_entity(self, name, description="", category="entities"):
         clean_name = str(name or "").strip()
         if not clean_name:
@@ -10869,7 +10876,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 if not isinstance(content, str):
                     return self.end_json({"error": "content must be a string"}, status=HTTPStatus.BAD_REQUEST)
                 STORE.save_entity_raw(slug, content)
-                graph = STORE.get_seed_graph(force=True)
+                graph = STORE.refresh_after_entity_save()
                 return self.end_json({"ok": True, "slug": slug, "graph": graph})
             except Exception as exc:  # noqa: BLE001
                 return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)

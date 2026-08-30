@@ -57,6 +57,13 @@ class FakeStore:
         self.calls.append(("create_entity", name, description, category))
         return "people/new-person"
 
+    def save_entity_raw(self, slug, content):
+        self.calls.append(("save_entity_raw", slug, content))
+
+    def refresh_after_entity_save(self):
+        self.calls.append(("refresh_after_entity_save",))
+        return TEST_GRAPH
+
     def add_relationship(self, source_slug, target_slug, link_type, context=""):
         self.calls.append(("add_relationship", source_slug, target_slug, link_type, context))
 
@@ -1722,6 +1729,26 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertIn(("create_entity", "ERFA Reporting", "node created via Memory Stargraph UI", "projects"), fake_store.calls)
         self.assertNotIn("add_relationship", [call[0] for call in fake_store.calls])
+
+    def test_entity_save_uses_post_refresh_raw_cache_boundary(self):
+        fake_store = FakeStore()
+        content = "---\ntype: person\n---\n\n# Tony Guan\n"
+
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/entity-save/people%2Ftony-guan",
+                {"content": content},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(
+            fake_store.calls,
+            [
+                ("save_entity_raw", "people/tony-guan", content),
+                ("refresh_after_entity_save",),
+            ],
+        )
 
     def test_entity_media_endpoint_returns_detected_media(self):
         fake_store = FakeStore()
