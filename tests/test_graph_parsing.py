@@ -510,6 +510,9 @@ class GraphParsingTests(unittest.TestCase):
         pool = BoundedGBrainMCPPool(size=3, session_factory=FakeSession)
 
         self.assertEqual(pool.prewarm_async(timeout=7), 3)
+        deadline = time.monotonic() + 1
+        while len(calls) < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
         expected_probe = {
             "query": "Memory Stargraph",
             "expand": False,
@@ -525,6 +528,68 @@ class GraphParsingTests(unittest.TestCase):
                 (7, "query", expected_probe),
             ],
         )
+
+    def test_yoda_mcp_pool_stages_first_semantic_prewarm_before_rest(self):
+        calls = []
+        first_started = threading.Event()
+        first_release = threading.Event()
+        rest_started = threading.Event()
+
+        class FakeSession:
+            def __init__(self):
+                self.index = len(calls_by_session)
+                calls_by_session.append(self)
+                self.prewarming = False
+                self.started = False
+
+            def prewarm_async(
+                self,
+                timeout=15,
+                tool_name=None,
+                tool_payload=None,
+            ):
+                calls.append((self.index, timeout, tool_name, tool_payload))
+                self.started = True
+                if self.index == 0:
+                    self.prewarming = True
+                    first_started.set()
+
+                    def finish():
+                        first_release.wait(timeout=1)
+                        self.prewarming = False
+
+                    threading.Thread(target=finish, daemon=True).start()
+                else:
+                    rest_started.set()
+                return True
+
+            def close(self):
+                return None
+
+            def status(self):
+                return {"ready": self.started and not self.prewarming}
+
+        calls_by_session = []
+        pool = BoundedGBrainMCPPool(size=3, session_factory=FakeSession)
+
+        self.assertEqual(pool.prewarm_async(timeout=7), 3)
+        self.assertTrue(first_started.wait(timeout=1))
+        time.sleep(0.02)
+        self.assertEqual([call[0] for call in calls], [0])
+        self.assertFalse(rest_started.is_set())
+        status = pool.status()
+        self.assertEqual(status["semantic_ready_sessions"], 0)
+        self.assertEqual(status["prewarming_sessions"], 1)
+
+        first_release.set()
+        self.assertTrue(rest_started.wait(timeout=1))
+        self.assertEqual([call[0] for call in calls], [0, 1, 2])
+        deadline = time.monotonic() + 1
+        while pool.status()["semantic_ready_sessions"] < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        status = pool.status()
+        self.assertEqual(status["semantic_ready_sessions"], 3)
+        self.assertEqual(status["prewarming_sessions"], 0)
 
     def test_yoda_mcp_pool_fails_closed_when_busy_or_timed_out(self):
         release = threading.Event()

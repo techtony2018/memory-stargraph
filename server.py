@@ -325,7 +325,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.209"
+UI_VERSION = "V1.0.210"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -1965,6 +1965,9 @@ class BoundedGBrainMCPPool:
         for session in self.sessions:
             self.available.put_nowait(session)
         self.active = False
+        self.prewarm_lock = threading.Lock()
+        self.prewarm_generation = 0
+        self.prewarming = False
         self.metrics_lock = threading.Lock()
         self.metrics = {
             "tool_calls": 0,
@@ -2031,28 +2034,66 @@ class BoundedGBrainMCPPool:
             )
 
     def close(self):
-        self.active = False
+        with self.prewarm_lock:
+            self.active = False
+            self.prewarm_generation += 1
+            self.prewarming = False
         for session in self.sessions:
             session.close()
 
     def prewarm_async(self, timeout=15):
-        self.active = True
-        return sum(
-            bool(
-                session.prewarm_async(
-                    timeout=timeout,
-                    tool_name="query",
-                    tool_payload={
-                        "query": "Memory Stargraph",
-                        "expand": False,
-                        "adaptive_return": True,
-                        "limit": 10,
-                        "relational": True,
-                    },
-                )
-            )
-            for session in self.sessions
+        with self.prewarm_lock:
+            if self.prewarming:
+                return 0
+            self.active = True
+            self.prewarming = True
+            self.prewarm_generation += 1
+            generation = self.prewarm_generation
+        probe = {
+            "query": "Memory Stargraph",
+            "expand": False,
+            "adaptive_return": True,
+            "limit": 10,
+            "relational": True,
+        }
+        first = self.sessions[0]
+        first.prewarm_async(
+            timeout=timeout,
+            tool_name="query",
+            tool_payload=probe,
         )
+
+        def prewarm_remaining():
+            deadline = time.monotonic() + max(0.1, float(timeout))
+            while getattr(first, "prewarming", False) and time.monotonic() < deadline:
+                with self.prewarm_lock:
+                    if not self.active or self.prewarm_generation != generation:
+                        return
+                time.sleep(0.02)
+            with self.prewarm_lock:
+                if not self.active or self.prewarm_generation != generation:
+                    return
+                for session in self.sessions[1:]:
+                    session.prewarm_async(
+                        timeout=timeout,
+                        tool_name="query",
+                        tool_payload=probe,
+                    )
+            rest_deadline = time.monotonic() + max(0.1, float(timeout))
+            while (
+                any(getattr(session, "prewarming", False) for session in self.sessions[1:])
+                and time.monotonic() < rest_deadline
+            ):
+                with self.prewarm_lock:
+                    if not self.active or self.prewarm_generation != generation:
+                        return
+                time.sleep(0.02)
+            with self.prewarm_lock:
+                if self.prewarm_generation == generation:
+                    self.prewarming = False
+
+        threading.Thread(target=prewarm_remaining, daemon=True).start()
+        return self.size
 
     def metrics_snapshot(self):
         with self.metrics_lock:
@@ -2073,11 +2114,19 @@ class BoundedGBrainMCPPool:
 
     def status(self):
         states = [session.status() for session in self.sessions]
+        prewarming_sessions = sum(
+            bool(getattr(session, "prewarming", False)) for session in self.sessions
+        )
         available = self.available.qsize()
         return {
             "active": self.active,
             "pool_size": self.size,
             "ready_sessions": sum(bool(state.get("ready")) for state in states),
+            "semantic_ready_sessions": sum(
+                bool(state.get("ready")) and not getattr(session, "prewarming", False)
+                for session, state in zip(self.sessions, states)
+            ),
+            "prewarming_sessions": prewarming_sessions,
             "in_use_sessions": self.size - available,
             "busy": available == 0,
             "structured_only": True,
