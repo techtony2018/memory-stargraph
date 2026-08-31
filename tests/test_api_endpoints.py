@@ -208,7 +208,7 @@ def ready_reranker_readiness():
         "days_until_sunset": 5,
         "configured_override": True,
         "observed_at": "2026-08-30T20:00:00Z",
-        "source": "bounded_local_gbrain_cli_read_only",
+        "source": "bounded_local_gbrain_config_read_only",
         "summary": "GBrain has an explicit non-ZeroEntropy reranker override.",
         "operator_action": {
             "approval_required": True,
@@ -2316,33 +2316,46 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(result["state"], "gbrain_unavailable")
 
     def test_reranker_probe_skips_search_for_supported_override(self):
-        supported = subprocess.CompletedProcess([], 0, stdout="voyage:rerank-2.5\n", stderr="")
-        with (
-            mock.patch("server.GBRAIN", Path("/configured/gbrain")),
-            mock.patch("server.shutil.which", return_value="/managed/path/gbrain"),
-            mock.patch("server.subprocess.run", return_value=supported) as run,
-        ):
-            result = server._probe_gbrain_reranker_readiness()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text(
+                json.dumps({"search": {"reranker": {"model": "voyage:rerank-2.5"}}}),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.dict("os.environ", {"GBRAIN_CONFIG_FILE": str(config_path)}),
+                mock.patch("server.subprocess.run") as run,
+            ):
+                result = server._probe_gbrain_reranker_readiness()
 
         self.assertEqual(result["status"], "ready")
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(run.call_args.args[0][0], "/managed/path/gbrain")
-        self.assertEqual(run.call_args.args[0][1:4], ["config", "get", "search.reranker.model"])
+        run.assert_not_called()
 
     def test_reranker_probe_degrades_when_default_config_is_unset(self):
-        missing = subprocess.CompletedProcess(
-            [],
-            1,
-            stdout="",
-            stderr="Config key not found: search.reranker.model",
-        )
-        with mock.patch("server.subprocess.run", return_value=missing) as run:
-            result = server._probe_gbrain_reranker_readiness()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text(json.dumps({"engine": "postgres"}), encoding="utf-8")
+            with (
+                mock.patch.dict("os.environ", {"GBRAIN_CONFIG_FILE": str(config_path)}),
+                mock.patch("server.subprocess.run") as run,
+            ):
+                result = server._probe_gbrain_reranker_readiness()
 
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["state"], "deprecated_default_unconfigured")
-        self.assertEqual(run.call_count, 1)
+        run.assert_not_called()
         self.assertTrue(result["sunset_detected"])
+
+    def test_reranker_probe_fails_closed_on_malformed_config_without_exposing_content(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text('{"secret": "must-not-leak",', encoding="utf-8")
+            with mock.patch.dict("os.environ", {"GBRAIN_CONFIG_FILE": str(config_path)}):
+                result = server._probe_gbrain_reranker_readiness()
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["state"], "unverified")
+        self.assertNotIn("must-not-leak", json.dumps(result))
 
     def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
         class FixedDateTime(dt.datetime):

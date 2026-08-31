@@ -8940,7 +8940,7 @@ def parse_gbrain_reranker_readiness(
         "days_until_sunset": days_until_sunset,
         "configured_override": bool(config_returncode == 0 and config_value),
         "observed_at": observed_text,
-        "source": "bounded_local_gbrain_cli_read_only",
+        "source": "bounded_local_gbrain_config_read_only",
         "summary": summary,
         "operator_action": {
             "approval_required": True,
@@ -8957,30 +8957,36 @@ def parse_gbrain_reranker_readiness(
 
 
 def _probe_gbrain_reranker_readiness():
-    gbrain_binary = str(GBRAIN)
-    if not (GBRAIN.is_file() and os.access(GBRAIN, os.X_OK)):
-        gbrain_binary = shutil.which("gbrain") or gbrain_binary
+    explicit_path = str(os.environ.get("GBRAIN_CONFIG_FILE") or "").strip()
+    gbrain_home = str(os.environ.get("GBRAIN_HOME") or "").strip()
+    if explicit_path:
+        config_path = Path(explicit_path).expanduser()
+    elif gbrain_home:
+        home_path = Path(gbrain_home).expanduser()
+        candidates = (home_path / ".gbrain" / "config.json", home_path / "config.json")
+        config_path = next((path for path in candidates if path.is_file()), candidates[0])
+    else:
+        config_path = Path.home() / ".gbrain" / "config.json"
     try:
-        config_result = subprocess.run(
-            [gbrain_binary, "config", "get", "search.reranker.model"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        if config_path.stat().st_size > 1024 * 1024:
+            raise ValueError("config too large")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        search = config.get("search") if isinstance(config, dict) else None
+        reranker = search.get("reranker") if isinstance(search, dict) else None
+        model = reranker.get("model") if isinstance(reranker, dict) else None
+    except (OSError, ValueError, json.JSONDecodeError):
         return parse_gbrain_reranker_readiness(
             "",
-            "config probe unavailable",
+            "bounded config read failed",
             None,
             search_stderr="",
             search_returncode=None,
         )
-
+    config_value = str(model or "").strip()
     return parse_gbrain_reranker_readiness(
-        config_result.stdout,
-        config_result.stderr,
-        config_result.returncode,
+        config_value,
+        "" if config_value else "Config key not found: search.reranker.model",
+        0 if config_value else 1,
     )
 
 
@@ -9003,7 +9009,7 @@ def gbrain_reranker_readiness():
         "days_until_sunset": None,
         "configured_override": False,
         "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "source": "bounded_local_gbrain_cli_read_only",
+        "source": "bounded_local_gbrain_config_read_only",
         "summary": "GBrain reranker readiness is still being checked.",
         "operator_action": {
             "approval_required": True,
