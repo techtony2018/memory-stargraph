@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 
 DEFAULT_REQUIRED_PATHS = ("scripts/automation/yoda_gap_evaluator.py",)
+MAX_PATH_EVIDENCE = 100
 
 
 class CheckoutSnapshot(NamedTuple):
@@ -21,6 +22,8 @@ class CheckoutSnapshot(NamedTuple):
     required_paths: tuple[str, ...] = DEFAULT_REQUIRED_PATHS
     dirty: bool = False
     divergent: bool = False
+    dirty_paths: tuple[str, ...] = ()
+    untracked_paths: tuple[str, ...] = ()
 
 
 class SourceSyncDecision(NamedTuple):
@@ -32,6 +35,9 @@ class SourceSyncDecision(NamedTuple):
     dashboard_ui_version: str
     missing_paths: tuple[str, ...]
     script_path: str | None = None
+    dirty_worktree: bool = False
+    dirty_paths: tuple[str, ...] = ()
+    untracked_paths: tuple[str, ...] = ()
 
 
 def decide_source_sync(snapshot: CheckoutSnapshot) -> SourceSyncDecision:
@@ -56,6 +62,27 @@ def decide_source_sync(snapshot: CheckoutSnapshot) -> SourceSyncDecision:
             dashboard_ui_version=snapshot.dashboard_ui_version,
             missing_paths=missing_paths,
             script_path=script_path,
+            dirty_worktree=snapshot.dirty,
+            dirty_paths=snapshot.dirty_paths,
+            untracked_paths=snapshot.untracked_paths,
+        )
+    if snapshot.dirty:
+        stale = snapshot.head != snapshot.origin_main or bool(missing_paths)
+        return SourceSyncDecision(
+            status="stale_dirty_blocked" if stale else "dirty_worktree_blocked",
+            action="defer_preserve_local_changes",
+            reason=(
+                "checkout has tracked local changes; do not sync automatically; "
+                "preserve unrelated changes and record source-sync blocker"
+            ),
+            checkout_head=snapshot.head,
+            origin_main=snapshot.origin_main,
+            dashboard_ui_version=snapshot.dashboard_ui_version,
+            missing_paths=missing_paths,
+            script_path=script_path,
+            dirty_worktree=True,
+            dirty_paths=snapshot.dirty_paths,
+            untracked_paths=snapshot.untracked_paths,
         )
     if snapshot.head == snapshot.origin_main and not missing_paths:
         return SourceSyncDecision(
@@ -67,20 +94,9 @@ def decide_source_sync(snapshot: CheckoutSnapshot) -> SourceSyncDecision:
             dashboard_ui_version=snapshot.dashboard_ui_version,
             missing_paths=missing_paths,
             script_path=script_path,
-        )
-    if snapshot.dirty:
-        return SourceSyncDecision(
-            status="stale_dirty_blocked",
-            action="use_verified_service_copy",
-            reason=(
-                "checkout is stale or missing required scripts but has local changes; "
-                "preserve unrelated changes and record source-sync blocker"
-            ),
-            checkout_head=snapshot.head,
-            origin_main=snapshot.origin_main,
-            dashboard_ui_version=snapshot.dashboard_ui_version,
-            missing_paths=missing_paths,
-            script_path=script_path,
+            dirty_worktree=False,
+            dirty_paths=(),
+            untracked_paths=snapshot.untracked_paths,
         )
     return SourceSyncDecision(
         status="stale_clean_fast_forward_required",
@@ -94,6 +110,9 @@ def decide_source_sync(snapshot: CheckoutSnapshot) -> SourceSyncDecision:
         dashboard_ui_version=snapshot.dashboard_ui_version,
         missing_paths=missing_paths,
         script_path=script_path,
+        dirty_worktree=False,
+        dirty_paths=(),
+        untracked_paths=snapshot.untracked_paths,
     )
 
 
@@ -107,7 +126,24 @@ def run_git(root: Path, *args: str) -> str:
     )
     if result.returncode != 0:
         return ""
-    return result.stdout.strip()
+    # Porcelain status uses the first two columns as data; keep leading spaces.
+    return result.stdout.rstrip()
+
+
+def parse_porcelain_status(output: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    dirty_paths: list[str] = []
+    untracked_paths: list[str] = []
+    for line in output.splitlines():
+        if len(line) < 4:
+            continue
+        status = line[:2]
+        path = line[3:].strip()
+        if not path:
+            continue
+        target = untracked_paths if status == "??" else dirty_paths
+        if len(target) < MAX_PATH_EVIDENCE:
+            target.append(path)
+    return tuple(dirty_paths), tuple(untracked_paths)
 
 
 def snapshot_checkout(
@@ -115,7 +151,9 @@ def snapshot_checkout(
 ) -> CheckoutSnapshot:
     head = run_git(root, "rev-parse", "HEAD") or "unknown"
     origin_main = run_git(root, "rev-parse", "origin/main") or "unknown"
-    dirty = bool(run_git(root, "status", "--porcelain"))
+    status_output = run_git(root, "status", "--porcelain", "--untracked-files=all")
+    dirty_paths, untracked_paths = parse_porcelain_status(status_output)
+    dirty = bool(dirty_paths)
     merge_base = run_git(root, "merge-base", "HEAD", "origin/main")
     divergent = bool(merge_base and merge_base != head and merge_base != origin_main)
     return CheckoutSnapshot(
@@ -126,6 +164,8 @@ def snapshot_checkout(
         required_paths=required_paths,
         dirty=dirty,
         divergent=divergent,
+        dirty_paths=dirty_paths,
+        untracked_paths=untracked_paths,
     )
 
 
@@ -190,6 +230,11 @@ def main(argv: list[str] | None = None) -> int:
         "dashboard_ui_version": decision.dashboard_ui_version,
         "missing_paths": list(decision.missing_paths),
         "script_path": decision.script_path,
+        "dirty_state": "tracked_changes" if decision.dirty_worktree else "clean_tracked",
+        "dirty_worktree": decision.dirty_worktree,
+        "dirty_paths": list(decision.dirty_paths),
+        "untracked_paths": list(decision.untracked_paths),
+        "dirty_path_evidence_limit": MAX_PATH_EVIDENCE,
         "sync_applied": sync_applied,
     }
     if args.json:
