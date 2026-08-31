@@ -8962,9 +8962,12 @@ def parse_gbrain_reranker_readiness(
 
 
 def _probe_gbrain_reranker_readiness():
+    gbrain_binary = str(GBRAIN)
+    if not (GBRAIN.is_file() and os.access(GBRAIN, os.X_OK)):
+        gbrain_binary = shutil.which("gbrain") or gbrain_binary
     try:
         config_result = subprocess.run(
-            [str(GBRAIN), "config", "get", "search.reranker.model"],
+            [gbrain_binary, "config", "get", "search.reranker.model"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -8989,7 +8992,7 @@ def _probe_gbrain_reranker_readiness():
 
     try:
         search_result = subprocess.run(
-            [str(GBRAIN), "search", "memory stargraph", "--limit", "1"],
+            [gbrain_binary, "search", "memory stargraph", "--limit", "1"],
             capture_output=True,
             text=True,
             timeout=8,

@@ -2317,11 +2317,16 @@ class ApiEndpointTests(unittest.TestCase):
 
     def test_reranker_probe_skips_search_for_supported_override(self):
         supported = subprocess.CompletedProcess([], 0, stdout="voyage:rerank-2.5\n", stderr="")
-        with mock.patch("server.subprocess.run", return_value=supported) as run:
+        with (
+            mock.patch("server.GBRAIN", Path("/configured/gbrain")),
+            mock.patch("server.shutil.which", return_value="/managed/path/gbrain"),
+            mock.patch("server.subprocess.run", return_value=supported) as run,
+        ):
             result = server._probe_gbrain_reranker_readiness()
 
         self.assertEqual(result["status"], "ready")
         self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][0], "/managed/path/gbrain")
         self.assertEqual(run.call_args.args[0][1:4], ["config", "get", "search.reranker.model"])
 
     def test_reranker_probe_checks_search_when_default_config_is_unset(self):
