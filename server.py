@@ -314,7 +314,10 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.211"
+UI_VERSION = "V1.0.212"
+GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
+GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
+GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -4501,6 +4504,11 @@ class SingleFlight:
 LOCAL_GBRAIN_TOOL_MANIFEST_CACHE = TimedValueCache(
     ttl_seconds=GBRAIN_TOOL_MANIFEST_CACHE_SECONDS,
     max_entries=4,
+)
+GBRAIN_RERANKER_READINESS_CACHE = TimedValueCache(
+    ttl_seconds=GBRAIN_RERANKER_READINESS_CACHE_SECONDS,
+    stale_seconds=30 * 60,
+    max_entries=2,
 )
 
 
@@ -8861,6 +8869,181 @@ def runtime_gbrain_version():
 runtime_gbrain_version.cache_clear = _cached_runtime_gbrain_version.cache_clear
 
 
+def parse_gbrain_reranker_readiness(
+    config_stdout,
+    config_stderr,
+    config_returncode,
+    search_stderr="",
+    search_returncode=None,
+    observed_at=None,
+):
+    """Reduce local CLI evidence to a privacy-safe reranker readiness state."""
+    observed = observed_at or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    observed = observed.astimezone(timezone.utc)
+    observed_text = observed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    config_value = str(config_stdout or "").strip()
+    config_error = str(config_stderr or "")
+    warning_text = str(search_stderr or "")
+    warning_match = re.search(
+        r"ZeroEntropy reranker stops working on\s+(\d{4}-\d{2}-\d{2})",
+        warning_text,
+        re.IGNORECASE,
+    )
+    configured_deprecated = "zeroentropy" in config_value.lower()
+    config_missing = "config key not found" in config_error.lower()
+    binary_unavailable = "config probe unavailable" in config_error.lower()
+    configured_supported = bool(
+        config_returncode == 0
+        and config_value
+        and not configured_deprecated
+    )
+    sunset_date = warning_match.group(1) if warning_match else GBRAIN_RERANKER_SUNSET_DATE
+    try:
+        days_until_sunset = (
+            datetime.fromisoformat(sunset_date).date() - observed.date()
+        ).days
+    except ValueError:
+        days_until_sunset = None
+
+    if configured_supported:
+        status = "ready"
+        freshness = "current"
+        state = "supported_override"
+        summary = "GBrain has an explicit non-ZeroEntropy reranker override."
+    elif warning_match or configured_deprecated:
+        status = "critical" if days_until_sunset is not None and days_until_sunset <= 0 else "degraded"
+        freshness = "current"
+        state = "deprecated_zeroentropy"
+        summary = (
+            f"GBrain search still depends on the ZeroEntropy reranker, which stops working on {sunset_date}."
+        )
+    elif config_missing and search_returncode == 0:
+        status = "ready"
+        freshness = "current"
+        state = "supported_default"
+        summary = "GBrain search completed without the ZeroEntropy sunset warning."
+    elif binary_unavailable:
+        status = "missing"
+        freshness = "missing"
+        state = "gbrain_unavailable"
+        summary = "GBrain reranker readiness could not be checked because the local binary is unavailable."
+    else:
+        status = "partial"
+        freshness = "partial"
+        state = "unverified"
+        summary = "GBrain reranker configuration and sunset state could not be verified within the bounded probe."
+
+    return {
+        "schema_version": 1,
+        "status": status,
+        "freshness": freshness,
+        "state": state,
+        "sunset_detected": bool(warning_match or configured_deprecated),
+        "sunset_date": sunset_date,
+        "days_until_sunset": days_until_sunset,
+        "configured_override": bool(config_returncode == 0 and config_value),
+        "observed_at": observed_text,
+        "source": "bounded_local_gbrain_cli_read_only",
+        "summary": summary,
+        "operator_action": {
+            "approval_required": True,
+            "automatic_mutation": False,
+            "apply_command": f"gbrain config set search.reranker.model {GBRAIN_RERANKER_TARGET_MODEL}",
+            "verification_commands": [
+                "gbrain config get search.reranker.model",
+                "gbrain doctor --json --fast",
+                "gbrain search 'memory stargraph' --limit 1",
+            ],
+        },
+        "privacy": "Only aggregate state and fixed operator commands are returned; CLI search results, config values, host paths, and credentials are withheld.",
+    }
+
+
+def _probe_gbrain_reranker_readiness():
+    try:
+        config_result = subprocess.run(
+            [str(GBRAIN), "config", "get", "search.reranker.model"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return parse_gbrain_reranker_readiness(
+            "",
+            "config probe unavailable",
+            None,
+            search_stderr="",
+            search_returncode=None,
+        )
+
+    config_value = str(config_result.stdout or "").strip()
+    if config_result.returncode == 0 and config_value and "zeroentropy" not in config_value.lower():
+        return parse_gbrain_reranker_readiness(
+            config_result.stdout,
+            config_result.stderr,
+            config_result.returncode,
+        )
+
+    try:
+        search_result = subprocess.run(
+            [str(GBRAIN), "search", "memory stargraph", "--limit", "1"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        search_stderr = search_result.stderr
+        search_returncode = search_result.returncode
+    except (OSError, subprocess.TimeoutExpired):
+        search_stderr = ""
+        search_returncode = None
+    return parse_gbrain_reranker_readiness(
+        config_result.stdout,
+        config_result.stderr,
+        config_result.returncode,
+        search_stderr=search_stderr,
+        search_returncode=search_returncode,
+    )
+
+
+def gbrain_reranker_readiness():
+    cache_key = (str(GBRAIN), os.environ.get("GBRAIN_HOME", ""), os.environ.get("GBRAIN_CONFIG_FILE", ""))
+    cached = GBRAIN_RERANKER_READINESS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    stale = GBRAIN_RERANKER_READINESS_CACHE.get_stale(cache_key)
+    GBRAIN_RERANKER_READINESS_CACHE.refresh_async(cache_key, _probe_gbrain_reranker_readiness)
+    if stale is not None:
+        return stale
+    return {
+        "schema_version": 1,
+        "status": "partial",
+        "freshness": "partial",
+        "state": "probe_busy",
+        "sunset_detected": False,
+        "sunset_date": GBRAIN_RERANKER_SUNSET_DATE,
+        "days_until_sunset": None,
+        "configured_override": False,
+        "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "source": "bounded_local_gbrain_cli_read_only",
+        "summary": "GBrain reranker readiness is still being checked.",
+        "operator_action": {
+            "approval_required": True,
+            "automatic_mutation": False,
+            "apply_command": f"gbrain config set search.reranker.model {GBRAIN_RERANKER_TARGET_MODEL}",
+            "verification_commands": [
+                "gbrain config get search.reranker.model",
+                "gbrain doctor --json --fast",
+                "gbrain search 'memory stargraph' --limit 1",
+            ],
+        },
+        "privacy": "Only aggregate state and fixed operator commands are returned; CLI search results, config values, host paths, and credentials are withheld.",
+    }
+
+
 def setup_diagnostics():
     """Return support-safe setup state without config values or node content."""
     graph = STORE.graph or {}
@@ -9172,6 +9355,7 @@ def customer_readiness(weekly_digest=None):
     stats = graph.get("stats") if graph else None
     activation = first_run_activation_funnel()
     storage = attachment_storage_status()
+    reranker = gbrain_reranker_readiness()
     try:
         model_config = public_yoda_model_config()
         model_error = ""
@@ -9277,6 +9461,18 @@ def customer_readiness(weekly_digest=None):
             next_step="Open Settings > Model and verify the configured backend without changing production data.",
         ),
         readiness_check(
+            "gbrain_reranker",
+            "GBrain reranker",
+            str(reranker.get("status") or "partial"),
+            str(reranker.get("summary") or "GBrain reranker readiness is unavailable."),
+            ["/api/health"],
+            freshness=str(reranker.get("freshness") or "partial"),
+            next_step=(
+                f"After explicit approval, run gbrain config set search.reranker.model {GBRAIN_RERANKER_TARGET_MODEL}; "
+                "then verify with gbrain doctor and a bounded gbrain search."
+            ),
+        ),
+        readiness_check(
             "durable_storage",
             "Durable storage",
             storage_status,
@@ -9368,6 +9564,7 @@ def customer_readiness(weekly_digest=None):
             "no_activity": sum(1 for check in checks if check["status"] == "no_activity"),
         },
         "checks": checks,
+        "gbrain_reranker": reranker,
         "safe_next_step": safe_next_step,
         "evidence_slugs": sorted({slug for check in checks for slug in check["evidence_slugs"]}),
         "target_evidence": target_counts,
@@ -10415,6 +10612,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "title": APP_NAME,
                     "ui_version": UI_VERSION,
                     "gbrain_version": runtime_gbrain_version(),
+                    "gbrain_reranker": gbrain_reranker_readiness(),
                     "loaded": bool(graph),
                     "source": graph.get("source") if graph else None,
                     "stats": graph.get("stats") if graph else None,

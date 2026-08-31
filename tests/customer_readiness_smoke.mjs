@@ -86,6 +86,7 @@ try {
         hasHealth: /Service health/.test(text),
         hasActivation: /Activation/.test(text),
         hasModel: /Ask Yoda model/.test(text),
+        hasReranker: /GBrain reranker/.test(text),
         hasStorage: /Durable storage/.test(text),
         hasWeekly: /Weekly outcomes/.test(text),
         hasResolver: /Resolver pending state/.test(text),
@@ -99,13 +100,14 @@ try {
     });
     console.log(JSON.stringify(state, null, 2));
     if (
-      state.uiVersion !== "V1.0.211"
+      state.uiVersion !== "V1.0.212"
       || state.modalTitle !== "Customer readiness"
       || !state.cardVisible
-      || state.itemCount < 7
+      || state.itemCount < 8
       || !state.hasHealth
       || !state.hasActivation
       || !state.hasModel
+      || !state.hasReranker
       || !state.hasStorage
       || !state.hasWeekly
       || !state.hasResolver

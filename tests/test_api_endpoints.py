@@ -197,6 +197,28 @@ def ready_deployment_attestation():
     }
 
 
+def ready_reranker_readiness():
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "freshness": "current",
+        "state": "supported_override",
+        "sunset_detected": False,
+        "sunset_date": "2026-09-04",
+        "days_until_sunset": 5,
+        "configured_override": True,
+        "observed_at": "2026-08-30T20:00:00Z",
+        "source": "bounded_local_gbrain_cli_read_only",
+        "summary": "GBrain has an explicit non-ZeroEntropy reranker override.",
+        "operator_action": {
+            "approval_required": True,
+            "automatic_mutation": False,
+            "apply_command": "gbrain config set search.reranker.model voyage:rerank-2.5",
+            "verification_commands": ["gbrain doctor --json --fast", "gbrain search 'memory stargraph' --limit 1"],
+        },
+    }
+
+
 class SingleRowTakeStore(FakeStore):
     def list_takes(self, filters=None):
         self.calls.append(("list_takes", dict(filters or {})))
@@ -881,7 +903,11 @@ class ApiEndpointTests(unittest.TestCase):
             return cached
 
         fake_store.get_health_graph = health_graph
-        with mock.patch("server.STORE", fake_store), mock.patch("server.runtime_gbrain_version", return_value="V0.46.28.0"):
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.runtime_gbrain_version", return_value="V0.46.28.0"),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
+        ):
             status, data = self.dispatch_get("/api/health")
 
         self.assertEqual(status, 200)
@@ -889,6 +915,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["source"]["status"], "cached-startup")
         self.assertEqual(data["stats"]["nodes"], 75)
         self.assertEqual(data["gbrain_version"], "V0.46.28.0")
+        self.assertEqual(data["gbrain_reranker"]["status"], "ready")
         self.assertEqual(fake_store.calls, [("get_health_graph",)])
 
     def test_retired_openclaw_profile_routes_are_not_served_even_with_legacy_token(self):
@@ -954,7 +981,10 @@ class ApiEndpointTests(unittest.TestCase):
             return None
 
         fake_store.get_health_graph = health_graph
-        with mock.patch("server.STORE", fake_store):
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
+        ):
             status, data = self.dispatch_get("/api/health")
 
         self.assertEqual(status, 200)
@@ -2223,6 +2253,98 @@ class ApiEndpointTests(unittest.TestCase):
         finally:
             server.runtime_gbrain_version.cache_clear()
 
+    def test_reranker_readiness_parses_zeroentropy_warning_and_human_approved_action(self):
+        result = server.parse_gbrain_reranker_readiness(
+            "",
+            "Config key not found: search.reranker.model",
+            1,
+            search_stderr=(
+                "[gbrain] DEPRECATED: ZeroEntropy reranker stops working on 2026-09-04. "
+                "Switch: `gbrain config set search.reranker.model voyage:rerank-2.5`"
+            ),
+            search_returncode=0,
+            observed_at=dt.datetime(2026, 8, 30, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(result["state"], "deprecated_zeroentropy")
+        self.assertTrue(result["sunset_detected"])
+        self.assertEqual(result["sunset_date"], "2026-09-04")
+        self.assertEqual(result["days_until_sunset"], 5)
+        self.assertTrue(result["operator_action"]["approval_required"])
+        self.assertFalse(result["operator_action"]["automatic_mutation"])
+        self.assertIn("voyage:rerank-2.5", result["operator_action"]["apply_command"])
+        self.assertNotIn("Config key not found", json.dumps(result))
+
+    def test_reranker_readiness_accepts_supported_override_without_search_probe(self):
+        result = server.parse_gbrain_reranker_readiness(
+            "voyage:rerank-2.5\n",
+            "",
+            0,
+            observed_at=dt.datetime(2026, 8, 30, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["state"], "supported_override")
+        self.assertTrue(result["configured_override"])
+        self.assertFalse(result["sunset_detected"])
+
+    def test_reranker_readiness_is_partial_when_config_and_warning_are_unverified(self):
+        result = server.parse_gbrain_reranker_readiness(
+            "",
+            "Config key not found: search.reranker.model",
+            1,
+            search_stderr="",
+            search_returncode=None,
+            observed_at=dt.datetime(2026, 8, 30, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["state"], "unverified")
+        self.assertFalse(result["sunset_detected"])
+
+    def test_reranker_readiness_is_missing_when_local_binary_probe_is_unavailable(self):
+        result = server.parse_gbrain_reranker_readiness(
+            "",
+            "config probe unavailable",
+            None,
+            search_returncode=None,
+            observed_at=dt.datetime(2026, 8, 30, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "missing")
+        self.assertEqual(result["state"], "gbrain_unavailable")
+
+    def test_reranker_probe_skips_search_for_supported_override(self):
+        supported = subprocess.CompletedProcess([], 0, stdout="voyage:rerank-2.5\n", stderr="")
+        with mock.patch("server.subprocess.run", return_value=supported) as run:
+            result = server._probe_gbrain_reranker_readiness()
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][1:4], ["config", "get", "search.reranker.model"])
+
+    def test_reranker_probe_checks_search_when_default_config_is_unset(self):
+        missing = subprocess.CompletedProcess(
+            [],
+            1,
+            stdout="",
+            stderr="Config key not found: search.reranker.model",
+        )
+        warning = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout="private result text must not be exposed",
+            stderr="[gbrain] DEPRECATED: ZeroEntropy reranker stops working on 2026-09-04.",
+        )
+        with mock.patch("server.subprocess.run", side_effect=[missing, warning]) as run:
+            result = server._probe_gbrain_reranker_readiness()
+
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][1:3], ["search", "memory stargraph"])
+        self.assertNotIn("private result text", json.dumps(result))
+
     def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
         class FixedDateTime(dt.datetime):
             @classmethod
@@ -2338,6 +2460,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
             mock.patch("server.attachment_storage_status", return_value={"available": True}),
             mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
             mock.patch("server.memory_value_digest", return_value=weekly),
             mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
             mock.patch("server.configured_target_readiness", return_value=("ready", {"evidence_slugs": []}, "Configured target evidence is available.")),
@@ -2450,6 +2573,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
             mock.patch("server.attachment_storage_status", return_value={"available": True}),
             mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
             mock.patch("server.memory_value_digest", return_value=weekly),
             mock.patch("server.latest_sre_numeric_evidence", return_value={"status": "pass", "freshness": "current", "evidence_slugs": ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"]}),
             mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
@@ -2465,8 +2589,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(data["read_only"])
         self.assertEqual(data["schema_version"], 1)
         self.assertEqual(data["status"], "ready")
-        self.assertEqual(data["summary_counts"]["checks_total"], 8)
-        self.assertEqual(data["summary_counts"]["ready"], 8)
+        self.assertEqual(data["summary_counts"]["checks_total"], 9)
+        self.assertEqual(data["summary_counts"]["ready"], 9)
         self.assertIsInstance(data["safe_next_step"], dict)
         self.assertTrue(data["safe_next_step"]["safe"])
         self.assertFalse(data["safe_next_step"]["mutation"])
@@ -2480,6 +2604,7 @@ class ApiEndpointTests(unittest.TestCase):
             "service_health",
             "activation",
             "model_configuration",
+            "gbrain_reranker",
             "durable_storage",
             "weekly_verified_outcomes",
             "resolver_pending",
@@ -2493,6 +2618,45 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertNotIn("sk-", serialized)
         self.assertNotIn("authorization", serialized)
         self.assertNotIn("raw prompt", serialized)
+
+    def test_customer_readiness_degrades_for_reranker_sunset_without_auto_mutation(self):
+        reranker = ready_reranker_readiness()
+        reranker.update({
+            "status": "degraded",
+            "state": "deprecated_zeroentropy",
+            "sunset_detected": True,
+            "summary": "GBrain search still depends on the ZeroEntropy reranker, which stops working on 2026-09-04.",
+        })
+        weekly = {
+            "verified_memory_outcomes": {
+                "status": "pass",
+                "freshness": {"status": "current"},
+                "sre_numeric_evidence": {"status": "pass", "freshness": "current"},
+            }
+        }
+        with (
+            mock.patch("server.STORE", FakeStore()),
+            mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
+            mock.patch("server.attachment_storage_status", return_value={"available": True}),
+            mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think"}),
+            mock.patch("server.gbrain_reranker_readiness", return_value=reranker),
+            mock.patch("server.memory_value_digest", return_value=weekly),
+            mock.patch("server.resolver_feedback_health", return_value={"pending": 0}),
+            mock.patch(
+                "server.configured_target_readiness",
+                return_value=("ready", {"evidence_slugs": []}, "Configured target evidence is available."),
+            ),
+        ):
+            status, data = self.dispatch_get("/api/customer-readiness")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["status"], "degraded")
+        check = {item["id"]: item for item in data["checks"]}["gbrain_reranker"]
+        self.assertEqual(check["status"], "degraded")
+        self.assertEqual(data["safe_next_step"]["check_id"], "gbrain_reranker")
+        self.assertTrue(data["gbrain_reranker"]["operator_action"]["approval_required"])
+        self.assertFalse(data["gbrain_reranker"]["operator_action"]["automatic_mutation"])
+        self.assertNotIn("/users/", json.dumps(data).lower())
 
     def test_customer_readiness_reuses_weekly_resolver_and_deployment_evidence(self):
         weekly = {
@@ -2524,6 +2688,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
             mock.patch("server.attachment_storage_status", return_value={"available": True}),
             mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think"}),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
             mock.patch("server.memory_value_digest", return_value=weekly),
             mock.patch("server.resolver_feedback_health", side_effect=AssertionError("duplicate resolver read")),
             mock.patch("server.configured_target_readiness", side_effect=AssertionError("duplicate deployment read")),
@@ -2633,6 +2798,7 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.first_run_activation_funnel", return_value={"mode": "sample-first"}),
             mock.patch("server.attachment_storage_status", return_value={"available": False}),
             mock.patch("server.public_yoda_model_config", side_effect=RuntimeError("redacted failure")),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
             mock.patch("server.memory_value_digest", return_value=weekly),
             mock.patch("server.latest_sre_numeric_evidence", return_value={"status": "partial", "freshness": "partial", "evidence_slugs": []}),
             mock.patch("server.resolver_feedback_health", return_value={"proposal_counts": {"pending": 2}}),
@@ -3641,6 +3807,7 @@ class ApiEndpointTests(unittest.TestCase):
                 mock.patch("server.first_run_activation_funnel", return_value={"mode": "live-ready"}),
                 mock.patch("server.attachment_storage_status", return_value={"available": True}),
                 mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
+                mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
                 mock.patch("server.memory_value_digest", return_value=weekly),
                 mock.patch(
                     "server.configured_target_readiness",
@@ -3651,7 +3818,7 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "ready")
-        self.assertEqual(data["summary_counts"]["ready"], 8)
+        self.assertEqual(data["summary_counts"]["ready"], 9)
         resolver_check = {check["id"]: check for check in data["checks"]}["resolver_pending"]
         self.assertEqual(resolver_check["status"], "ready")
         self.assertEqual(resolver_check["freshness"], "current")
