@@ -5,7 +5,6 @@ import email.policy
 import email.utils
 import gzip
 import hashlib
-import hmac
 import io
 import json
 import math
@@ -39,17 +38,7 @@ except ImportError:  # Preview requests safely fall back to the original media.
     Image = None
     ImageOps = None
 
-from openclaw_profile_activation import (
-    ActivationConflict,
-    ActivationError,
-    OpenClawProfileActivationExecutor,
-    STATUS_ENDPOINT_BUDGET_SECONDS,
-    activation_from_environment,
-)
-
-
 APP_NAME = "Memory Stargraph"
-OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS = STATUS_ENDPOINT_BUDGET_SECONDS
 JSON_GZIP_MIN_BYTES = 1024
 COMPRESSIBLE_STATIC_PATHS = {
     "/": "index.html",
@@ -325,7 +314,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.210"
+UI_VERSION = "V1.0.211"
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -2202,9 +2191,77 @@ def run_gbrain_subprocess(*args, input_text=None, timeout=20):
     return decode_process_output(result.stdout)
 
 
+def run_remote_gbrain_read(*args, timeout=20):
+    command = args[0] if args else ""
+    if command == "search":
+        tool_name = "search"
+        payload = parse_gbrain_search_arguments(args)
+        formatter = format_mcp_search_results
+    elif command == "query":
+        tool_name = "query"
+        payload = parse_gbrain_query_arguments(args)
+        formatter = format_mcp_search_results
+    elif command == "get" and len(args) == 2:
+        tool_name = "get_page"
+        payload = {"slug": str(args[1]), "include_content": True}
+        formatter = None
+    elif command == "backlinks" and len(args) == 2:
+        tool_name = "get_backlinks"
+        payload = {"slug": str(args[1])}
+        formatter = format_mcp_json
+    elif command == "graph-query":
+        tool_name = "traverse_graph"
+        payload = parse_gbrain_graph_query_arguments(args)
+        formatter = None
+    elif command == "list":
+        tool_name = "list_pages"
+        payload = parse_gbrain_list_arguments(args)
+        formatter = format_mcp_page_list
+    else:
+        raise ValueError(f"unsupported remote GBrain command: {command}")
+
+    deadline = time.monotonic() + max(0.1, float(timeout))
+
+    def call_tool(name, arguments):
+        remaining = max(0.1, deadline - time.monotonic())
+        return gbrain_call_tool(name, arguments, timeout=remaining)
+
+    if command == "list" and int(payload.get("limit") or 0) > 100:
+        rows = []
+        remaining_rows = max(0, int(payload["limit"]))
+        offset = max(0, int(payload.get("offset") or 0))
+        while remaining_rows > 0:
+            page_limit = min(100, remaining_rows)
+            page_payload = dict(payload)
+            page_payload["limit"] = page_limit
+            page_payload["offset"] = offset + len(rows)
+            page = call_tool(tool_name, page_payload)
+            if not isinstance(page, list):
+                raise RuntimeError("remote GBrain list returned invalid rows")
+            rows.extend(page)
+            remaining_rows -= len(page)
+            if len(page) < page_limit:
+                break
+        value = rows
+    else:
+        value = call_tool(tool_name, payload)
+
+    if command in {"search", "query", "backlinks", "graph-query", "list"} and not isinstance(value, list):
+        raise RuntimeError(f"remote GBrain {command} returned invalid rows")
+    if command == "get":
+        if not isinstance(value, dict) or not isinstance(value.get("content"), str):
+            raise RuntimeError("remote GBrain get returned invalid content")
+        return value["content"]
+    if command == "graph-query":
+        return format_mcp_graph_query(value, payload)
+    return formatter(value)
+
+
 def run_gbrain(*args, input_text=None, timeout=20):
     started = time.monotonic()
     persistent_commands = {"search", "query", "get", "backlinks", "graph-query", "list"}
+    if input_text is None and args and args[0] in persistent_commands and configured_remote_mcp_path() is not None:
+        return run_remote_gbrain_read(*args, timeout=timeout)
     if input_text is None and args and args[0] in persistent_commands and PERSISTENT_GBRAIN_SEARCH.active:
         try:
             return PERSISTENT_GBRAIN_SEARCH.read_cli_output(args, timeout)
@@ -2676,73 +2733,6 @@ def gbrain_call_tool(tool_name, payload=None, timeout=30):
     if parsed_list is not None:
         return parsed_list
     return {"output": output}
-
-
-OPENCLAW_PROFILE_ACTIVATION_SERVICE = None
-OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = None
-OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK = threading.Lock()
-
-
-def openclaw_profile_activation_service():
-    """Return the one process-long private activation service."""
-    service = OPENCLAW_PROFILE_ACTIVATION_SERVICE
-    if service is None:
-        state = (
-            "unavailable"
-            if os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_ENABLED") == "1"
-            else "disabled"
-        )
-        raise ActivationError(f"OpenClaw provisioning is {state}")
-    return service
-
-
-def openclaw_profile_activation_executor():
-    return OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
-
-
-def start_openclaw_profile_activation_runtime():
-    global OPENCLAW_PROFILE_ACTIVATION_SERVICE
-    global OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
-    if os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_ENABLED") != "1":
-        return None
-    with OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK:
-        if OPENCLAW_PROFILE_ACTIVATION_SERVICE is not None:
-            return OPENCLAW_PROFILE_ACTIVATION_SERVICE
-        service = activation_from_environment(gbrain_call_tool)
-        service.start()
-        try:
-            executor = OpenClawProfileActivationExecutor(lambda: service)
-            executor.start()
-        except BaseException:
-            service.close()
-            raise
-        OPENCLAW_PROFILE_ACTIVATION_SERVICE = service
-        OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = executor
-        return service
-
-
-def stop_openclaw_profile_activation_runtime():
-    global OPENCLAW_PROFILE_ACTIVATION_SERVICE
-    global OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
-    with OPENCLAW_PROFILE_ACTIVATION_RUNTIME_LOCK:
-        service = OPENCLAW_PROFILE_ACTIVATION_SERVICE
-        executor = OPENCLAW_PROFILE_ACTIVATION_EXECUTOR
-        OPENCLAW_PROFILE_ACTIVATION_SERVICE = None
-        OPENCLAW_PROFILE_ACTIVATION_EXECUTOR = None
-    if executor is not None:
-        try:
-            executor.stop()
-        finally:
-            if service is not None:
-                service.close()
-    elif service is not None:
-        service.close()
-
-
-def openclaw_provisioning_authorized(headers):
-    token = os.environ.get("MEMORY_STARGRAPH_OC_PROVISION_TOKEN", "")
-    supplied = headers.get("Authorization", "") if headers else ""
-    return bool(token) and hmac.compare_digest(str(supplied), f"Bearer {token}")
 
 
 def resolver_read_cache():
@@ -10417,52 +10407,6 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
             return self.serve_media_file(parsed.path)
         if parsed.path.startswith("/gbrain-files/"):
             return self.serve_gbrain_file(parsed.path)
-        operation_prefix = "/api/internal/openclaw-profiles/operations/"
-        if parsed.path.startswith(operation_prefix):
-            if not openclaw_provisioning_authorized(self.headers):
-                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
-            operation_id = unquote(parsed.path[len(operation_prefix) :]).strip("/")
-            if not operation_id or "/" in operation_id:
-                return self.end_json(
-                    {"error": "operation_id is required"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-            try:
-                return self.end_json(
-                    {
-                        "ok": True,
-                        **openclaw_profile_activation_service().status(operation_id),
-                    }
-                )
-            except ActivationConflict as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
-            except (ActivationError, RuntimeError) as exc:
-                return self.end_json(
-                    {"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE
-                )
-        if parsed.path == "/api/internal/openclaw-profiles/active":
-            if not openclaw_provisioning_authorized(self.headers):
-                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
-            try:
-                projection = (
-                    openclaw_profile_activation_service().cached_active_projection()
-                )
-                response_status = HTTPStatus.OK
-                if projection.get("status") == "validation_pending":
-                    executor = openclaw_profile_activation_executor()
-                    if executor is None:
-                        raise ActivationError(
-                            "OpenClaw activation executor is unavailable"
-                        )
-                    executor.request_projection_validation()
-                    response_status = HTTPStatus.ACCEPTED
-                return self.end_json(
-                    {"ok": True, **projection}, status=response_status
-                )
-            except ActivationConflict as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
-            except (ActivationError, RuntimeError) as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         if parsed.path == "/api/health":
             graph = STORE.get_health_graph()
             return self.end_json(
@@ -10707,77 +10651,6 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        operation_prefix = "/api/internal/openclaw-profiles/operations/"
-        if parsed.path.startswith(operation_prefix) and parsed.path.endswith("/recover"):
-            if not openclaw_provisioning_authorized(self.headers):
-                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
-            operation_id = unquote(
-                parsed.path[len(operation_prefix) : -len("/recover")]
-            ).strip("/")
-            if not operation_id or "/" in operation_id:
-                return self.end_json(
-                    {"error": "operation_id is required"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-            try:
-                recovery = openclaw_profile_activation_service().request_recovery(
-                    operation_id
-                )
-                executor = openclaw_profile_activation_executor()
-                if executor is None:
-                    raise ActivationError(
-                        "OpenClaw activation executor is unavailable"
-                    )
-                executor.wake()
-                return self.end_json(
-                    {
-                        "ok": True,
-                        **recovery,
-                    }
-                )
-            except ActivationConflict as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
-            except (ActivationError, RuntimeError) as exc:
-                return self.end_json(
-                    {"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE
-                )
-        if parsed.path == "/api/internal/openclaw-profiles/provision":
-            if not openclaw_provisioning_authorized(self.headers):
-                return self.end_json({"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
-            try:
-                payload = self.read_json_body()
-                declarations = payload.get("declarations") if isinstance(payload, dict) else None
-                owner = str(payload.get("owner") or "") if isinstance(payload, dict) else ""
-                operation_id = str(payload.get("operation_id") or "") if isinstance(payload, dict) else ""
-                if not isinstance(declarations, list) or not owner or not operation_id:
-                    raise ValueError("declarations, owner, and operation_id are required")
-                activation = openclaw_profile_activation_service()
-                receipt = activation.submit(
-                    declarations,
-                    owner=owner,
-                    operation_id=operation_id,
-                )
-                if receipt.get("status") == "accepted":
-                    executor = openclaw_profile_activation_executor()
-                    if executor is None:
-                        raise ActivationError(
-                            "OpenClaw activation executor is unavailable"
-                        )
-                    executor.wake()
-                response_status = (
-                    HTTPStatus.ACCEPTED
-                    if receipt.get("status") == "accepted"
-                    else HTTPStatus.OK
-                )
-                return self.end_json(
-                    {"ok": True, **receipt}, status=response_status
-                )
-            except ValueError as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-            except ActivationConflict as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
-            except (ActivationError, RuntimeError) as exc:
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         if parsed.path == "/api/refresh":
             graph = STORE.get_seed_graph(force=True)
             return self.end_json(graph)
@@ -11194,7 +11067,6 @@ def main():
             scheme = "https"
         PERSISTENT_GBRAIN_SEARCH.prewarm_async()
         YODA_GBRAIN_MCP_POOL.prewarm_async()
-        start_openclaw_profile_activation_runtime()
         print(f"{APP_NAME} serving on {scheme}://{args.host}:{args.port}")
         server.serve_forever()
     except KeyboardInterrupt:
@@ -11203,7 +11075,6 @@ def main():
         server.server_close()
         PERSISTENT_GBRAIN_SEARCH.close()
         YODA_GBRAIN_MCP_POOL.close()
-        stop_openclaw_profile_activation_runtime()
 
 
 if __name__ == "__main__":

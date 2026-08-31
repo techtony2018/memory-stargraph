@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.210";
+const UI_VERSION = "V1.0.211";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -83,6 +83,9 @@ const state = {
   lazySearch: { timer: null, query: "", loading: false, todoBacklogMarkdown: "", todoBacklogPromise: null },
   menuSlug: null,
   modalAction: null,
+  activeModal: null,
+  modalOpeners: new Map(),
+  modalBackgroundState: new Map(),
   askYodaChats: new Map(),
   askYodaLogs: new Map(),
   yodaFeedback: new Map(),
@@ -896,6 +899,108 @@ function setModalControlTooltips(primaryText = "", cancelText = "") {
   setHudTooltip(modalCloseButton, "Close this window.");
   setHudTooltip(modalPrimaryButton, primaryText ? `${primaryText}.` : "");
   setHudTooltip(modalCancelButton, cancelText ? `${cancelText}.` : "");
+}
+
+const MODAL_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function modalFocusableElements(modal) {
+  if (!modal) return [];
+  return [...modal.querySelectorAll(MODAL_FOCUSABLE_SELECTOR)].filter((element) => (
+    !element.hidden
+    && element.getAttribute("aria-hidden") !== "true"
+    && element.getClientRects().length > 0
+  ));
+}
+
+function rememberModalOpener(modal) {
+  if (!modal || !modal.hidden || state.modalOpeners.has(modal)) return;
+  const opener = document.activeElement;
+  if (opener instanceof HTMLElement && opener !== document.body && !modal.contains(opener)) {
+    state.modalOpeners.set(modal, opener);
+  }
+}
+
+function setModalBackgroundInert(modal) {
+  if (!document.body) return;
+  if (!state.modalBackgroundState.size) {
+    [...document.body.children].forEach((element) => {
+      if (element === modal || element === state.hudTooltip || element.tagName === "SCRIPT") return;
+      state.modalBackgroundState.set(element, {
+        ariaHidden: element.getAttribute("aria-hidden"),
+        inert: Boolean(element.inert),
+      });
+      element.inert = true;
+      element.setAttribute("aria-hidden", "true");
+    });
+  }
+  state.activeModal = modal;
+  document.body.classList.add("modal-open");
+}
+
+function restoreModalBackground() {
+  state.modalBackgroundState.forEach((previous, element) => {
+    element.inert = previous.inert;
+    if (previous.ariaHidden === null) element.removeAttribute("aria-hidden");
+    else element.setAttribute("aria-hidden", previous.ariaHidden);
+  });
+  state.modalBackgroundState.clear();
+  state.activeModal = null;
+  document.body?.classList.remove("modal-open");
+}
+
+function showModal(modal, preferredFocus) {
+  if (!modal) return;
+  rememberModalOpener(modal);
+  hideHudTooltip();
+  modal.hidden = false;
+  setModalBackgroundInert(modal);
+  const target = preferredFocus || modalFocusableElements(modal)[0];
+  if (target instanceof HTMLElement && modal.contains(target)) target.focus();
+}
+
+function showOperationModal(preferredFocus = modalCloseButton) {
+  showModal(operationModal, preferredFocus);
+}
+
+function closeAccessibleModal(modal) {
+  if (!modal) return;
+  modal.hidden = true;
+  hideHudTooltip();
+  restoreModalBackground();
+  const opener = state.modalOpeners.get(modal);
+  state.modalOpeners.delete(modal);
+  if (opener instanceof HTMLElement && opener.isConnected && !opener.disabled) {
+    opener.focus();
+  }
+}
+
+function trapModalFocus(event, modal) {
+  if (event.key !== "Tab" || !modal || modal.hidden) return;
+  const focusable = modalFocusableElements(modal);
+  if (!focusable.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (!modal.contains(active)) {
+    event.preventDefault();
+    first.focus();
+  } else if (event.shiftKey && active === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function updateCloudModeControl() {
@@ -4245,7 +4350,7 @@ function openYodaLogWindow(options = {}) {
   renderFilteredLog();
   modalMarkdown.appendChild(toolbar);
   modalMarkdown.appendChild(pre);
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
 }
 
@@ -4263,7 +4368,7 @@ async function openSetupDiagnosticsWindow() {
   modalForm.hidden = true;
   modalMarkdown.hidden = false;
   modalMarkdown.innerHTML = "";
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "setup-diagnostics", slug: "", label: "Setup diagnostics" };
   const response = await apiGet("/api/setup-diagnostics");
   const pre = document.createElement("pre");
@@ -4336,7 +4441,7 @@ async function openActivationFunnelWindow() {
   loading.className = "modal-loading-state";
   loading.textContent = "Loading first-run activation...";
   modalMarkdown.appendChild(loading);
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "activation-funnel", slug: "sample-memory-hub", label: "First-run activation" };
   const response = await apiGet("/api/activation-funnel");
   modalMarkdown.innerHTML = "";
@@ -4367,7 +4472,7 @@ async function openSampleBrainWindow() {
   modalForm.hidden = true;
   modalMarkdown.hidden = false;
   modalMarkdown.innerHTML = "";
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "sample-brain", slug: "sample-memory-hub", label: "Sample brain demo" };
   const response = await apiGet("/api/sample-brain");
   if (response.ok && response.data?.graph) {
@@ -4705,7 +4810,7 @@ async function openMemoryDigestWindow() {
   loading.className = "modal-loading-state";
   loading.textContent = "Loading memory value digest...";
   modalMarkdown.appendChild(loading);
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "memory-digest", slug: "goals/memory-stargraph-continuous-learning-local-knowledge-os", label: "Memory value digest" };
   const response = await apiGet("/api/memory-value-digest?window=week");
   const pre = document.createElement("pre");
@@ -4739,7 +4844,7 @@ async function openCustomerReadinessWindow() {
   loading.className = "modal-loading-state";
   loading.textContent = "Loading customer readiness...";
   modalMarkdown.appendChild(loading);
-  operationModal.hidden = false;
+  showOperationModal();
   state.modalAction = { action: "customer-readiness", slug: "notes/memory-starmap-todo-list/add-a-customer-readiness-and-safe-next-step-card", label: "Customer readiness" };
   const response = await apiGet("/api/customer-readiness");
   const pre = document.createElement("pre");
@@ -4823,7 +4928,7 @@ async function openYodaPromptWindow() {
   modalForm.appendChild(resetButton);
   operationModal.classList.add("compact-modal");
   setModalControlTooltips("Save Yoda system prompt", "Cancel");
-  operationModal.hidden = false;
+  showOperationModal();
   try {
     const response = await apiGet("/api/yoda-system-prompt");
     if (!response.ok) throw new Error(response.data?.error || `Prompt load failed with ${response.status}`);
@@ -6807,16 +6912,16 @@ function applyResolverProposal(id) {
 
 function openResolverReviewModal() {
   if (!resolverReviewModal) return;
-  resolverReviewModal.hidden = false;
+  showModal(resolverReviewModal, resolverReviewCloseButton);
   void loadResolverProposals();
 }
 
 function closeResolverReviewModal() {
-  if (resolverReviewModal) resolverReviewModal.hidden = true;
+  closeAccessibleModal(resolverReviewModal);
 }
 
 function closeModal() {
-  operationModal.hidden = true;
+  closeAccessibleModal(operationModal);
   removeSlugSelectorPopups();
   operationModal.classList.remove("compact-modal");
   operationModal.classList.remove("ask-yoda-modal");
@@ -6904,7 +7009,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderNewNodeForm();
     setModalControlTooltips("Create node", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationNodeName")?.focus();
     return;
   }
@@ -6922,7 +7027,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     operationModal.classList.add("compact-modal");
     renderAutopilotPlanForm();
     setModalControlTooltips("Play", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("input")?.focus();
     return;
   }
@@ -6938,7 +7043,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     operationModal.classList.remove("compact-modal");
     setModalControlTooltips("Close", "");
-    operationModal.hidden = false;
+    showOperationModal();
     updateNavModeState();
     state.autopilotFindings.offset = 0;
     await loadAutopilotFindings();
@@ -6956,7 +7061,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     operationModal.classList.remove("compact-modal");
     setModalControlTooltips("Close", "");
-    operationModal.hidden = false;
+    showOperationModal();
     state.takeReview.filters.holder = slug || "";
     state.takeReview.filters.cursor = "";
     resetExistingTakesPagination();
@@ -6980,7 +7085,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     operationModal.classList.add("compact-modal");
     setModalControlTooltips("Save Yoda model settings", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     renderYodaModelForm({});
     try {
       const response = await apiGet("/api/yoda-model-config");
@@ -7008,7 +7113,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     operationModal.classList.add("compact-modal");
     setModalControlTooltips("Validate and save GBrain backend", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     renderGbrainBackendForm({});
     try {
       const response = await apiGet("/api/gbrain-backend-config");
@@ -7041,7 +7146,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     }
     modalEditor.hidden = action === "view";
     modalMarkdown.hidden = action !== "view";
-    operationModal.hidden = false;
+    showOperationModal();
     const busyToken = action === "view" ? beginBusyOperation("Loading view") : null;
     try {
       const response = await apiGet(`/api/entity-raw/${encodeURIComponent(slug)}`);
@@ -7068,7 +7173,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalMedia.hidden = false;
     modalMessage.textContent = "Images, video, audio, and PDFs are detected from this node's gbrain markdown/frontmatter. Hosted or locally served media opens on desktop and mobile.";
-    operationModal.hidden = false;
+    showOperationModal();
     renderMediaItems([]);
     const busyToken = beginBusyOperation("Loading media");
     try {
@@ -7096,7 +7201,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalPrimaryButton.disabled = true;
     setModalControlTooltips("Delete", "Cancel");
     modalMessage.textContent = `Type the full node name exactly to delete this page from gbrain: ${label}`;
-    operationModal.hidden = false;
+    showOperationModal();
     modalConfirmInput.focus();
     return;
   }
@@ -7109,7 +7214,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderAddRelationshipForm(slug);
     setModalControlTooltips("Add relationship", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationTarget")?.focus();
     return;
   }
@@ -7129,7 +7234,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     await loadYodaFeedback(slug);
     renderAskChat(slug, label, { mode: "yoda" });
     setModalControlTooltips("Send", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalChatInput.focus();
     return;
   }
@@ -7142,7 +7247,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.readOnly = true;
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
-    operationModal.hidden = false;
+    showOperationModal();
     state.modalAction = { action: "result", slug, label };
     await loadBacklinksPage(slug, 0);
     return;
@@ -7156,7 +7261,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderGraphQueryForm(slug);
     setModalControlTooltips("Run graph query", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationGraphLinkType")?.focus();
     return;
   }
@@ -7169,7 +7274,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
     renderRelationshipsMessage(slug);
-    operationModal.hidden = false;
+    showOperationModal();
     state.modalAction = { action: "result", slug, label };
     renderMarkdownView("Loading outgoing relationships...");
     const busyToken = beginBusyOperation("Loading relationships");
@@ -7198,7 +7303,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Loading page history for this node.";
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
-    operationModal.hidden = false;
+    showOperationModal();
     state.modalAction = { action: "result", slug, label };
     await loadHistoryForSlug(slug);
     return;
@@ -7212,7 +7317,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Read-only gbrain timeline. Add a dated event here when something new should be recorded.";
     modalEditor.hidden = true;
     modalMarkdown.hidden = false;
-    operationModal.hidden = false;
+    showOperationModal();
     renderMarkdownView("Loading timeline...");
     const busyToken = beginBusyOperation("Loading timeline");
     try {
@@ -7237,7 +7342,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderRemoveRelationshipForm(slug);
     setModalControlTooltips("Remove relationship", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationExistingRelationship")?.focus();
     return;
   }
@@ -7250,7 +7355,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderTagOperationForm(slug);
     setModalControlTooltips("Save tags", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationNewTag")?.focus();
     return;
   }
@@ -7263,7 +7368,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalForm.hidden = false;
     renderTimelineEventForm();
     setModalControlTooltips("Add event", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalForm.querySelector("#operationTimelineDate")?.focus();
     return;
   }
@@ -7277,7 +7382,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalAttach.hidden = false;
     modalAttachStatus.textContent = "Choose a file from Finder. Supported media is copied into the web media root, attached to gbrain, and added to markdown using the description above.";
     setModalControlTooltips("Attach file", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
     modalFileInput.focus();
     return;
   }
@@ -7288,7 +7393,7 @@ async function openNodeModal(action, slug = state.focusSlug) {
     modalMessage.textContent = "Runs `gbrain embed` for this node when the active gbrain backend supports it.";
     modalEditor.hidden = true;
     setModalControlTooltips("Refresh embedding", "Cancel");
-    operationModal.hidden = false;
+    showOperationModal();
   }
 }
 
@@ -8359,6 +8464,18 @@ function bindEvents() {
   });
 
   modalCloseButton.addEventListener("click", closeModalFromControl);
+  operationModal.addEventListener("keydown", (event) => trapModalFocus(event, operationModal));
+  operationModal.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeModalFromControl();
+  });
+  resolverReviewModal?.addEventListener("keydown", (event) => trapModalFocus(event, resolverReviewModal));
+  resolverReviewModal?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeResolverReviewModal();
+  });
   modalCancelButton.addEventListener("click", () => {
     if (state.modalAction?.action === "yoda-model" && state.yodaModelReturn) {
       void returnFromYodaModel();

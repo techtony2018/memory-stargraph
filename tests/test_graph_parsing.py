@@ -393,6 +393,7 @@ class GraphParsingTests(unittest.TestCase):
         persistent = mock.Mock(active=True)
         persistent.read_cli_output.return_value = "[0.90] products/memory-stargraph -- # Memory Stargraph\n"
         with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess") as fallback,
         ):
@@ -409,6 +410,7 @@ class GraphParsingTests(unittest.TestCase):
         persistent = mock.Mock(active=True)
         persistent.read_cli_output.side_effect = RuntimeError("synthetic process exit")
         with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess", return_value="fallback") as fallback,
         ):
@@ -741,6 +743,7 @@ class GraphParsingTests(unittest.TestCase):
         persistent = mock.Mock(active=True)
         persistent.read_cli_output.side_effect = ["query", "page", "[]\n", "rows\n"]
         with (
+            mock.patch("server.configured_remote_mcp_path", return_value=None),
             mock.patch("server.PERSISTENT_GBRAIN_SEARCH", persistent),
             mock.patch("server.run_gbrain_subprocess") as fallback,
         ):
@@ -754,6 +757,46 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(outputs, ["query", "page", "[]\n", "rows\n"])
         self.assertEqual(persistent.read_cli_output.call_count, 4)
         fallback.assert_not_called()
+
+    def test_run_gbrain_remote_mcp_reads_never_fall_back_to_local_cli(self):
+        paths = [
+            {
+                "from_slug": "_backups/backup-latest",
+                "to_slug": "notes/example",
+                "link_type": "contains",
+                "depth": 1,
+            }
+        ]
+        with (
+            mock.patch(
+                "server.configured_remote_mcp_path",
+                return_value=Path("/private/remote/config.json"),
+            ),
+            mock.patch(
+                "server.gbrain_call_tool",
+                side_effect=[paths, []],
+            ) as call_tool,
+            mock.patch("server.run_gbrain_subprocess") as local_cli,
+        ):
+            graph_output = run_gbrain(
+                "graph-query",
+                "_backups/backup-latest",
+                "--direction",
+                "out",
+                "--depth",
+                "1",
+            )
+            backlinks_output = run_gbrain(
+                "backlinks", "_backups/backup-latest"
+            )
+
+        self.assertIn("--contains-> notes/example", graph_output)
+        self.assertEqual(json.loads(backlinks_output), [])
+        self.assertEqual(
+            [call.args[0] for call in call_tool.call_args_list],
+            ["traverse_graph", "get_backlinks"],
+        )
+        local_cli.assert_not_called()
 
     def test_persistent_read_session_formats_list_pages(self):
         session = PersistentGBrainSearch()

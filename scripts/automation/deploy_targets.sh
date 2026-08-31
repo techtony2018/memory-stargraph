@@ -41,13 +41,16 @@ fi
 tracked_files=(
   README.md
   dashboard-integration.json
-  openclaw_profile_activation.py
   requirements-dashboard.txt
   server.py
   public/app.js
   public/index.html
   public/styles.css
+  public/assets/brand/logo-circle-favicon.png
+  public/assets/brand/logo-circle-transparent-small.png
+  public/assets/brand/yoda-selection-avatar-small.png
   public/assets/brand/yoda-selection-avatar.png
+  public/assets/brand/wordmark-line-small.webp
   scripts/automation/gbrain_worker_api.py
   scripts/automation/start_memory_stargraph_dashboard.zsh
   scripts/automation/capture_link_host_runner.py
@@ -72,6 +75,15 @@ tracked_files=(
   tests/test_recurring_worker_bridge.py
   tests/test_retrieval_quality_benchmark.py
   tests/test_yoda_gap_evaluator.py
+)
+
+# Copy-based local deployments do not remove files that disappear from the
+# repository. Delete only these exact retired profile-activation artifacts so
+# an old implementation cannot remain importable after the service update.
+retired_local_files=(
+  openclaw_profile_activation.py
+  tests/test_openclaw_profile_activation.py
+  docs/openclaw-profile-activation-runbook.md
 )
 
 verify_url() {
@@ -270,6 +282,10 @@ for path in "${tracked_files[@]}"; do
     continue
   fi
   cp "$source_path" "$destination_path"
+done
+for path in "${retired_local_files[@]}"; do
+  destination_path="$MEMORY_STARGRAPH_LOCAL_SERVICE_DIR/$path"
+  rm -f -- "$destination_path"
 done
 local_port="${MEMORY_STARGRAPH_LOCAL_URL##*:}"
 local_port="${local_port%%/*}"

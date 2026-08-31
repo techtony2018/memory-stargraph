@@ -36,15 +36,18 @@ class AutomationContractTests(unittest.TestCase):
             r"GBRAIN_REMOTE_CLIENT_SECRET=['\"]?[A-Za-z0-9_-]{32,}['\"]?",
         )
 
-    def test_remote_mcp_launcher_preserves_private_openclaw_activation_identity(self):
+    def test_remote_mcp_launcher_excludes_retired_openclaw_activation_identity(self):
         source = (
             ROOT / "scripts/automation/start_memory_stargraph_dashboard.zsh"
         ).read_text()
 
-        self.assertIn("openclaw-profile-activation/memory-stargraph.env", source)
-        self.assertIn('require_owner_file "$OPENCLAW_ACTIVATION_ENV_FILE"', source)
-        self.assertIn('source "$OPENCLAW_ACTIVATION_ENV_FILE"', source)
-        self.assertNotIn("MEMORY_STARGRAPH_OC_PROVISION_TOKEN=", source)
+        for retired_phrase in (
+            "OPENCLAW_ACTIVATION_ENV_FILE",
+            "openclaw-profile-activation/memory-stargraph.env",
+            "MEMORY_STARGRAPH_OC_PROVISION_TOKEN",
+            "MEMORY_STARGRAPH_OC_PROVISION_ENABLED",
+        ):
+            self.assertNotIn(retired_phrase, source)
 
     def test_dashboard_integration_declares_versioned_remote_mcp_launcher(self):
         import json
@@ -79,6 +82,19 @@ class AutomationContractTests(unittest.TestCase):
         deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
         self.assertIn("dashboard-integration.json", deploy)
         self.assertIn("scripts/automation/start_memory_stargraph_dashboard.zsh", deploy)
+
+    def test_deployment_packages_every_brand_asset_referenced_by_the_app_shell(self):
+        deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
+        tracked = deploy.split("tracked_files=(", 1)[1].split("\n)", 1)[0]
+
+        for asset in (
+            "public/assets/brand/logo-circle-favicon.png",
+            "public/assets/brand/logo-circle-transparent-small.png",
+            "public/assets/brand/yoda-selection-avatar-small.png",
+            "public/assets/brand/yoda-selection-avatar.png",
+            "public/assets/brand/wordmark-line-small.webp",
+        ):
+            self.assertIn(asset, tracked)
 
     def test_worker_role_titles_are_user_facing_only(self):
         expected = {
@@ -261,14 +277,23 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("source_commit", deploy)
         self.assertIn("hostnames, IPs, credentials, paths, and target coordinates are withheld", deploy)
 
-    def test_deployment_packaging_includes_openclaw_activation_runtime(self):
+    def test_deployment_packaging_excludes_retired_openclaw_activation_runtime(self):
         deploy = (ROOT / "scripts/automation/deploy_targets.sh").read_text()
 
-        for path in (
+        tracked = deploy.split("tracked_files=(", 1)[1].split("\n)", 1)[0]
+        self.assertNotIn("openclaw_profile_activation.py", tracked)
+        self.assertFalse((ROOT / "openclaw_profile_activation.py").exists())
+        self.assertFalse((ROOT / "tests/test_openclaw_profile_activation.py").exists())
+        self.assertFalse((ROOT / "docs/openclaw-profile-activation-runbook.md").exists())
+        for retired_path in (
             "openclaw_profile_activation.py",
-            "requirements-dashboard.txt",
+            "tests/test_openclaw_profile_activation.py",
+            "docs/openclaw-profile-activation-runbook.md",
         ):
-            self.assertIn(path, deploy)
+            self.assertIn(retired_path, deploy)
+        self.assertIn("retired_local_files=(", deploy)
+        self.assertIn('rm -f -- "$destination_path"', deploy)
+        self.assertIn("requirements-dashboard.txt", deploy)
         self.assertNotIn("target.write_text(str(", deploy)
         for phrase in (
             "reload_recurring_bridge_if_present",

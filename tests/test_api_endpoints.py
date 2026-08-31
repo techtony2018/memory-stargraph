@@ -14,10 +14,10 @@ import unittest
 from http import HTTPStatus
 from pathlib import Path
 from unittest import mock
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import server
-import openclaw_profile_activation as activation_module
 from server import MemoryStargraphHandler
 
 
@@ -891,616 +891,60 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["gbrain_version"], "V0.46.28.0")
         self.assertEqual(fake_store.calls, [("get_health_graph",)])
 
-    def test_internal_openclaw_provisioning_requires_bearer_authentication(self):
-        with mock.patch.dict("os.environ", {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"}):
-            status, data = self.dispatch_post("/api/internal/openclaw-profiles/provision", {})
-
-        self.assertEqual(status, 401)
-        self.assertEqual(data["error"], "unauthorized")
-
-    def test_server_runtime_constructs_starts_and_closes_one_activation_service(self):
-        calls = []
-
-        class FakeActivation:
-            def start(self):
-                calls.append("service-start")
-                return self
-
-            def close(self):
-                calls.append("service-close")
-
-        activation = FakeActivation()
-
-        class FakeExecutor:
-            def __init__(self, service_factory):
-                calls.append(("executor-init", service_factory()))
-
-            def start(self):
-                calls.append("executor-start")
-
-            def stop(self):
-                calls.append("executor-stop")
-
-        self.assertTrue(
-            callable(
-                getattr(server, "start_openclaw_profile_activation_runtime", None)
-            )
-        )
-        with (
-            mock.patch.dict(
-                "os.environ",
-                {"MEMORY_STARGRAPH_OC_PROVISION_ENABLED": "1"},
-                clear=True,
+    def test_retired_openclaw_profile_routes_are_not_served_even_with_legacy_token(self):
+        headers = {"Authorization": "Bearer retired-token"}
+        routes = (
+            ("GET", "/api/internal/openclaw-profiles/active"),
+            ("GET", "/api/internal/openclaw-profiles/operations/retired-operation"),
+            ("POST", "/api/internal/openclaw-profiles/provision"),
+            (
+                "POST",
+                "/api/internal/openclaw-profiles/operations/retired-operation/recover",
             ),
-            mock.patch(
-                "server.activation_from_environment", return_value=activation
-            ) as factory,
-            mock.patch(
-                "server.OpenClawProfileActivationExecutor", FakeExecutor
-            ),
-        ):
-            server.start_openclaw_profile_activation_runtime()
-            server.start_openclaw_profile_activation_runtime()
-            first = server.openclaw_profile_activation_service()
-            second = server.openclaw_profile_activation_service()
-            server.stop_openclaw_profile_activation_runtime()
-            server.stop_openclaw_profile_activation_runtime()
-
-        self.assertIs(first, activation)
-        self.assertIs(second, activation)
-        factory.assert_called_once()
-        self.assertEqual(
-            calls,
-            [
-                "service-start",
-                ("executor-init", activation),
-                "executor-start",
-                "executor-stop",
-                "service-close",
-            ],
         )
-
-    def test_http_shutdown_joins_a_live_handler_before_closing_activation_service(self):
-        handler_entered = threading.Event()
-        release_handler = threading.Event()
-        service_closed = threading.Event()
-        lifecycle = []
-        client_results = []
-        thread_errors = []
-
-        class FakeActivation:
-            def status(self, operation_id):
-                lifecycle.append("handler-entered")
-                handler_entered.set()
-                if not release_handler.wait(3):
-                    raise AssertionError("live handler was not released")
-                lifecycle.append("handler-completed")
-                return {
-                    "operation_id": operation_id,
-                    "status": "running",
-                    "fence_generation": 1,
-                    "receipt": None,
-                    "error": None,
-                    "recovery_request_generation": 0,
-                    "recovery_processed_generation": 0,
-                }
-
-            def close(self):
-                lifecycle.append("service-closed")
-                service_closed.set()
-
-        class FakeExecutor:
-            def stop(self):
-                lifecycle.append("executor-stopped")
-
-        activation = FakeActivation()
         server_class = getattr(
             server, "MemoryStargraphHTTPServer", server.ThreadingHTTPServer
         )
         httpd = server_class(("127.0.0.1", 0), MemoryStargraphHandler)
         serve_thread = threading.Thread(target=httpd.serve_forever)
-        client_thread = None
-        close_thread = None
-
-        def request_status():
-            try:
-                request = Request(
-                    "http://127.0.0.1:"
-                    f"{httpd.server_address[1]}"
-                    "/api/internal/openclaw-profiles/operations/op-live-shutdown",
-                    headers={"Authorization": "Bearer unit-token"},
-                )
-                with urlopen(request, timeout=3) as response:
-                    client_results.append(
-                        (response.status, json.loads(response.read()))
-                    )
-            except Exception as error:
-                thread_errors.append(error)
-
-        def close_runtime_after_handlers():
-            try:
-                httpd.server_close()
-                server.stop_openclaw_profile_activation_runtime()
-            except Exception as error:
-                thread_errors.append(error)
-
+        serve_thread.start()
         try:
-            with (
-                mock.patch.dict(
-                    "os.environ",
-                    {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"},
-                ),
-                mock.patch.object(
-                    server,
-                    "OPENCLAW_PROFILE_ACTIVATION_SERVICE",
-                    activation,
-                ),
-                mock.patch.object(
-                    server,
-                    "OPENCLAW_PROFILE_ACTIVATION_EXECUTOR",
-                    FakeExecutor(),
-                ),
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "MEMORY_STARGRAPH_OC_PROVISION_ENABLED": "1",
+                    "MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "retired-token",
+                },
+                clear=False,
             ):
-                serve_thread.start()
-                client_thread = threading.Thread(target=request_status)
-                client_thread.start()
-                self.assertTrue(handler_entered.wait(2))
-                httpd.shutdown()
-                serve_thread.join(2)
-                self.assertFalse(serve_thread.is_alive())
-
-                close_thread = threading.Thread(
-                    target=close_runtime_after_handlers
-                )
-                close_thread.start()
-                closed_while_handler_was_live = service_closed.wait(0.2)
-                release_handler.set()
-                close_thread.join(2)
-                client_thread.join(2)
-
-                self.assertFalse(closed_while_handler_was_live)
-                self.assertFalse(close_thread.is_alive())
-                self.assertFalse(client_thread.is_alive())
-                self.assertEqual(thread_errors, [])
-                self.assertEqual(client_results[0][0], 200)
-                self.assertLess(
-                    lifecycle.index("handler-completed"),
-                    lifecycle.index("service-closed"),
-                )
-                self.assertFalse(server_class.daemon_threads)
-                self.assertTrue(server_class.block_on_close)
+                for method, path in routes:
+                    request = Request(
+                        f"http://127.0.0.1:{httpd.server_address[1]}{path}",
+                        data=b"{}" if method == "POST" else None,
+                        headers={
+                            **headers,
+                            "Content-Type": "application/json",
+                        },
+                        method=method,
+                    )
+                    with self.subTest(method=method, path=path):
+                        with self.assertRaises(HTTPError) as raised:
+                            urlopen(request, timeout=3)
+                        self.assertEqual(raised.exception.code, HTTPStatus.NOT_FOUND)
         finally:
-            release_handler.set()
-            if serve_thread.is_alive():
-                httpd.shutdown()
-                serve_thread.join(2)
+            httpd.shutdown()
+            serve_thread.join(3)
             httpd.server_close()
-            if close_thread is not None:
-                close_thread.join(2)
-            if client_thread is not None:
-                client_thread.join(2)
 
-    def test_internal_openclaw_routes_delegate_only_after_authentication(self):
-        class FakeActivation:
-            def __init__(self):
-                self.calls = []
-
-            def submit(self, declarations, *, owner, operation_id):
-                self.calls.append(("submit", declarations, owner, operation_id))
-                return {
-                    "operation_id": operation_id,
-                    "status": "accepted",
-                    "fence_generation": None,
-                    "receipt": None,
-                    "error": None,
-                }
-
-            def run(self, operation_id):
-                self.calls.append(("run", operation_id))
-
-            def status(self, operation_id):
-                self.calls.append(("status", operation_id))
-                return {
-                    "operation_id": operation_id,
-                    "status": "running",
-                    "fence_generation": 4,
-                    "receipt": None,
-                    "error": None,
-                }
-
-            def recover(self, operation_id):
-                self.calls.append(("recover", operation_id))
-                return {
-                    "operation_id": operation_id,
-                    "status": "completed",
-                    "fence_generation": 4,
-                    "receipt": {
-                        "generation": 4,
-                        "manifest_slug": "system/openclaw-profile-manifests/g000004-op",
-                        "manifest_digest": "a" * 64,
-                        "default_goal_link_count": 0,
-                    },
-                    "error": None,
-                }
-
-            def request_recovery(self, operation_id):
-                self.calls.append(("request_recovery", operation_id))
-                return {
-                    "operation_id": operation_id,
-                    "status": "recovery_required",
-                    "fence_generation": 4,
-                    "receipt": None,
-                    "error": "durable recovery requested",
-                }
-
-            def cached_active_projection(self):
-                self.calls.append(("cached_active",))
-                return {
-                    "status": "ready",
-                    "control_revision": 9,
-                    "validated_at": 1000.0,
-                    "generation": 4,
-                    "active_manifest": "system/openclaw-profile-manifests/g000004-op",
-                    "manifest_digest": "a" * 64,
-                    "profiles": [],
-                }
-
-        activation = FakeActivation()
-        launched = []
-        executor_wakes = []
-
-        class FakeExecutor:
-            def wake(self):
-                executor_wakes.append("wake")
-
-        class FakeThread:
-            def __init__(self, *, target, args, daemon, name):
-                launched.append((target, args, daemon, name))
-
-            def start(self):
-                launched.append(("started",))
-
-        headers = {"Authorization": "Bearer unit-token"}
-        payload = {"declarations": [{"slug": "agents/tammy-oc"}], "owner": "gtasks", "operation_id": "op"}
-        with (
-            mock.patch.dict("os.environ", {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"}),
-            mock.patch("server.openclaw_profile_activation_service", return_value=activation),
-            mock.patch("server.threading.Thread", FakeThread),
-            mock.patch(
-                "server.openclaw_profile_activation_executor",
-                return_value=FakeExecutor(),
-                create=True,
-            ),
+        self.assertFalse(serve_thread.is_alive())
+        for retired_symbol in (
+            "openclaw_profile_activation_service",
+            "openclaw_profile_activation_executor",
+            "start_openclaw_profile_activation_runtime",
+            "stop_openclaw_profile_activation_runtime",
+            "openclaw_provisioning_authorized",
         ):
-            status, data = self.dispatch_post("/api/internal/openclaw-profiles/provision", payload, headers=headers)
-            unauthorized_operation_status, unauthorized_operation = self.dispatch_get(
-                "/api/internal/openclaw-profiles/operations/op"
-            )
-            unauthorized_recover_status, unauthorized_recover = self.dispatch_post(
-                "/api/internal/openclaw-profiles/operations/op/recover"
-            )
-            operation_status, operation = self.dispatch_get(
-                "/api/internal/openclaw-profiles/operations/op", headers=headers
-            )
-            recovered_status, recovered = self.dispatch_post(
-                "/api/internal/openclaw-profiles/operations/op/recover",
-                headers=headers,
-            )
-            active_status, active = self.dispatch_get("/api/internal/openclaw-profiles/active")
-            authorized_active_status, authorized_active = self.dispatch_get(
-                "/api/internal/openclaw-profiles/active", headers=headers
-            )
-
-        self.assertEqual(status, 202)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["status"], "accepted")
-        self.assertEqual(unauthorized_operation_status, 401)
-        self.assertEqual(unauthorized_operation["error"], "unauthorized")
-        self.assertEqual(unauthorized_recover_status, 401)
-        self.assertEqual(unauthorized_recover["error"], "unauthorized")
-        self.assertEqual(operation_status, 200)
-        self.assertEqual(operation["status"], "running")
-        self.assertEqual(recovered_status, 200)
-        self.assertEqual(recovered["status"], "recovery_required")
-        self.assertEqual(active_status, 401)
-        self.assertEqual(active["error"], "unauthorized")
-        self.assertEqual(authorized_active_status, 200)
-        self.assertTrue(authorized_active["ok"])
-        self.assertEqual(activation.calls[0][0], "submit")
-        self.assertEqual(activation.calls[1], ("status", "op"))
-        self.assertEqual(activation.calls[2], ("request_recovery", "op"))
-        self.assertEqual(activation.calls[-1], ("cached_active",))
-        self.assertEqual(launched, [])
-        self.assertEqual(executor_wakes, ["wake", "wake"])
-
-    def test_active_cache_miss_returns_pending_and_queues_worker_validation(self):
-        calls = []
-
-        class FakeActivation:
-            def cached_active_projection(self):
-                calls.append("bounded-cache-read")
-                return {
-                    "status": "validation_pending",
-                    "control_revision": 12,
-                    "generation": 4,
-                    "active_manifest": "system/openclaw-profile-manifests/g000004-op",
-                    "manifest_digest": "a" * 64,
-                }
-
-        class FakeExecutor:
-            def request_projection_validation(self):
-                calls.append("validation-queued")
-
-        with (
-            mock.patch.dict(
-                "os.environ",
-                {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"},
-            ),
-            mock.patch(
-                "server.openclaw_profile_activation_service",
-                return_value=FakeActivation(),
-            ),
-            mock.patch(
-                "server.openclaw_profile_activation_executor",
-                return_value=FakeExecutor(),
-            ),
-        ):
-            status, payload = self.dispatch_get(
-                "/api/internal/openclaw-profiles/active",
-                headers={"Authorization": "Bearer unit-token"},
-            )
-
-        self.assertEqual(status, 202)
-        self.assertEqual(payload["status"], "validation_pending")
-        self.assertNotIn("profiles", payload)
-        self.assertEqual(calls, ["bounded-cache-read", "validation-queued"])
-
-    def test_status_handler_stays_inside_budget_when_nats_is_delayed(self):
-        calls = []
-        operation_id = "op-delayed-handler"
-        operation_key = f"openclaw-profiles/operations/{operation_id}"
-        control_key = "openclaw-profiles/control"
-        encoded = json.dumps(
-            {
-                "operation_id": operation_id,
-                "status": "accepted",
-                "fence_generation": None,
-                "receipt": None,
-                "error": None,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-
-        class AsyncKeyValue:
-            async def get(self, key):
-                if key in {operation_key, control_key}:
-                    await asyncio.sleep(0.08)
-                if key not in {operation_key, control_key}:
-                    raise type("KeyNotFoundError", (Exception,), {})(key)
-                if key == control_key:
-                    control = json.dumps(
-                        activation_module.JetStreamControlStore._default(),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                    return type(
-                        "Entry", (), {"revision": 1, "value": control}
-                    )()
-                return type("Entry", (), {"revision": 1, "value": encoded})()
-
-            async def keys(self):
-                return [operation_key]
-
-        key_value = AsyncKeyValue()
-
-        class JetStream:
-            async def key_value(self, _bucket):
-                return key_value
-
-            async def publish(self, _subject, _payload, _headers):
-                return None
-
-        class Connection:
-            def jetstream(self):
-                return JetStream()
-
-            async def drain(self):
-                calls.append("drain")
-
-        async def connect(**_kwargs):
-            calls.append("connect")
-            return Connection()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            credentials = Path(temp_dir) / "nats.creds"
-            credentials.write_text(
-                "-----BEGIN NATS USER JWT-----\nunit.jwt\n"
-                "------END NATS USER JWT------\n\n"
-                "-----BEGIN USER NKEY SEED-----\nSUUNIT\n"
-                "------END USER NKEY SEED------\n",
-                encoding="utf-8",
-            )
-            credentials.chmod(0o600)
-            session = activation_module.NatsJetStreamSession(
-                servers=("nats://127.0.0.1:4222",),
-                credentials_file=credentials,
-                bucket="oc-control",
-                connect=connect,
-                connect_timeout_seconds=0.02,
-                request_timeout_seconds=0.02,
-            )
-            proxy = activation_module.NatsJetStreamKeyValue(session)
-            activation = activation_module.OpenClawProfileActivation(
-                control=activation_module.JetStreamControlStore(
-                    proxy, "openclaw-profiles/control"
-                ),
-                journal=activation_module.JetStreamJournal(
-                    session, "oc.journal"
-                ),
-                brain=object(),
-                now=time.time,
-                operations=activation_module.JetStreamOperationStore(
-                    proxy, "openclaw-profiles/operations"
-                ),
-                projections=activation_module.JetStreamProjectionStore(
-                    proxy, "openclaw-profiles/active-projection"
-                ),
-                operation_context=session.operation,
-            ).start()
-            started = time.monotonic()
-            try:
-                with (
-                    mock.patch.dict(
-                        "os.environ",
-                        {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"},
-                    ),
-                    mock.patch(
-                        "server.openclaw_profile_activation_service",
-                        return_value=activation,
-                    ),
-                ):
-                    first = self.dispatch_get(
-                        f"/api/internal/openclaw-profiles/operations/{operation_id}",
-                        headers={"Authorization": "Bearer unit-token"},
-                    )
-                    second = self.dispatch_get(
-                        f"/api/internal/openclaw-profiles/operations/{operation_id}",
-                        headers={"Authorization": "Bearer unit-token"},
-                    )
-                    active = self.dispatch_get(
-                        "/api/internal/openclaw-profiles/active",
-                        headers={"Authorization": "Bearer unit-token"},
-                    )
-            finally:
-                activation.close()
-            elapsed = time.monotonic() - started
-
-        self.assertTrue(
-            hasattr(server, "OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS")
-        )
-        self.assertLess(server.OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS, 4.0)
-        self.assertLess(elapsed, server.OPENCLAW_STATUS_ENDPOINT_BUDGET_SECONDS)
-        self.assertEqual(first[0], 503)
-        self.assertEqual(second[0], 503)
-        self.assertEqual(active[0], 503)
-        self.assertIn("timed out", first[1]["error"])
-        self.assertIn("timed out", active[1]["error"])
-        self.assertEqual(calls, ["connect", "drain"])
-
-    def test_terminal_recovery_handler_revalidates_tampered_graph_before_returning_terminal(self):
-        from tests.test_openclaw_profile_activation import (
-            DECLARATIONS,
-            FakeBrain,
-            FakeControl,
-            FakeJournal,
-            FakeOperationStore,
-        )
-
-        control = FakeControl()
-        journal = FakeJournal()
-        brain = FakeBrain()
-        operations = FakeOperationStore()
-        activation = activation_module.OpenClawProfileActivation(
-            control=control,
-            journal=journal,
-            brain=brain,
-            now=lambda: 1000.0,
-            operations=operations,
-            session_owner_factory=lambda owner: f"{owner}-session",
-        )
-        operation_id = "op-handler-terminal-recovery"
-        receipt = activation.provision(
-            DECLARATIONS, owner="worker-a", operation_id=operation_id
-        )
-        identity = (operation_id, 1, "activate", "control", "after")
-        journal.events = [
-            event
-            for event in journal.events
-            if (
-                event.get("operation_id"),
-                event.get("fence_generation"),
-                event.get("step"),
-                event.get("resource"),
-                event.get("phase"),
-            )
-            != identity
-        ]
-        journal.identities.pop(identity)
-        manifest = brain.pages[receipt["manifest_slug"]]
-        staged_agent = manifest["profiles"][0]["staged_agent_slug"]
-        brain.pages[staged_agent]["title"] = "Reviewer reproduction tamper"
-        executor = activation_module.OpenClawProfileActivationExecutor(
-            lambda: activation
-        )
-        headers = {"Authorization": "Bearer unit-token"}
-
-        with (
-            mock.patch.dict(
-                "os.environ",
-                {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"},
-            ),
-            mock.patch(
-                "server.openclaw_profile_activation_service",
-                return_value=activation,
-            ),
-            mock.patch(
-                "server.openclaw_profile_activation_executor",
-                return_value=executor,
-            ),
-        ):
-            recover_status, queued = self.dispatch_post(
-                f"/api/internal/openclaw-profiles/operations/{operation_id}/recover",
-                headers=headers,
-            )
-            processed = executor.run_once()
-            status_code, terminal = self.dispatch_get(
-                f"/api/internal/openclaw-profiles/operations/{operation_id}",
-                headers=headers,
-            )
-
-        _revision, stored = operations.read(operation_id)
-        activation_afters = [
-            event
-            for event in journal.read(operation_id)
-            if event.get("fence_generation") == 1
-            and event.get("step") == "activate"
-            and event.get("resource") == "control"
-            and event.get("phase") == "after"
-        ]
-        self.assertEqual(recover_status, 200)
-        self.assertEqual(queued["status"], "recovery_required")
-        self.assertEqual(processed, [operation_id])
-        self.assertEqual(status_code, 200)
-        self.assertEqual(terminal["status"], "failed")
-        self.assertIn("hash mismatch", terminal["error"])
-        self.assertEqual(stored["recovery_result"], "failed")
-        self.assertEqual(stored["recovery_processed_generation"], 1)
-        self.assertEqual(len(activation_afters), 1)
-
-    def test_enabled_token_does_not_override_default_disabled_operation_endpoint(self):
-        headers = {"Authorization": "Bearer unit-token"}
-        payload = {"declarations": [], "owner": "gtasks", "operation_id": "op-disabled"}
-        with (
-            mock.patch.dict(
-                "os.environ",
-                {"MEMORY_STARGRAPH_OC_PROVISION_TOKEN": "unit-token"},
-                clear=True,
-            ),
-            mock.patch(
-                "server.openclaw_profile_activation_service",
-                side_effect=server.ActivationError("OpenClaw provisioning is disabled"),
-            ),
-        ):
-            status, data = self.dispatch_post(
-                "/api/internal/openclaw-profiles/provision",
-                payload,
-                headers=headers,
-            )
-
-        self.assertEqual(status, 503)
-        self.assertIn("disabled", data["error"])
-
+            self.assertFalse(hasattr(server, retired_symbol))
     def test_health_preserves_unloaded_state_when_cache_unavailable(self):
         fake_store = FakeStore()
         fake_store.graph = None

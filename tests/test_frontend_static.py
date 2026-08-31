@@ -443,8 +443,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("<p class=\"panel-label\">Hot Hubs</p>", markup)
         self.assertIn("<span>Top</span>", markup)
         self.assertNotIn("<span>Top hubs</span>", markup)
-        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.207"', markup)
-        self.assertIn('src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.207"', markup)
+        self.assertIn('yoda-avatar-image" src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.211"', markup)
+        self.assertIn('src="/assets/brand/yoda-selection-avatar-small.png?v=1.0.211"', markup)
         self.assertIn("object-fit: contain", styles)
         self.assertIn("overflow: hidden", styles)
         self.assertIn(".selection-actions", styles)
@@ -537,9 +537,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.207"', markup)
-        self.assertIn('src="/app.js?v=1.0.207"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.210"', script)
+        self.assertIn('href="/styles.css?v=1.0.211"', markup)
+        self.assertIn('src="/app.js?v=1.0.211"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.211"', script)
         self.assertIn("height: 28px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -980,7 +980,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".filter-sidebar-drawer::before", styles)
         self.assertIn("width: 2px", styles)
         self.assertIn("height: 52%", styles)
-        self.assertIn("animation: filterDrawerPulse", styles)
+        self.assertNotIn("animation: filterDrawerPulse", styles)
         self.assertNotIn("border-radius: 6px 0 0 6px", styles)
         self.assertIn(".filter-sidebar-drawer::after", styles)
         self.assertIn('content: "<<"', styles)
@@ -995,6 +995,51 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".filter-sidebar-drawer.is-hidden", styles)
         self.assertIn("right: 18px", styles)
         self.assertIn("width: min(238px, calc(100% - 34px))", styles)
+
+    def test_settled_shell_has_no_ambient_infinite_animations_and_mobile_modal_can_shrink(self):
+        styles = (ROOT / "public" / "styles.css").read_text()
+
+        for retired_animation in (
+            "animation: star-drift",
+            "animation: active-pulse",
+            "animation: autopilot-flash",
+            "animation: filterDrawerPulse",
+        ):
+            self.assertNotIn(retired_animation, styles)
+        self.assertIn(".modal-panel {\n  width: min(760px, 100%);\n  min-width: 0;", styles)
+        self.assertIn(".markdown-view {\n  min-width: 0;", styles)
+        self.assertIn(".modal-header > div {\n  min-width: 0;", styles)
+        self.assertIn("#modalTitle {\n  min-width: 0;", styles)
+        self.assertIn("overflow-wrap: anywhere", styles)
+
+    def test_modals_own_focus_and_hide_inert_background_tooltips(self):
+        markup = (ROOT / "public" / "index.html").read_text()
+        script = (ROOT / "public" / "app.js").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
+
+        self.assertIn(
+            'id="operationModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalMessage" hidden',
+            markup,
+        )
+        self.assertIn(
+            'id="resolverReviewModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="resolverReviewTitle" aria-describedby="resolverReviewMessage" hidden',
+            markup,
+        )
+        self.assertIn('id="resolverReviewTitle"', markup)
+        self.assertIn("function showModal(modal, preferredFocus)", script)
+        self.assertIn("function closeAccessibleModal(modal)", script)
+        self.assertIn("function trapModalFocus(event, modal)", script)
+        self.assertIn("rememberModalOpener(modal)", script)
+        self.assertIn("hideHudTooltip();", script)
+        self.assertIn('document.body.classList.add("modal-open")', script)
+        self.assertIn("restoreModalBackground()", script)
+        self.assertIn("opener.focus()", script)
+        self.assertIn('operationModal.addEventListener("keydown", (event) => trapModalFocus(event, operationModal))', script)
+        self.assertIn('resolverReviewModal?.addEventListener("keydown", (event) => trapModalFocus(event, resolverReviewModal))', script)
+        self.assertNotIn("operationModal.hidden = false", script)
+        self.assertNotIn("resolverReviewModal.hidden = false", script)
+        self.assertIn("body.modal-open > .app-shell .has-tooltip::before", styles)
+        self.assertIn("body.modal-open > .hud-tooltip", styles)
 
     def test_filter_sidebar_has_accessible_close_and_escape_focus_return(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -1041,7 +1086,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("height: 52%", handle_rule)
         self.assertIn("border: 0", handle_rule)
         self.assertIn("border-radius: 0", handle_rule)
-        self.assertIn("@keyframes filterDrawerPulse", styles)
+        self.assertNotIn("@keyframes filterDrawerPulse", styles)
         self.assertIn(".filter-sidebar-drawer.is-hidden", styles)
 
     def test_view_title_parser_preserves_deployed_multiline_frontmatter_support(self):
@@ -1383,7 +1428,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("function openYodaLogWindow", script)
         self.assertIn("function rememberYodaLog", script)
         self.assertIn("function returnFromYodaLog", script)
-        self.assertIn("operationModal.hidden = false", script)
+        self.assertIn("showOperationModal()", script)
         self.assertIn("state.askYodaLogs", script)
         self.assertIn("function globalYodaLogEntries", script)
         self.assertIn("entries.slice(0, limit)", script)
@@ -1603,11 +1648,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.207"', markup)
-        self.assertIn('src="/app.js?v=1.0.207"', markup)
-        self.assertIn('>V1.0.210</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.210"', script)
-        self.assertIn('UI_VERSION = "V1.0.210"', server)
+        self.assertIn('href="/styles.css?v=1.0.211"', markup)
+        self.assertIn('src="/app.js?v=1.0.211"', markup)
+        self.assertIn('>V1.0.211</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.211"', script)
+        self.assertIn('UI_VERSION = "V1.0.211"', server)
 
     def test_runtime_versions_yoda_logs_and_mobile_context_have_bounded_ui_contracts(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -1802,10 +1847,10 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.207"', markup)
-        self.assertIn('src="/app.js?v=1.0.207"', markup)
-        self.assertIn('V1.0.210', markup)
-        self.assertIn('const UI_VERSION = "V1.0.210"', script)
+        self.assertIn('href="/styles.css?v=1.0.211"', markup)
+        self.assertIn('src="/app.js?v=1.0.211"', markup)
+        self.assertIn('V1.0.211', markup)
+        self.assertIn('const UI_VERSION = "V1.0.211"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -1819,11 +1864,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.207"', markup)
-        self.assertIn('src="/app.js?v=1.0.207"', markup)
-        self.assertIn('>V1.0.210</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.210"', script)
-        self.assertIn('UI_VERSION = "V1.0.210"', (ROOT / "server.py").read_text())
+        self.assertIn('href="/styles.css?v=1.0.211"', markup)
+        self.assertIn('src="/app.js?v=1.0.211"', markup)
+        self.assertIn('>V1.0.211</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.211"', script)
+        self.assertIn('UI_VERSION = "V1.0.211"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)

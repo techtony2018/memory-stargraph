@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless the dashboard-managed Python supplies activation dependencies."""
+"""Fail closed unless the dashboard-managed Python supplies queue dependencies."""
 from importlib import metadata
 
 
