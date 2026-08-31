@@ -8912,18 +8912,13 @@ def parse_gbrain_reranker_readiness(
         freshness = "current"
         state = "supported_override"
         summary = "GBrain has an explicit non-ZeroEntropy reranker override."
-    elif warning_match or configured_deprecated:
+    elif warning_match or configured_deprecated or config_missing:
         status = "critical" if days_until_sunset is not None and days_until_sunset <= 0 else "degraded"
         freshness = "current"
-        state = "deprecated_zeroentropy"
+        state = "deprecated_zeroentropy" if warning_match or configured_deprecated else "deprecated_default_unconfigured"
         summary = (
-            f"GBrain search still depends on the ZeroEntropy reranker, which stops working on {sunset_date}."
+            f"GBrain has no explicit supported reranker override and the known ZeroEntropy default stops working on {sunset_date}."
         )
-    elif config_missing and search_returncode == 0:
-        status = "ready"
-        freshness = "current"
-        state = "supported_default"
-        summary = "GBrain search completed without the ZeroEntropy sunset warning."
     elif binary_unavailable:
         status = "missing"
         freshness = "missing"
@@ -8940,7 +8935,7 @@ def parse_gbrain_reranker_readiness(
         "status": status,
         "freshness": freshness,
         "state": state,
-        "sunset_detected": bool(warning_match or configured_deprecated),
+        "sunset_detected": bool(warning_match or configured_deprecated or config_missing),
         "sunset_date": sunset_date,
         "days_until_sunset": days_until_sunset,
         "configured_override": bool(config_returncode == 0 and config_value),
@@ -8982,33 +8977,10 @@ def _probe_gbrain_reranker_readiness():
             search_returncode=None,
         )
 
-    config_value = str(config_result.stdout or "").strip()
-    if config_result.returncode == 0 and config_value and "zeroentropy" not in config_value.lower():
-        return parse_gbrain_reranker_readiness(
-            config_result.stdout,
-            config_result.stderr,
-            config_result.returncode,
-        )
-
-    try:
-        search_result = subprocess.run(
-            [gbrain_binary, "search", "memory stargraph", "--limit", "1"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-        )
-        search_stderr = search_result.stderr
-        search_returncode = search_result.returncode
-    except (OSError, subprocess.TimeoutExpired):
-        search_stderr = ""
-        search_returncode = None
     return parse_gbrain_reranker_readiness(
         config_result.stdout,
         config_result.stderr,
         config_result.returncode,
-        search_stderr=search_stderr,
-        search_returncode=search_returncode,
     )
 
 

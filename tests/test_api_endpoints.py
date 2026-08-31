@@ -2292,7 +2292,7 @@ class ApiEndpointTests(unittest.TestCase):
     def test_reranker_readiness_is_partial_when_config_and_warning_are_unverified(self):
         result = server.parse_gbrain_reranker_readiness(
             "",
-            "Config key not found: search.reranker.model",
+            "bounded config read failed",
             1,
             search_stderr="",
             search_returncode=None,
@@ -2329,26 +2329,20 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][0], "/managed/path/gbrain")
         self.assertEqual(run.call_args.args[0][1:4], ["config", "get", "search.reranker.model"])
 
-    def test_reranker_probe_checks_search_when_default_config_is_unset(self):
+    def test_reranker_probe_degrades_when_default_config_is_unset(self):
         missing = subprocess.CompletedProcess(
             [],
             1,
             stdout="",
             stderr="Config key not found: search.reranker.model",
         )
-        warning = subprocess.CompletedProcess(
-            [],
-            0,
-            stdout="private result text must not be exposed",
-            stderr="[gbrain] DEPRECATED: ZeroEntropy reranker stops working on 2026-09-04.",
-        )
-        with mock.patch("server.subprocess.run", side_effect=[missing, warning]) as run:
+        with mock.patch("server.subprocess.run", return_value=missing) as run:
             result = server._probe_gbrain_reranker_readiness()
 
         self.assertEqual(result["status"], "degraded")
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args_list[1].args[0][1:3], ["search", "memory stargraph"])
-        self.assertNotIn("private result text", json.dumps(result))
+        self.assertEqual(result["state"], "deprecated_default_unconfigured")
+        self.assertEqual(run.call_count, 1)
+        self.assertTrue(result["sunset_detected"])
 
     def test_latest_sre_numeric_evidence_reports_warning_and_critical_backup_freshness(self):
         class FixedDateTime(dt.datetime):
