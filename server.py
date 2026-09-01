@@ -314,7 +314,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.212"
+UI_VERSION = "V1.0.213"
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
@@ -1558,6 +1558,140 @@ def format_mcp_graph_query(paths, payload):
     return "\n".join(lines) + "\n"
 
 
+MCP_OPERATING_CONTRACT_SCHEMA = "memory-stargraph-gbrain-mcp-operating-contract-v1"
+MCP_OPERATING_CONTRACT_MAX_CHARS = 65536
+
+
+def mcp_operating_contract_status(
+    instructions,
+    *,
+    server_version="",
+    protocol_version="",
+):
+    base = {
+        "schema": MCP_OPERATING_CONTRACT_SCHEMA,
+        "status": "uninitialized",
+        "present": False,
+        "server_version": str(server_version or ""),
+        "protocol_version": str(protocol_version or ""),
+        "content_sha256": None,
+        "content_length": 0,
+        "put_page_replace_whole_page_documented": False,
+        "write_safety_ready": False,
+        "summary": "MCP operating instructions have not been observed.",
+    }
+    if instructions is None:
+        if base["server_version"] or base["protocol_version"]:
+            base.update(
+                status="missing",
+                summary=(
+                    "MCP initialization omitted operating instructions; "
+                    "mutating-operation safety is not attested."
+                ),
+            )
+        return base
+    if not isinstance(instructions, str):
+        base.update(
+            status="malformed",
+            summary=(
+                "MCP operating instructions were malformed; "
+                "mutating-operation safety is not attested."
+            ),
+        )
+        return base
+    normalized = " ".join(instructions.split())
+    if not normalized or len(normalized) > MCP_OPERATING_CONTRACT_MAX_CHARS:
+        base.update(
+            status="malformed",
+            content_length=min(len(normalized), MCP_OPERATING_CONTRACT_MAX_CHARS + 1),
+            summary=(
+                "MCP operating instructions were empty or exceeded the bounded limit; "
+                "mutating-operation safety is not attested."
+            ),
+        )
+        return base
+    lower = normalized.casefold()
+    replace_whole_page = "put_page" in lower and any(
+        phrase in lower
+        for phrase in (
+            "replace the whole page",
+            "replaces the whole page",
+            "replace whole page",
+            "replaces whole page",
+            "replace the entire page",
+            "replaces the entire page",
+            "replace entire page",
+            "replaces entire page",
+        )
+    )
+    base.update(
+        status="present",
+        present=True,
+        content_sha256=hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        content_length=len(normalized),
+        put_page_replace_whole_page_documented=replace_whole_page,
+        write_safety_ready=replace_whole_page,
+        summary=(
+            "MCP operating instructions are present and document put_page as a "
+            "replace-whole-page operation."
+            if replace_whole_page
+            else "MCP operating instructions are present, but put_page replacement "
+            "semantics are not attested."
+        ),
+    )
+    return base
+
+
+def aggregate_mcp_operating_contracts(contracts, *, expected_sessions):
+    normalized = [
+        item if isinstance(item, dict) else mcp_operating_contract_status(None)
+        for item in contracts
+    ]
+    expected = max(0, int(expected_sessions))
+    statuses = [str(item.get("status") or "uninitialized") for item in normalized]
+    present = [item for item in normalized if item.get("present") is True]
+    hashes = {str(item.get("content_sha256")) for item in present if item.get("content_sha256")}
+    server_versions = {str(item.get("server_version")) for item in normalized if item.get("server_version")}
+    protocol_versions = {str(item.get("protocol_version")) for item in normalized if item.get("protocol_version")}
+    all_present = expected > 0 and len(present) == expected
+    if "malformed" in statuses:
+        status = "malformed"
+    elif len(hashes) > 1 or len(server_versions) > 1 or len(protocol_versions) > 1:
+        status = "inconsistent"
+    elif all_present:
+        status = "present"
+    elif statuses and all(item == "missing" for item in statuses):
+        status = "missing"
+    elif statuses and any(item != "uninitialized" for item in statuses):
+        status = "partial"
+    else:
+        status = "uninitialized"
+    write_safety_ready = all_present and all(
+        item.get("write_safety_ready") is True for item in normalized
+    )
+    return {
+        "schema": MCP_OPERATING_CONTRACT_SCHEMA,
+        "status": status,
+        "present": all_present,
+        "session_count": expected,
+        "attested_session_count": len(present),
+        "missing_session_count": statuses.count("missing"),
+        "malformed_session_count": statuses.count("malformed"),
+        "uninitialized_session_count": statuses.count("uninitialized") + max(0, expected - len(statuses)),
+        "server_version": next(iter(server_versions)) if len(server_versions) == 1 else "",
+        "protocol_version": next(iter(protocol_versions)) if len(protocol_versions) == 1 else "",
+        "content_sha256": next(iter(hashes)) if len(hashes) == 1 else None,
+        "put_page_replace_whole_page_documented": write_safety_ready,
+        "write_safety_ready": write_safety_ready,
+        "summary": (
+            "All persistent MCP sessions attest the same operating contract and "
+            "replace-whole-page write semantics."
+            if write_safety_ready
+            else "Persistent MCP write safety is not attested across every session."
+        ),
+    }
+
+
 class PersistentGBrainSearch:
     def __init__(self):
         self.lock = threading.Lock()
@@ -1565,6 +1699,7 @@ class PersistentGBrainSearch:
         self.process = None
         self.request_id = 0
         self.server_version = ""
+        self.operating_contract = mcp_operating_contract_status(None)
         self.active = False
         self.prewarming = False
         self.metrics = {
@@ -1635,6 +1770,7 @@ class PersistentGBrainSearch:
         self.process = None
         self.request_id = 0
         self.server_version = ""
+        self.operating_contract = mcp_operating_contract_status(None)
         if process is None:
             return
         if process.poll() is None:
@@ -1663,6 +1799,7 @@ class PersistentGBrainSearch:
                 "active": self.active,
                 "ready": process is not None and process.poll() is None,
                 "busy": True,
+                "operating_contract": dict(self.operating_contract),
                 "metrics": self.metrics_snapshot(),
             }
         try:
@@ -1671,6 +1808,7 @@ class PersistentGBrainSearch:
                 "active": self.active,
                 "ready": process is not None and process.poll() is None,
                 "busy": False,
+                "operating_contract": dict(self.operating_contract),
                 "metrics": self.metrics_snapshot(),
             }
         finally:
@@ -1754,6 +1892,11 @@ class PersistentGBrainSearch:
         if not isinstance(server_info, dict):
             raise RuntimeError("persistent GBrain search initialization was invalid")
         self.server_version = normalize_gbrain_version(server_info.get("version"))
+        self.operating_contract = mcp_operating_contract_status(
+            initialized.get("instructions"),
+            server_version=self.server_version,
+            protocol_version=initialized.get("protocolVersion"),
+        )
         process.stdin.write(
             json.dumps(
                 {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
@@ -2123,6 +2266,10 @@ class BoundedGBrainMCPPool:
             "busy": available == 0,
             "structured_only": True,
             "subprocess_fallback": False,
+            "operating_contract": aggregate_mcp_operating_contracts(
+                [state.get("operating_contract") for state in states],
+                expected_sessions=self.size,
+            ),
             "metrics": self.metrics_snapshot(),
         }
 

@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -444,6 +445,109 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(metrics["cli_fallbacks_by_command"], {"get": 1})
         self.assertEqual(metrics["last_error"], "synthetic fallback")
         self.assertGreaterEqual(metrics["tool_latency_ms_average"], 0)
+
+    def test_persistent_session_captures_bounded_initialize_operating_contract(self):
+        instructions = (
+            "Use get_page for reads. put_page replaces the whole page, so read the "
+            "current content before any authorized mutation."
+        )
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdin = io.StringIO()
+                self.stdout = io.StringIO()
+                self.stderr = io.StringIO()
+                self.terminated = False
+
+            def poll(self):
+                return 0 if self.terminated else None
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout=None):
+                del timeout
+                return 0
+
+            def kill(self):
+                self.terminated = True
+
+        for supplied, expected_status, write_ready in (
+            (instructions, "present", True),
+            (None, "missing", False),
+            ({"unexpected": "object"}, "malformed", False),
+        ):
+            with self.subTest(expected_status=expected_status):
+                session = PersistentGBrainSearch()
+                initialized = {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "gbrain", "version": "0.47.6.0"},
+                }
+                if supplied is not None:
+                    initialized["instructions"] = supplied
+                process = FakeProcess()
+                with (
+                    mock.patch("server.GBRAIN", Path(__file__)),
+                    mock.patch("server.subprocess.Popen", return_value=process),
+                    mock.patch.object(session, "_request_locked", return_value=initialized),
+                ):
+                    session._start_locked(time.monotonic() + 1)
+
+                contract = session.status()["operating_contract"]
+                self.assertEqual(contract["status"], expected_status)
+                self.assertEqual(contract["write_safety_ready"], write_ready)
+                self.assertEqual(contract["server_version"], "V0.47.6.0")
+                self.assertEqual(contract["protocol_version"], "2025-03-26")
+                self.assertNotIn(instructions, contract.values())
+                if expected_status == "present":
+                    self.assertEqual(
+                        contract["content_sha256"],
+                        hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
+                    )
+                else:
+                    self.assertIsNone(contract["content_sha256"])
+                session.close()
+
+    def test_yoda_mcp_pool_aggregates_contract_and_fails_closed(self):
+        contract = server.mcp_operating_contract_status(
+            "put_page replaces the whole page.",
+            server_version="V0.47.6.0",
+            protocol_version="2025-03-26",
+        )
+
+        class FakeSession:
+            def call_tool(self, name, payload, timeout=30):
+                del name, payload, timeout
+                return []
+
+            def close(self):
+                return None
+
+            def prewarm_async(self, timeout=15, tool_name=None, tool_payload=None):
+                del timeout, tool_name, tool_payload
+                return True
+
+            def status(self):
+                return {"ready": True, "operating_contract": dict(contract)}
+
+        pool = BoundedGBrainMCPPool(size=2, session_factory=FakeSession)
+        aggregate = pool.status()["operating_contract"]
+        self.assertEqual(aggregate["status"], "present")
+        self.assertEqual(aggregate["attested_session_count"], 2)
+        self.assertTrue(aggregate["write_safety_ready"])
+
+        pool.sessions[1].status = lambda: {
+            "ready": True,
+            "operating_contract": server.mcp_operating_contract_status(
+                None,
+                server_version="V0.47.6.0",
+                protocol_version="2025-03-26",
+            ),
+        }
+        aggregate = pool.status()["operating_contract"]
+        self.assertEqual(aggregate["status"], "partial")
+        self.assertFalse(aggregate["present"])
+        self.assertFalse(aggregate["write_safety_ready"])
 
     def test_yoda_mcp_pool_runs_five_structured_reads_concurrently(self):
         barrier = threading.Barrier(5, timeout=2)

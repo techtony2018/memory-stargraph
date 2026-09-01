@@ -918,6 +918,80 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["gbrain_reranker"]["status"], "ready")
         self.assertEqual(fake_store.calls, [("get_health_graph",)])
 
+    def test_health_exposes_privacy_safe_mcp_operating_contracts(self):
+        fake_store = FakeStore()
+        fake_store.graph = {
+            "source": {"mode": "cache", "status": "cached-startup"},
+            "stats": {"nodes": 1, "edges": 0},
+        }
+        persistent_contract = server.mcp_operating_contract_status(
+            "put_page replaces the whole page.",
+            server_version="V0.47.6.0",
+            protocol_version="2025-03-26",
+        )
+        pool_contract = server.aggregate_mcp_operating_contracts(
+            [persistent_contract, persistent_contract],
+            expected_sessions=2,
+        )
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch("server.runtime_gbrain_version", return_value="V0.47.6.0"),
+            mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
+            mock.patch.object(
+                server.PERSISTENT_GBRAIN_SEARCH,
+                "status",
+                return_value={
+                    "ready": True,
+                    "operating_contract": persistent_contract,
+                    "metrics": {},
+                },
+            ),
+            mock.patch.object(
+                server.YODA_GBRAIN_MCP_POOL,
+                "status",
+                return_value={
+                    "ready_sessions": 2,
+                    "operating_contract": pool_contract,
+                    "metrics": {},
+                },
+            ),
+        ):
+            status, data = self.dispatch_get("/api/health")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            data["persistent_search"]["operating_contract"]["status"],
+            "present",
+        )
+        self.assertEqual(
+            data["ask_yoda_mcp"]["operating_contract"]["attested_session_count"],
+            2,
+        )
+        self.assertTrue(
+            data["ask_yoda_mcp"]["operating_contract"]["write_safety_ready"]
+        )
+        serialized = json.dumps(data)
+        self.assertNotIn("replaces the whole page", serialized)
+
+    def test_mcp_operating_contract_missing_or_malformed_fails_closed(self):
+        for instructions, expected_status in (
+            (None, "missing"),
+            ({"unsafe": "shape"}, "malformed"),
+            ("", "malformed"),
+        ):
+            with self.subTest(expected_status=expected_status):
+                contract = server.mcp_operating_contract_status(
+                    instructions,
+                    server_version="V0.47.6.0",
+                    protocol_version="2025-03-26",
+                )
+                self.assertEqual(contract["status"], expected_status)
+                self.assertFalse(contract["present"])
+                self.assertFalse(contract["write_safety_ready"])
+                self.assertFalse(
+                    contract["put_page_replace_whole_page_documented"]
+                )
+
     def test_retired_openclaw_profile_routes_are_not_served_even_with_legacy_token(self):
         headers = {"Authorization": "Bearer retired-token"}
         routes = (
