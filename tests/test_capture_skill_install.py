@@ -11,6 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).parents[1]
+AGENTS = ROOT / "AGENTS.md"
 SCRIPT = ROOT / "scripts" / "automation" / "install_capture_skills.py"
 SPEC = importlib.util.spec_from_file_location("install_capture_skills", SCRIPT)
 installer = importlib.util.module_from_spec(SPEC)
@@ -31,6 +32,35 @@ def tree_digest(root: Path) -> str:
 
 
 class CaptureSkillInstallTests(unittest.TestCase):
+    def test_capture_skills_have_distinct_resolver_triggers_and_routes(self):
+        agents = AGENTS.read_text(encoding="utf-8")
+        expected = {
+            "add-capture-link": (
+                "add capture link",
+                "queue capture link",
+                "queue source material",
+                "add to capture backlog",
+                "/add-capture-link",
+            ),
+            "get-capture-link": (
+                "get capture link",
+                "capture link status",
+                "list capture backlog",
+                "filter capture requests",
+                "/get-capture-link",
+            ),
+        }
+        trigger_sets = []
+        for skill, triggers in expected.items():
+            markdown = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("\ntriggers:\n", markdown)
+            for trigger in triggers:
+                self.assertIn(f"  - {trigger}\n", markdown)
+            self.assertIn(f"`skills/{skill}/SKILL.md`", agents)
+            trigger_sets.append(set(triggers))
+
+        self.assertTrue(trigger_sets[0].isdisjoint(trigger_sets[1]))
+
     def test_cli_accepts_documented_json_flag(self):
         with tempfile.TemporaryDirectory() as td:
             completed = subprocess.run(

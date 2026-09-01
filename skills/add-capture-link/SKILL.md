@@ -1,6 +1,12 @@
 ---
 name: add-capture-link
 description: Queue URLs, files, PDFs, text, GBrain slugs, profiles, or attached media for the Memory Stargraph Capture Link worker under notes/memory-starmap-capture-list. Use when the user invokes /add-capture-link or asks to add source material to the capture backlog.
+triggers:
+  - add capture link
+  - queue capture link
+  - queue source material
+  - add to capture backlog
+  - /add-capture-link
 ---
 
 # Add Capture Link

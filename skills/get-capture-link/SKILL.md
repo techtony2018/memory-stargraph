@@ -1,6 +1,12 @@
 ---
 name: get-capture-link
 description: Read and filter Memory Stargraph capture backlog status from notes/memory-starmap-capture-list. Use when the user invokes /get-capture-link or asks which capture requests are planned, capturing, completed, or failed.
+triggers:
+  - get capture link
+  - capture link status
+  - list capture backlog
+  - filter capture requests
+  - /get-capture-link
 ---
 
 # Get Capture Link
