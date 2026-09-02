@@ -651,6 +651,22 @@ python3 -m unittest discover -s "$HOME/.codex/skills/add-sg-todo/tests"
 
 Run the GBrain durable-storage tests and TypeScript check in the active GBrain implementation worktree, then follow the canonical runbook's real integration gate. If any required layer is unavailable, record a concrete failure and recovery action instead of weakening the contract.
 
+## Add SG TODO Atomic Allocation
+
+The canonical `add-sg-todo` source is `${CODEX_HOME:-$HOME/.codex}/skills/add-sg-todo`; keep its OpenClaw mirror byte-identical. Every mutating invocation must hold the helper's bounded process/file allocation guard across the authoritative parent high-water read and parent/child/`has_todo` commit.
+
+- Include active root rows and every validated completed archive in the high-water calculation. Missing, duplicate, gapped, or inconsistent archive evidence fails closed.
+- Stage a new child as `capture-recovery`; write the parent row and `has_todo` relationship before finalizing the child to `planned`. This prevents a crash or partial write from leaving an orphan child falsely marked planned.
+- Return `ok: true` only after the parent row ID, child `todo_id`/status, and graph relationship all read back durably.
+- Lock contention and failed commit/readback return a structured retryable result. Bounded rollback must restore the parent and prior child or remove the new child and relationship; cleanup uncertainty remains a failure.
+
+Release verification must run both mirror suites and include concurrent text-only allocation, lock contention, partial parent/link failure, archive high-water, and mirror-identity coverage:
+
+```bash
+python3 -m unittest discover -s "$HOME/.codex/skills/add-sg-todo/tests"
+python3 -m unittest discover -s "$HOME/.openclaw/skills/add-sg-todo/tests"
+```
+
 ## Deployment Targets
 
 Keep deployment target details in local Codex memory/config and GBrain, not in tracked GitHub files. The deploy helper reads:
