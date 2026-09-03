@@ -2232,8 +2232,141 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertTrue(result["passed"])
         self.assertEqual(result["backup_freshness"]["status"], "current")
+        self.assertEqual(result["native_backup_coverage"]["source"], "backup_latest_fallback")
+        self.assertTrue(result["native_backup_coverage"]["fallback_active"])
+        self.assertEqual(result["counts"]["native_backup_available"], 0)
+        self.assertEqual(result["counts"]["backup_latest_fallback_active"], 1)
         self.assertEqual(result["counts"]["daily_evidence_current"], 1)
         self.assertEqual(result["counts"]["weekly_evidence_current"], 1)
+
+    def test_native_backup_coverage_uses_legacy_fallback_when_command_is_unavailable(self):
+        freshness = {
+            "status": "current",
+            "freshness": "current",
+            "latest_backup_at": "2026-09-03T09:00:00Z",
+            "age_seconds": 3600,
+            "summary": "Latest backup evidence is current.",
+        }
+        with (
+            mock.patch("server.runtime_gbrain_version", return_value="V0.46.28.0"),
+            mock.patch("server.native_backup_status_path", side_effect=AssertionError("unsupported versions must not read native state")),
+        ):
+            result = server.gbrain_native_backup_coverage(freshness)
+
+        self.assertEqual(result["status"], "current")
+        self.assertEqual(result["source"], "backup_latest_fallback")
+        self.assertTrue(result["fallback_active"])
+        self.assertFalse(result["native"]["native_available"])
+        self.assertEqual(result["native"]["status"], "unavailable")
+        self.assertTrue(result["operator_action"]["approval_required"])
+        self.assertFalse(result["operator_action"]["automatic_mutation"])
+
+    def test_native_backup_status_accepts_privacy_safe_ok_aggregate(self):
+        payload = {
+            "schema_version": "gbrain-backup-status-v1",
+            "checked_at": "2026-09-03T09:00:00Z",
+            "gbrain_version": "0.46.33.0",
+            "interval_days": 30,
+            "computed_by": "serve",
+            "overall": "ok",
+            "totals": {
+                "assets": 4,
+                "no_remote": 0,
+                "unpushed": 1,
+                "failing": 0,
+                "recoverable_repos": 3,
+                "pages_at_risk": 0,
+            },
+            "assets": [{"id": "/Users/private/repo", "state": "ok", "fix_argv": ["secret"]}],
+            "recovery": {"recoverable_repos": 3, "pages_at_risk": 0, "statement": "private detail"},
+        }
+        result = server.parse_gbrain_native_backup_status(
+            payload,
+            dt.datetime(2026, 9, 3, 10, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["verdict"], "ok")
+        self.assertEqual(result["counts"]["recoverable_repos"], 3)
+        self.assertEqual(result["counts"]["pages_at_risk"], 0)
+        serialized = json.dumps(result)
+        self.assertNotIn("/Users/private/repo", serialized)
+        self.assertNotIn("private detail", serialized)
+        self.assertNotIn("fix_argv", serialized)
+
+    def test_native_backup_status_warns_without_exposing_asset_fixes(self):
+        payload = {
+            "schema_version": "gbrain-backup-status-v1",
+            "checked_at": "2026-09-03T09:00:00Z",
+            "interval_days": 30,
+            "overall": "warn",
+            "totals": {
+                "assets": 5,
+                "no_remote": 2,
+                "unpushed": 1,
+                "failing": 0,
+                "recoverable_repos": 2,
+                "pages_at_risk": 7,
+            },
+            "assets": [{"id": "private-source", "fix_argv": ["git", "push"]}],
+            "recovery": {"recoverable_repos": 2, "pages_at_risk": 7, "statement": "private-source"},
+        }
+        result = server.parse_gbrain_native_backup_status(
+            payload,
+            dt.datetime(2026, 9, 3, 10, 0, tzinfo=dt.timezone.utc),
+        )
+
+        self.assertEqual(result["status"], "warning")
+        self.assertEqual(result["verdict"], "warn")
+        self.assertEqual(result["counts"]["no_remote"], 2)
+        self.assertNotIn("private-source", json.dumps(result))
+
+    def test_native_backup_status_rejects_malformed_or_inconsistent_payload(self):
+        malformed = {
+            "schema_version": "gbrain-backup-status-v1",
+            "checked_at": "not-a-date",
+            "interval_days": 30,
+            "overall": "ok",
+            "totals": {"assets": 1},
+            "recovery": {"recoverable_repos": 99, "pages_at_risk": 0},
+            "secret": "must-not-leak",
+        }
+        result = server.parse_gbrain_native_backup_status(malformed)
+
+        self.assertEqual(result["status"], "malformed")
+        self.assertNotIn("must-not-leak", json.dumps(result))
+        self.assertTrue(result["operator_action"]["approval_required"])
+
+    def test_native_backup_status_reads_bounded_supported_cache(self):
+        payload = {
+            "schema_version": "gbrain-backup-status-v1",
+            "checked_at": "2026-09-03T09:00:00Z",
+            "interval_days": 30,
+            "overall": "ok",
+            "totals": {
+                "assets": 2,
+                "no_remote": 0,
+                "unpushed": 0,
+                "failing": 0,
+                "recoverable_repos": 2,
+                "pages_at_risk": 0,
+            },
+            "assets": [],
+            "recovery": {"recoverable_repos": 2, "pages_at_risk": 0, "statement": "covered"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "backup-status.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with (
+                mock.patch("server.runtime_gbrain_version", return_value="V0.46.33.0"),
+                mock.patch("server.native_backup_status_path", return_value=path),
+            ):
+                result = server.read_gbrain_native_backup_status(
+                    dt.datetime(2026, 9, 3, 10, 0, tzinfo=dt.timezone.utc)
+                )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["native_schema"], "gbrain-backup-status-v1")
 
     def test_terminal_sre_evidence_pairs_selects_newest_valid_terminal_run_per_mode(self):
         daily_new = "runs/memory-stargraph-sre-daily-reliability-20260826-new"
@@ -2661,7 +2794,18 @@ class ApiEndpointTests(unittest.TestCase):
             mock.patch("server.public_yoda_model_config", return_value={"backend": "gbrain_think", "model": "openai:gpt-5.2"}),
             mock.patch("server.gbrain_reranker_readiness", return_value=ready_reranker_readiness()),
             mock.patch("server.memory_value_digest", return_value=weekly),
-            mock.patch("server.latest_sre_numeric_evidence", return_value={"status": "pass", "freshness": "current", "evidence_slugs": ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"]}),
+            mock.patch("server.latest_sre_numeric_evidence", return_value={
+                "status": "pass",
+                "freshness": "current",
+                "evidence_slugs": ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"],
+                "summary": "SRE evidence is current.",
+                "native_backup_coverage": {
+                    "status": "current",
+                    "source": "backup_latest_fallback",
+                    "fallback_active": True,
+                    "summary": "Native GBrain backup coverage is unavailable; legacy backup-latest freshness is current.",
+                },
+            }),
             mock.patch("server.resolver_feedback_health", return_value={"pending": 0, "proposal_counts": {"pending": 0}}),
             mock.patch(
                 "server.configured_target_readiness",
@@ -2677,6 +2821,9 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["status"], "ready")
         self.assertEqual(data["summary_counts"]["checks_total"], 9)
         self.assertEqual(data["summary_counts"]["ready"], 9)
+        self.assertEqual(data["native_backup_coverage"]["source"], "backup_latest_fallback")
+        sre_check = {check["id"]: check for check in data["checks"]}["sre_numeric_evidence"]
+        self.assertIn("native gbrain backup coverage", sre_check["summary"].lower())
         self.assertIsInstance(data["safe_next_step"], dict)
         self.assertTrue(data["safe_next_step"]["safe"])
         self.assertFalse(data["safe_next_step"]["mutation"])

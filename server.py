@@ -314,10 +314,13 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.213"
+UI_VERSION = "V1.0.214"
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
+GBRAIN_NATIVE_BACKUP_MIN_VERSION = (0, 46, 33, 0)
+GBRAIN_NATIVE_BACKUP_SCHEMA = "gbrain-backup-status-v1"
+GBRAIN_NATIVE_BACKUP_MAX_BYTES = 1024 * 1024
 DEPLOYMENT_ATTESTATION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 SRE_BACKUP_WARNING_SECONDS = 36 * 60 * 60
 SRE_BACKUP_CRITICAL_SECONDS = 72 * 60 * 60
@@ -9559,6 +9562,11 @@ def customer_readiness(weekly_digest=None):
         if isinstance(sre_numeric, dict)
         else ""
     )
+    native_backup_coverage = (
+        (sre_numeric or {}).get("native_backup_coverage")
+        if isinstance((sre_numeric or {}).get("native_backup_coverage"), dict)
+        else {}
+    )
 
     checks = [
         readiness_check(
@@ -9631,7 +9639,11 @@ def customer_readiness(weekly_digest=None):
             "sre_numeric_evidence",
             "SRE numeric evidence",
             sre_numeric_status,
-            "Numeric capacity, backup, restore, and baseline evidence is current." if sre_numeric_status == "ready" else (sre_numeric_summary or "Numeric SRE capacity, backup, restore, or baseline evidence is missing, partial, stale, warning, or critical."),
+            (
+                native_backup_coverage.get("summary")
+                or ("Numeric capacity, backup, restore, and baseline evidence is current." if sre_numeric_status == "ready" else sre_numeric_summary)
+                or "Numeric SRE capacity, backup, restore, or baseline evidence is missing, partial, stale, warning, or critical."
+            ),
             (sre_numeric.get("evidence_slugs") if isinstance(sre_numeric, dict) else []) or ["reports/memory-stargraph-wish-sg0196-20260809t144900-0700-56c8c7d"],
             freshness=(sre_numeric.get("freshness") if isinstance(sre_numeric, dict) else None) or ("missing" if sre_numeric_error else "partial"),
             next_step="Open the latest SRE evidence report and inspect missing numeric capacity, backup, or restore fields.",
@@ -9693,6 +9705,7 @@ def customer_readiness(weekly_digest=None):
         },
         "checks": checks,
         "gbrain_reranker": reranker,
+        "native_backup_coverage": native_backup_coverage,
         "safe_next_step": safe_next_step,
         "evidence_slugs": sorted({slug for check in checks for slug in check["evidence_slugs"]}),
         "target_evidence": target_counts,
@@ -9997,6 +10010,179 @@ def backup_latest_freshness(markdown, observed_at=None):
     }
 
 
+def gbrain_version_tuple(value):
+    normalized = str(value or "").strip().removeprefix("V").removeprefix("v")
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?\b", normalized)
+    if not match:
+        return ()
+    return tuple(int(part or 0) for part in match.groups(default="0"))
+
+
+def native_backup_status_path():
+    configured = str(os.environ.get("GBRAIN_BACKUP_STATUS_FILE") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    gbrain_home = str(os.environ.get("GBRAIN_HOME") or "").strip()
+    if gbrain_home:
+        root = Path(gbrain_home).expanduser()
+        candidates = (root / ".gbrain" / "backup-status.json", root / "backup-status.json")
+        return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    return Path.home() / ".gbrain" / "backup-status.json"
+
+
+def native_backup_base(status, summary, observed_at, *, native_available):
+    observed = observed_at or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    return {
+        "schema_version": 1,
+        "status": status,
+        "freshness": status if status in {"missing", "malformed", "stale"} else "current",
+        "native_available": native_available,
+        "native_schema": GBRAIN_NATIVE_BACKUP_SCHEMA if native_available else "",
+        "checked_at": "",
+        "readback_at": observed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "age_seconds": None,
+        "interval_days": None,
+        "verdict": "unknown",
+        "degraded": False,
+        "counts": {
+            "assets": None,
+            "recoverable_repos": None,
+            "pages_at_risk": None,
+            "no_remote": None,
+            "unpushed": None,
+            "failing": None,
+        },
+        "summary": summary,
+        "operator_action": {
+            "approval_required": True,
+            "automatic_mutation": False,
+            "commands": ["gbrain backup status --json", "gbrain backup check --json"],
+        },
+        "privacy": "Only aggregate native backup counts and timestamps are returned; asset names, repository paths, remotes, fix arguments, and credentials are withheld.",
+    }
+
+
+def parse_gbrain_native_backup_status(payload, observed_at=None):
+    observed = observed_at or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    malformed = native_backup_base(
+        "malformed",
+        "Native GBrain backup coverage exists but its structured status failed validation.",
+        observed,
+        native_available=True,
+    )
+    if not isinstance(payload, dict) or payload.get("schema_version") != GBRAIN_NATIVE_BACKUP_SCHEMA:
+        return malformed
+    overall = str(payload.get("overall") or "").strip().lower()
+    checked = parse_iso_timestamp(payload.get("checked_at"))
+    totals = payload.get("totals")
+    recovery = payload.get("recovery")
+    interval_days = payload.get("interval_days")
+    required_total_keys = ("assets", "no_remote", "unpushed", "failing", "recoverable_repos", "pages_at_risk")
+    if (
+        overall not in {"ok", "warn"}
+        or checked is None
+        or not isinstance(totals, dict)
+        or not isinstance(recovery, dict)
+        or not isinstance(interval_days, (int, float))
+        or isinstance(interval_days, bool)
+        or interval_days < 1
+        or any(not isinstance(totals.get(key), int) or isinstance(totals.get(key), bool) or totals.get(key) < 0 for key in required_total_keys)
+        or recovery.get("recoverable_repos") != totals.get("recoverable_repos")
+        or recovery.get("pages_at_risk") != totals.get("pages_at_risk")
+    ):
+        return malformed
+    age_seconds = max(0, int((observed.astimezone(timezone.utc) - checked).total_seconds()))
+    stale = age_seconds > int(interval_days * 24 * 60 * 60)
+    degraded = payload.get("degraded") is True
+    if degraded:
+        status = "partial"
+        summary = "Native GBrain backup coverage is partial because its structured check was degraded."
+    elif stale:
+        status = "stale"
+        summary = "Native GBrain backup coverage is older than its configured check interval."
+    elif overall == "warn":
+        status = "warning"
+        summary = "Native GBrain backup coverage reports assets or pages that may not survive disk loss."
+    else:
+        status = "ready"
+        summary = "Native GBrain backup coverage reports a current recovery-ready aggregate verdict."
+    result = native_backup_base(status, summary, observed, native_available=True)
+    result.update({
+        "freshness": "stale" if stale else "current",
+        "checked_at": checked.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "age_seconds": age_seconds,
+        "interval_days": int(interval_days),
+        "verdict": overall,
+        "degraded": degraded,
+        "counts": {key: totals[key] for key in required_total_keys},
+    })
+    return result
+
+
+def read_gbrain_native_backup_status(observed_at=None):
+    observed = observed_at or datetime.now(timezone.utc)
+    if gbrain_version_tuple(runtime_gbrain_version()) < GBRAIN_NATIVE_BACKUP_MIN_VERSION:
+        return native_backup_base(
+            "unavailable",
+            "This GBrain version does not expose native backup coverage; legacy backup-latest evidence remains the active fallback.",
+            observed,
+            native_available=False,
+        )
+    path = native_backup_status_path()
+    try:
+        if path.stat().st_size > GBRAIN_NATIVE_BACKUP_MAX_BYTES:
+            raise ValueError("native backup status exceeds size limit")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return native_backup_base(
+            "missing",
+            "Native GBrain backup coverage is supported but no structured status is available; legacy backup-latest evidence remains the active fallback.",
+            observed,
+            native_available=True,
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        return native_backup_base(
+            "malformed",
+            "Native GBrain backup coverage exists but its bounded structured status could not be read safely.",
+            observed,
+            native_available=True,
+        )
+    return parse_gbrain_native_backup_status(payload, observed)
+
+
+def gbrain_native_backup_coverage(backup_freshness, observed_at=None):
+    native = read_gbrain_native_backup_status(observed_at)
+    legacy_status = str((backup_freshness or {}).get("status") or "missing")
+    fallback_active = native["status"] in {"unavailable", "missing"}
+    if fallback_active:
+        effective_status = legacy_status
+        source = "backup_latest_fallback"
+        summary = f"{native['summary']} Legacy backup-latest freshness is {legacy_status}."
+    elif native["status"] == "ready":
+        effective_status = legacy_status
+        source = "native_and_backup_latest"
+        summary = f"{native['summary']} Legacy backup-latest freshness is {legacy_status}."
+    else:
+        effective_status = native["status"]
+        source = "native_gbrain_backup_coverage"
+        summary = native["summary"]
+    return {
+        "schema_version": 1,
+        "status": effective_status,
+        "source": source,
+        "fallback_active": fallback_active,
+        "native": native,
+        "backup_latest": dict(backup_freshness or {}),
+        "summary": summary,
+        "operator_action": native["operator_action"],
+        "privacy": native["privacy"],
+    }
+
+
 def evidence_recency_status(texts_by_slug, marker, max_age_seconds, observed_at=None):
     observed = observed_at or datetime.now(timezone.utc)
     if observed.tzinfo is None:
@@ -10155,7 +10341,8 @@ def latest_sre_numeric_evidence():
     has_capacity = all(term in joined for term in ("cpu", "memory", "disk", "open-file")) or all(term in joined for term in ("cpu", "memory", "disk", "open_file"))
     backup_text = texts_by_slug.get("_backups/backup-latest", "")
     backup_freshness = backup_latest_freshness(backup_text)
-    has_backup = backup_freshness["status"] == "current"
+    native_backup_coverage = gbrain_native_backup_coverage(backup_freshness)
+    has_backup = native_backup_coverage["status"] == "current"
     has_restore = "restore" in joined and ("checksum" in joined or "rehearsal" in joined)
     has_baseline = "7-day" in joined and "30-day" in joined
     daily_recency = selected_sre_recency(
@@ -10180,11 +10367,11 @@ def latest_sre_numeric_evidence():
         status = "pass"
     elif missing:
         status = "missing"
-    elif backup_freshness["status"] == "critical":
+    elif native_backup_coverage["status"] == "critical":
         status = "critical"
-    elif backup_freshness["status"] == "warning":
+    elif native_backup_coverage["status"] == "warning":
         status = "warning"
-    elif backup_freshness["status"] == "missing":
+    elif native_backup_coverage["status"] == "missing":
         status = "missing"
     elif daily_recency["status"] == "missing":
         status = "missing"
@@ -10196,15 +10383,15 @@ def latest_sre_numeric_evidence():
         status = "partial"
     freshness = "current" if status == "pass" else status
     if status == "pass":
-        summary = "Numeric SRE capacity, backup freshness, restore rehearsal, current Daily evidence, current Weekly evidence, and 7-day/30-day baselines are present."
+        summary = f"Numeric SRE capacity, restore rehearsal, current Daily/Weekly evidence, and 7-day/30-day baselines are present. {native_backup_coverage['summary']}"
     elif status in {"critical", "warning"}:
-        summary = backup_freshness["summary"]
+        summary = native_backup_coverage["summary"]
     elif status == "stale":
         summary = "Numeric SRE evidence is stale because current Daily or Weekly evidence is outside the allowed recency window."
     elif status == "missing":
         summary = "Numeric SRE evidence is missing required backup freshness or current Daily/Weekly evidence."
     else:
-        summary = "Numeric SRE capacity, backup, restore, baseline, or recency evidence is partial."
+        summary = native_backup_coverage["summary"] if native_backup_coverage["status"] in {"partial", "malformed", "stale"} else "Numeric SRE capacity, backup, restore, baseline, or recency evidence is partial."
     return {
         "status": status,
         "passed": passed,
@@ -10220,6 +10407,11 @@ def latest_sre_numeric_evidence():
             "backup_freshness_critical": 1 if backup_freshness["status"] == "critical" else 0,
             "backup_freshness_missing": 1 if backup_freshness["status"] == "missing" else 0,
             "backup_freshness_age_seconds": backup_freshness["age_seconds"],
+            "native_backup_available": 1 if native_backup_coverage["native"]["native_available"] else 0,
+            "native_backup_ready": 1 if native_backup_coverage["native"]["status"] == "ready" else 0,
+            "native_backup_warning": 1 if native_backup_coverage["native"]["status"] == "warning" else 0,
+            "native_backup_malformed": 1 if native_backup_coverage["native"]["status"] == "malformed" else 0,
+            "backup_latest_fallback_active": 1 if native_backup_coverage["fallback_active"] else 0,
             "backup_warning_threshold_seconds": SRE_BACKUP_WARNING_SECONDS,
             "backup_critical_threshold_seconds": SRE_BACKUP_CRITICAL_SECONDS,
             "restore_evidence_present": 1 if has_restore else 0,
@@ -10228,6 +10420,7 @@ def latest_sre_numeric_evidence():
             "weekly_evidence_current": 1 if has_current_weekly else 0,
         },
         "backup_freshness": backup_freshness,
+        "native_backup_coverage": native_backup_coverage,
         "daily_evidence": daily_recency,
         "weekly_evidence": weekly_recency,
         "selected_terminal_runs": [
@@ -10421,6 +10614,7 @@ def verified_memory_outcomes(window, backlog, resolver_health):
             "evidence_slugs": [item["slug"] for item in sre_numeric["evidence"] if item.get("available")],
             "counts": sre_numeric["counts"],
             "summary": sre_numeric["summary"],
+            "native_backup_coverage": sre_numeric.get("native_backup_coverage") or {},
         },
         "deployment_attestation": {
             "status": deployment_attestation["status"],

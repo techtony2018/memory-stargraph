@@ -539,7 +539,7 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("min-width: 220px", styles)
         self.assertIn('href="/styles.css?v=1.0.213"', markup)
         self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.213"', script)
+        self.assertIn('const UI_VERSION = "V1.0.214"', script)
         self.assertIn("height: 28px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -1653,9 +1653,9 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('href="/styles.css?v=1.0.213"', markup)
         self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('>V1.0.213</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.213"', script)
-        self.assertIn('UI_VERSION = "V1.0.213"', server)
+        self.assertIn('>V1.0.214</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.214"', script)
+        self.assertIn('UI_VERSION = "V1.0.214"', server)
 
     def test_runtime_versions_yoda_logs_and_mobile_context_have_bounded_ui_contracts(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -1852,8 +1852,8 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('href="/styles.css?v=1.0.213"', markup)
         self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('V1.0.213', markup)
-        self.assertIn('const UI_VERSION = "V1.0.213"', script)
+        self.assertIn('V1.0.214', markup)
+        self.assertIn('const UI_VERSION = "V1.0.214"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -1869,9 +1869,9 @@ class FrontendStaticTests(unittest.TestCase):
 
         self.assertIn('href="/styles.css?v=1.0.213"', markup)
         self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('>V1.0.213</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.213"', script)
-        self.assertIn('UI_VERSION = "V1.0.213"', (ROOT / "server.py").read_text())
+        self.assertIn('>V1.0.214</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.214"', script)
+        self.assertIn('UI_VERSION = "V1.0.214"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)
