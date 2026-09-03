@@ -10037,7 +10037,7 @@ def native_backup_base(status, summary, observed_at, *, native_available):
     return {
         "schema_version": 1,
         "status": status,
-        "freshness": status if status in {"missing", "malformed", "stale"} else "current",
+        "freshness": status if status in {"unavailable", "missing", "malformed", "stale"} else "current",
         "native_available": native_available,
         "native_schema": GBRAIN_NATIVE_BACKUP_SCHEMA if native_available else "",
         "checked_at": "",

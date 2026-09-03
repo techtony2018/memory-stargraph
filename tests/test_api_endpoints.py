@@ -2258,6 +2258,7 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(result["fallback_active"])
         self.assertFalse(result["native"]["native_available"])
         self.assertEqual(result["native"]["status"], "unavailable")
+        self.assertEqual(result["native"]["freshness"], "unavailable")
         self.assertTrue(result["operator_action"]["approval_required"])
         self.assertFalse(result["operator_action"]["automatic_mutation"])
 
