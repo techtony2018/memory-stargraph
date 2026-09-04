@@ -2156,6 +2156,21 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["verified_memory_outcomes"]["resolver_choice"]["status"], "observed")
         self.assertEqual(data["verified_memory_outcomes"]["resolver_choice"]["pending_proposals"], 2)
 
+    def test_outcome_gate_bounds_at_sentence_boundary_with_accessible_full_summary(self):
+        first_sentence = "Current capacity, restore, baseline, and backup fallback evidence is complete and privacy-safe."
+        long_summary = f"{first_sentence} Evidence source: /Users/private/evidence. " + ("Additional bounded evidence remains available. " * 12)
+
+        gate = server.outcome_gate("sre", "SRE", "pass", [], passed=True, summary=long_summary)
+
+        self.assertTrue(gate["summary"].startswith(first_sentence))
+        self.assertTrue(gate["summary"].endswith("available."))
+        self.assertTrue(gate["summary_truncated"])
+        self.assertLessEqual(len(gate["summary"]), 220)
+        self.assertLessEqual(len(gate["summary_full"]), 660)
+        self.assertIn("Additional bounded evidence", gate["summary_full"])
+        self.assertIn("[redacted-path]", gate["summary_full"])
+        self.assertNotIn("/Users/", gate["summary_full"])
+
     def test_weekly_memory_value_digest_marks_missing_evidence_partial(self):
         fake_store = FakeStore()
 
@@ -2238,6 +2253,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(result["counts"]["backup_latest_fallback_active"], 1)
         self.assertEqual(result["counts"]["daily_evidence_current"], 1)
         self.assertEqual(result["counts"]["weekly_evidence_current"], 1)
+        self.assertLessEqual(len(result["summary"]), 220)
+        self.assertTrue(result["summary"].endswith("legacy backup-latest is the active fallback and is current."))
 
     def test_native_backup_coverage_uses_legacy_fallback_when_command_is_unavailable(self):
         freshness = {
@@ -2540,12 +2557,19 @@ class ApiEndpointTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_reranker_probe_degrades_when_default_config_is_unset(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = dt.datetime(2026, 9, 3, 12, 0, tzinfo=dt.timezone.utc)
+                return value if tz is None else value.astimezone(tz)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.json"
             config_path.write_text(json.dumps({"engine": "postgres"}), encoding="utf-8")
             with (
                 mock.patch.dict("os.environ", {"GBRAIN_CONFIG_FILE": str(config_path)}),
                 mock.patch("server.subprocess.run") as run,
+                mock.patch("server.datetime", FixedDateTime),
             ):
                 result = server._probe_gbrain_reranker_readiness()
 

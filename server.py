@@ -314,7 +314,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.214"
+UI_VERSION = "V1.0.215"
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
@@ -661,6 +661,25 @@ def sanitize_text_summary(value, limit=220):
     text = SECRET_RE.sub("[redacted]", text)
     text = text.rstrip("?!")
     return text[:limit]
+
+
+def bounded_readiness_summary(value, limit=220, full_limit=660):
+    full_text = re.sub(r"\s+", " ", str(value or "")).strip()
+    full_text = SECRET_RE.sub("[redacted]", full_text)
+    full_text = PRIVATE_PATH_RE.sub("[redacted-path]", full_text)
+    if len(full_text) > full_limit:
+        clipped = full_text[: max(0, full_limit - 3)].rsplit(" ", 1)[0].rstrip(".,;:")
+        full_text = f"{clipped}..."
+    if len(full_text) <= limit:
+        return {"text": full_text, "full_text": full_text, "truncated": False}
+    visible_window = full_text[:limit]
+    sentence_ends = list(re.finditer(r"[.!?](?=\s|$)", visible_window))
+    if sentence_ends:
+        visible_text = visible_window[: sentence_ends[-1].end()].rstrip()
+    else:
+        clipped = visible_window[: max(0, limit - 3)].rsplit(" ", 1)[0].rstrip(".,;:")
+        visible_text = f"{clipped}..."
+    return {"text": visible_text, "full_text": full_text, "truncated": True}
 
 
 def sanitize_runtime_error(value, limit=220):
@@ -9939,13 +9958,16 @@ def outcome_evidence(slug, text):
 
 
 def outcome_gate(key, label, status, evidence, *, passed=False, counts=None, summary="", freshness="current"):
+    bounded_summary = bounded_readiness_summary(summary)
     return {
         "key": key,
         "label": label,
         "status": status,
         "passed": bool(passed),
         "counts": counts or {},
-        "summary": sanitize_text_summary(summary, 220),
+        "summary": bounded_summary["text"],
+        "summary_full": bounded_summary["full_text"],
+        "summary_truncated": bounded_summary["truncated"],
         "freshness": freshness,
         "evidence_slugs": [item["slug"] for item in evidence if item.get("available")],
         "evidence": evidence,
@@ -10161,11 +10183,14 @@ def gbrain_native_backup_coverage(backup_freshness, observed_at=None):
     if fallback_active:
         effective_status = legacy_status
         source = "backup_latest_fallback"
-        summary = f"{native['summary']} Legacy backup-latest freshness is {legacy_status}."
+        summary = (
+            f"Native GBrain backup coverage is {native['status']}; "
+            f"legacy backup-latest is the active fallback and is {legacy_status}."
+        )
     elif native["status"] == "ready":
         effective_status = legacy_status
         source = "native_and_backup_latest"
-        summary = f"{native['summary']} Legacy backup-latest freshness is {legacy_status}."
+        summary = f"Native GBrain backup coverage is ready; legacy backup-latest freshness is {legacy_status}."
     else:
         effective_status = native["status"]
         source = "native_gbrain_backup_coverage"

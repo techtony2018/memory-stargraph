@@ -537,9 +537,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertNotIn("search match", markup)
         self.assertIn("flex: 1 1 300px", styles)
         self.assertIn("min-width: 220px", styles)
-        self.assertIn('href="/styles.css?v=1.0.213"', markup)
-        self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('const UI_VERSION = "V1.0.214"', script)
+        self.assertIn('href="/styles.css?v=1.0.215"', markup)
+        self.assertIn('src="/app.js?v=1.0.215"', markup)
+        self.assertIn('const UI_VERSION = "V1.0.215"', script)
         self.assertIn("height: 28px", styles)
         self.assertIn("align-items: center", styles)
         self.assertIn("filters: { minDegree: 0 }", script)
@@ -1378,6 +1378,20 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("graphTooltip.append(title, summary)", script)
         self.assertNotIn('return "No summary available.";', script[script.index("function briefSummary"):script.index("function displaySummary")])
 
+    def test_weekly_outcome_summary_exposes_accessible_full_text_without_card_clipping(self):
+        script = (ROOT / "public" / "app.js").read_text()
+        styles = (ROOT / "public" / "styles.css").read_text()
+
+        self.assertIn("const fullSummary = gate.summary_full || summaryText;", script)
+        self.assertIn('gateSummary.setAttribute("aria-label", fullSummary);', script)
+        self.assertIn("if (gate.summary_truncated && fullSummary !== summaryText)", script)
+        self.assertIn("gateSummary.tabIndex = 0;", script)
+        self.assertIn("setHudTooltip(gateSummary, fullSummary);", script)
+        summary_styles = styles[styles.index(".verified-outcomes-header p,"):styles.index(".verified-outcomes-status {")]
+        self.assertIn("overflow-wrap: anywhere;", summary_styles)
+        self.assertNotIn("text-overflow", summary_styles)
+        self.assertNotIn("line-clamp", summary_styles)
+
     def test_selection_summary_filters_internal_gbrain_markers(self):
         script = (ROOT / "public/app.js").read_text()
         display_summary = script[
@@ -1651,11 +1665,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         server = (ROOT / "server.py").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.213"', markup)
-        self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('>V1.0.214</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.214"', script)
-        self.assertIn('UI_VERSION = "V1.0.214"', server)
+        self.assertIn('href="/styles.css?v=1.0.215"', markup)
+        self.assertIn('src="/app.js?v=1.0.215"', markup)
+        self.assertIn('>V1.0.215</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.215"', script)
+        self.assertIn('UI_VERSION = "V1.0.215"', server)
 
     def test_runtime_versions_yoda_logs_and_mobile_context_have_bounded_ui_contracts(self):
         markup = (ROOT / "public" / "index.html").read_text()
@@ -1850,10 +1864,10 @@ class FrontendStaticTests(unittest.TestCase):
         markup = (ROOT / "public" / "index.html").read_text()
         script = (ROOT / "public/app.js").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.213"', markup)
-        self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('V1.0.214', markup)
-        self.assertIn('const UI_VERSION = "V1.0.214"', script)
+        self.assertIn('href="/styles.css?v=1.0.215"', markup)
+        self.assertIn('src="/app.js?v=1.0.215"', markup)
+        self.assertIn('V1.0.215', markup)
+        self.assertIn('const UI_VERSION = "V1.0.215"', script)
         self.assertIn("--accent: #88f6ff", styles)
         self.assertIn("--accent-3: #ffc66f", styles)
         self.assertIn("radial-gradient(circle at 15% 15%, rgba(136, 246, 255, 0.1)", styles)
@@ -1867,11 +1881,11 @@ class FrontendStaticTests(unittest.TestCase):
         script = (ROOT / "public/app.js").read_text()
         styles = (ROOT / "public" / "styles.css").read_text()
 
-        self.assertIn('href="/styles.css?v=1.0.213"', markup)
-        self.assertIn('src="/app.js?v=1.0.213"', markup)
-        self.assertIn('>V1.0.214</a>', markup)
-        self.assertIn('const UI_VERSION = "V1.0.214"', script)
-        self.assertIn('UI_VERSION = "V1.0.214"', (ROOT / "server.py").read_text())
+        self.assertIn('href="/styles.css?v=1.0.215"', markup)
+        self.assertIn('src="/app.js?v=1.0.215"', markup)
+        self.assertIn('>V1.0.215</a>', markup)
+        self.assertIn('const UI_VERSION = "V1.0.215"', script)
+        self.assertIn('UI_VERSION = "V1.0.215"', (ROOT / "server.py").read_text())
         self.assertIn('id="selectionSlugAlways"', markup)
         self.assertIn("selectionSlugAlways.textContent = entity.slug", script)
         self.assertIn("selectionSlugAlways.textContent = slug || \"No selection\"", script)

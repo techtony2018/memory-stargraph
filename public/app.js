@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.214";
+const UI_VERSION = "V1.0.215";
 const SEARCH_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
@@ -4532,7 +4532,14 @@ function renderVerifiedMemoryOutcomesCard(digest) {
     const evidenceCount = Array.isArray(gate.evidence_slugs) ? gate.evidence_slugs.length : 0;
     gateMeta.textContent = `${outcomeStatusLabel(gate.status)} · ${evidenceCount} evidence link${evidenceCount === 1 ? "" : "s"}`;
     const gateSummary = document.createElement("p");
-    gateSummary.textContent = gate.summary || "No summary available.";
+    const summaryText = gate.summary || "No summary available.";
+    const fullSummary = gate.summary_full || summaryText;
+    gateSummary.textContent = summaryText;
+    gateSummary.setAttribute("aria-label", fullSummary);
+    if (gate.summary_truncated && fullSummary !== summaryText) {
+      gateSummary.tabIndex = 0;
+      setHudTooltip(gateSummary, fullSummary);
+    }
     item.append(gateTitle, gateMeta, gateSummary);
     grid.appendChild(item);
   });
