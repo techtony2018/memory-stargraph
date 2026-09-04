@@ -1,5 +1,6 @@
-const UI_VERSION = "V1.0.215";
+const UI_VERSION = "V1.0.216";
 const SEARCH_TIMEOUT_MS = 10000;
+const YODA_LOG_HYDRATION_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
 const TAKE_REVIEW_PAGE_SIZE = 10;
 const TAKE_REVIEW_EXISTING_TAKES_PAGE_SIZE = 10;
@@ -88,6 +89,8 @@ const state = {
   modalBackgroundState: new Map(),
   askYodaChats: new Map(),
   askYodaLogs: new Map(),
+  yodaLogHydrations: new Map(),
+  yodaLogViewRequestId: 0,
   yodaFeedback: new Map(),
   yodaLogReturn: null,
   yodaModelReturn: null,
@@ -4228,8 +4231,35 @@ async function loadPersistentYodaLogs(slug = "") {
   if (slug) params.set("slug", slug);
   params.set("limit", slug ? "20" : "80");
   const response = await apiGet(`/api/yoda-logs?${params.toString()}`);
-  if (!response.ok) return;
-  mergePersistentYodaLogs(response.data.entries || []);
+  if (!response.ok) throw new Error(`Persisted Ask Yoda logs returned HTTP ${response.status}.`);
+  const entries = response.data.entries || [];
+  mergePersistentYodaLogs(entries);
+  return entries;
+}
+
+function hydratePersistentYodaLogs(slug = "") {
+  const key = slug || "*";
+  const current = state.yodaLogHydrations.get(key);
+  if (current?.status === "loading") return current.promise;
+
+  let timeoutId = null;
+  const timeout = new Promise((resolve, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Persisted Ask Yoda log loading timed out.")), YODA_LOG_HYDRATION_TIMEOUT_MS);
+  });
+  const promise = Promise.race([loadPersistentYodaLogs(slug), timeout])
+    .then((entries) => {
+      state.yodaLogHydrations.set(key, { status: "loaded", error: "", promise: null });
+      return entries;
+    })
+    .catch((error) => {
+      state.yodaLogHydrations.set(key, { status: "error", error: error.message || String(error), promise: null });
+      throw error;
+    })
+    .finally(() => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    });
+  state.yodaLogHydrations.set(key, { status: "loading", error: "", promise });
+  return promise;
 }
 
 function formatYodaDiagnosticEntry(slug, log, index) {
@@ -4288,27 +4318,40 @@ function formatYodaDiagnosticLog(slug, entries = nodeYodaLogEntries(slug, 8), sc
   return entries.map(({ slug: entrySlug, entry }, index) => formatYodaDiagnosticEntry(entrySlug, entry, index)).join("\n\n---\n\n");
 }
 
-function openYodaLogWindow(options = {}) {
-  const scope = options.scope || "node";
-  const slug = options.slug || state.modalAction?.slug || state.focusSlug;
-  const previous = state.modalAction;
-  if (options.returnToAsk || previous?.action === "ask-yoda") {
-    state.yodaLogReturn = { action: "ask-yoda", slug: previous?.slug || slug, label: previous?.label || state.nodeMap.get(slug)?.label || slug };
-  } else {
-    state.yodaLogReturn = null;
-  }
-  modalKicker.textContent = "Ask Yoda Log";
-  modalTitle.textContent = scope === "global" ? "Global Ask Yoda Log" : "Ask Yoda Log";
-  modalPrimaryButton.textContent = "Close";
-  modalCancelButton.hidden = true;
-  modalEditor.hidden = true;
-  modalChat.hidden = true;
-  modalMarkdown.hidden = false;
+function renderYodaLogWindow(scope, slug, requestId, phase = "loaded") {
+  if (state.modalAction?.action !== "yoda-log" || state.modalAction.requestId !== requestId) return;
   modalMarkdown.innerHTML = "";
   const toolbar = document.createElement("div");
   toolbar.className = "yoda-log-toolbar";
   const pre = document.createElement("pre");
   pre.className = "yoda-log-window";
+  if (phase === "loading") {
+    modalMessage.textContent = "Loading persisted Ask Yoda diagnostic entries...";
+    pre.textContent = "Loading persisted Ask Yoda diagnostic entries...";
+    pre.setAttribute("aria-busy", "true");
+    modalMarkdown.appendChild(pre);
+    return;
+  }
+  if (phase === "error") {
+    modalMessage.textContent = "Persisted Ask Yoda logs are unavailable. Retry to check again.";
+    pre.textContent = "Unable to load persisted Ask Yoda diagnostic entries.";
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "ghost-button compact-button";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", () => {
+      if (state.modalAction?.action !== "yoda-log" || state.modalAction.requestId !== requestId) return;
+      renderYodaLogWindow(scope, slug, requestId, "loading");
+      void hydrateYodaLogWindow(scope, slug, requestId);
+    });
+    toolbar.appendChild(retryButton);
+    modalMarkdown.append(toolbar, pre);
+    return;
+  }
+
+  modalMessage.textContent = scope === "global"
+    ? "Persisted Ask Yoda diagnostics across nodes."
+    : "Persisted Ask Yoda diagnostics for this node.";
   const entries = scope === "global" ? globalYodaLogEntries(80) : nodeYodaLogEntries(slug, 20);
   const facets = [
     { key: "environment", label: "Environment", values: ["production", "test", "unknown"] },
@@ -4350,8 +4393,41 @@ function openYodaLogWindow(options = {}) {
   renderFilteredLog();
   modalMarkdown.appendChild(toolbar);
   modalMarkdown.appendChild(pre);
+}
+
+async function hydrateYodaLogWindow(scope, slug, requestId) {
+  try {
+    await hydratePersistentYodaLogs(scope === "global" ? "" : slug);
+    renderYodaLogWindow(scope, slug, requestId, "loaded");
+  } catch (error) {
+    renderYodaLogWindow(scope, slug, requestId, "error");
+  }
+}
+
+function openYodaLogWindow(options = {}) {
+  const scope = options.scope || "node";
+  const slug = options.slug || state.modalAction?.slug || state.focusSlug;
+  const previous = state.modalAction;
+  if (options.returnToAsk || previous?.action === "ask-yoda") {
+    state.yodaLogReturn = { action: "ask-yoda", slug: previous?.slug || slug, label: previous?.label || state.nodeMap.get(slug)?.label || slug };
+  } else {
+    state.yodaLogReturn = null;
+  }
+  state.yodaLogViewRequestId += 1;
+  const requestId = state.yodaLogViewRequestId;
+  modalKicker.textContent = "Ask Yoda Log";
+  modalTitle.textContent = scope === "global" ? "Global Ask Yoda Log" : "Ask Yoda Log";
+  modalPrimaryButton.textContent = "Close";
+  modalPrimaryButton.hidden = false;
+  modalCancelButton.hidden = true;
+  modalEditor.hidden = true;
+  modalChat.hidden = true;
+  modalForm.hidden = true;
+  modalMarkdown.hidden = false;
+  state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log", scope, requestId };
   showOperationModal();
-  state.modalAction = { action: "yoda-log", slug, label: "Ask Yoda Log" };
+  renderYodaLogWindow(scope, slug, requestId, "loading");
+  void hydrateYodaLogWindow(scope, slug, requestId);
 }
 
 async function openSetupDiagnosticsWindow() {
