@@ -44,6 +44,8 @@ if (!page) page = await context.newPage();
 const closePage = createdPage || (page.url() === "about:blank" && process.env.MEMORY_STARGRAPH_OWN_EXISTING_BLANK === "1");
 
 const errors = [];
+let expectedFailureConsole = false;
+let expectedFailureConsoleCount = 0;
 let responseDelayMs = 1200;
 let failNext = false;
 let requestCount = 0;
@@ -86,7 +88,13 @@ await page.route("**/api/yoda-logs?*", async (route) => {
 
 page.on("pageerror", (error) => errors.push(error.message || String(error)));
 page.on("console", (message) => {
-  if (message.type() === "error") errors.push(message.text());
+  if (message.type() !== "error") return;
+  const text = message.text();
+  if (expectedFailureConsole && /status of 503/i.test(text)) {
+    expectedFailureConsoleCount += 1;
+    return;
+  }
+  errors.push(text);
 });
 
 async function openGlobalLog() {
@@ -150,8 +158,10 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 2200));
   responseDelayMs = 0;
   failNext = true;
+  expectedFailureConsole = true;
   await openGlobalLog();
   await page.waitForFunction(() => document.querySelector("#modalMessage")?.textContent?.includes("unavailable"), null, { timeout: 10000 });
+  expectedFailureConsole = false;
   const failed = await page.evaluate(() => ({
     message: document.querySelector("#modalMessage")?.textContent || "",
     log: document.querySelector(".yoda-log-window")?.textContent || "",
@@ -187,6 +197,7 @@ try {
     finalPageCount: context.pages().length,
     createdPage,
     requestCount,
+    expectedFailureConsoleCount,
     initial,
     globalLoaded: { filters: globalLoaded.filters },
     selectedSlug,
@@ -195,6 +206,7 @@ try {
     errors,
   };
   console.log(JSON.stringify(result, null, 2));
+  if (expectedFailureConsoleCount !== 1) throw new Error(`Expected one injected 503 console signal, received ${expectedFailureConsoleCount}.`);
   if (errors.length) throw new Error(`Browser errors: ${JSON.stringify(errors)}`);
 } finally {
   if (closePage) await page.close().catch(() => {});
