@@ -121,7 +121,7 @@ try {
     log: document.querySelector(".yoda-log-window")?.textContent || "",
     busy: document.querySelector(".yoda-log-window")?.getAttribute("aria-busy") || "",
   }));
-  if (initial.version !== "V1.0.216" || initial.busy !== "true" || !initial.log.includes("Loading persisted") || initial.log.includes("No Ask Yoda diagnostic entries")) {
+  if (initial.version !== "V1.0.217" || initial.busy !== "true" || !initial.log.includes("Loading persisted") || initial.log.includes("No Ask Yoda diagnostic entries")) {
     throw new Error(`View Log did not open in a truthful loading state: ${JSON.stringify(initial)}`);
   }
   await waitForLogText("test_pair: sg0228-global-pair");

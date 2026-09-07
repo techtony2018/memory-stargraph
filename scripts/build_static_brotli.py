@@ -41,7 +41,7 @@ def build(quality):
 
 def main():
     parser = argparse.ArgumentParser(description="Build validated Brotli sidecars for startup assets.")
-    parser.add_argument("--quality", type=int, default=5, choices=range(0, 12))
+    parser.add_argument("--quality", type=int, default=11, choices=range(0, 12))
     args = parser.parse_args()
     build(args.quality)
 

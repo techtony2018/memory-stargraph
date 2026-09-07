@@ -1080,6 +1080,28 @@ The installed GBrain remains `0.46.28.0`. The dashboard's current local config s
 
 Avoid lowering graph/search timeouts without new evidence. Earlier profiling found valid organization graph reads completing near 7.851 seconds, so a blanket timeout reduction would lose real evidence.
 
+### Higher-density prebuilt Brotli startup assets
+
+The V1.0.217 build raises the deterministic prebuilt Brotli quality from 5 to
+11. Compression remains entirely offline, the validated manifest and
+source-hash fail-closed behavior are unchanged, and request-time compression
+CPU remains zero.
+
+- On the current V1.0.216 sources, quality-5 startup text totaled 88,519 bytes:
+  5,264 HTML, 15,697 CSS, and 67,558 JavaScript bytes.
+- The V1.0.217 quality-11 build totals 76,725 bytes: 4,674 HTML, 13,349 CSS,
+  and 58,702 JavaScript bytes. That is 11,794 fewer bytes, or 13.32%.
+- Five offline builds per asset measured median quality-11 build time of
+  214.1 ms for HTML, 395.4 ms for CSS, and 1,002.3 ms for JavaScript versus
+  180.5, 106.4, and 152.0 ms at quality 5. This is a release-build cost only.
+- Ten fresh-process startup cycles rejected semantic Search prewarming: the
+  next distinct Search median improved only 6.00% while median prewarm cost
+  increased by 8,477 ms. Two ten-query direction-balanced mode experiments
+  also rejected `tokenmax` (+0.62% median improvement) and `conservative`
+  (-0.27% regression) despite exact top-ten parity.
+- The complete Python suite passed 619 tests in 138.252 seconds; Python and
+  JavaScript syntax, static source/sidecar integrity, and diff checks passed.
+
 ## Host Note
 
 - Hostname: `toddys-mini-3.lan`
