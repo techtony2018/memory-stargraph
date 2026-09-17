@@ -320,7 +320,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.218"
+UI_VERSION = "V1.0.219"
 ENTITY_SAVE_READBACK_ATTEMPTS = 3
 ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.25
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
@@ -11482,13 +11482,22 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "indexing_status": "ready",
                     "degraded": False,
                 }
-                graph = STORE.refresh_after_entity_save()
+                try:
+                    graph = STORE.refresh_after_entity_save()
+                    graph_refresh_status = "ready"
+                except Exception:  # noqa: BLE001
+                    # Persistence has already passed semantic raw readback. A
+                    # follow-up graph refresh must not turn that durable save
+                    # into a false 502; callers can refresh the graph later.
+                    graph = None
+                    graph_refresh_status = "pending"
                 return self.end_json(
                     {
                         "ok": True,
                         "slug": slug,
                         "persisted": bool(persistence.get("persisted")),
                         "indexing_status": persistence.get("indexing_status"),
+                        "graph_refresh_status": graph_refresh_status,
                         "persistence": persistence,
                         "graph": graph,
                     }

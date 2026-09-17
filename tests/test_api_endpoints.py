@@ -1323,6 +1323,34 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(data["indexing_status"], "pending")
         self.assertEqual(data["persistence"], persistence)
 
+    def test_entity_save_keeps_durable_success_when_graph_refresh_is_pending(self):
+        fake_store = FakeStore()
+        persistence = {
+            "persisted": True,
+            "readback_verified": True,
+            "readback_attempt": 1,
+            "mode": "durable_no_embed",
+            "indexing_status": "pending",
+            "degraded": True,
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch.object(fake_store, "save_entity_raw", return_value=persistence),
+            mock.patch.object(fake_store, "refresh_after_entity_save", side_effect=RuntimeError("private detail")),
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-save/runs%2Ffallback-canary",
+                {"content": "---\ntype: run\n---\n\n# Canary\n"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["persisted"])
+        self.assertEqual(data["indexing_status"], "pending")
+        self.assertEqual(data["graph_refresh_status"], "pending")
+        self.assertIsNone(data["graph"])
+        self.assertNotIn("private", json.dumps(data).lower())
+
     def test_entity_save_redacts_private_fallback_errors(self):
         fake_store = FakeStore()
         private_error = server.EntityPersistenceError("entity_persistence_no_embed_failed")
