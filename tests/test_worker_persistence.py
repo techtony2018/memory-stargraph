@@ -251,6 +251,12 @@ tags: [completed]
 
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
 
+    def test_save_accepts_equivalent_timestamp_offsets(self):
+        expected = "---\nstarted_at: 2026-09-16T21:13:05-07:00\n---\n\n# Run\n"
+        actual = "---\nstarted_at: '2026-09-17T04:13:05.000Z'\n---\n\n# Run\n"
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
     def test_save_accepts_reordered_tags(self):
         expected = """---
 type: run

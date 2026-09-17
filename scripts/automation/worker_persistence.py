@@ -405,7 +405,7 @@ def _fold_block(lines: list[str], style: str) -> str:
 
 def _normalize_timestamp(value: str) -> str | None:
     candidate = value.strip()
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}([T ][0-9:.+-]+|Z)?", candidate):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+-]+Z?)?", candidate):
         return None
     try:
         parsed = dt.datetime.fromisoformat(candidate.replace("Z", "+00:00"))
@@ -415,8 +415,12 @@ def _normalize_timestamp(value: str) -> str | None:
         except ValueError:
             return None
     if parsed.microsecond:
-        return parsed.isoformat()
-    return parsed.replace(microsecond=0).isoformat()
+        normalized = parsed
+    else:
+        normalized = parsed.replace(microsecond=0)
+    if normalized.tzinfo is not None:
+        normalized = normalized.astimezone(dt.timezone.utc)
+    return normalized.isoformat()
 
 
 def _normalize_scalar(value: object) -> str:
