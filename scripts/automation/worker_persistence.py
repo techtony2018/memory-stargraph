@@ -418,7 +418,9 @@ def _normalize_timestamp(value: str) -> str | None:
         normalized = parsed
     else:
         normalized = parsed.replace(microsecond=0)
-    if normalized.tzinfo is not None:
+    if normalized.tzinfo is None:
+        normalized = normalized.replace(tzinfo=dt.timezone.utc)
+    else:
         normalized = normalized.astimezone(dt.timezone.utc)
     return normalized.isoformat()
 

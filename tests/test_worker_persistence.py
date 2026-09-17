@@ -257,6 +257,12 @@ tags: [completed]
 
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
 
+    def test_save_accepts_canonical_utc_midnight_for_bare_date(self):
+        expected = "---\ncreated_at: 2026-09-17\n---\n\n# Run\n"
+        actual = "---\ncreated_at: '2026-09-17T00:00:00.000Z'\n---\n\n# Run\n"
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
     def test_save_accepts_reordered_tags(self):
         expected = """---
 type: run
