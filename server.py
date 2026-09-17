@@ -320,9 +320,10 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.221"
-ENTITY_SAVE_READBACK_ATTEMPTS = 5
-ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.5
+UI_VERSION = "V1.0.222"
+ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 10
+ENTITY_SAVE_READBACK_ATTEMPTS = 8
+ENTITY_SAVE_READBACK_DELAY_SECONDS = 1.0
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
@@ -7855,7 +7856,11 @@ class GraphStore:
             indexing_status = "ready"
             degraded = False
             try:
-                gbrain_call_tool("put_page", {"slug": slug, "content": content}, timeout=30)
+                gbrain_call_tool(
+                    "put_page",
+                    {"slug": slug, "content": content},
+                    timeout=ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS,
+                )
             except Exception as exc:  # noqa: BLE001
                 if not entity_save_embedding_failure(exc):
                     raise EntityPersistenceError("entity_persistence_primary_failed") from exc
