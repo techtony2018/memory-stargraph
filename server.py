@@ -32,6 +32,8 @@ from urllib.parse import parse_qs, urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from scripts.automation.worker_persistence import _raw_readback_matches
+
 try:
     from PIL import Image, ImageOps
 except ImportError:  # Preview requests safely fall back to the original media.
@@ -187,6 +189,10 @@ DEFAULT_CONFIG = {
     "yoda_gbrain_mcp_sessions": 5,
     "yoda_node_path": "",
     "yoda_node_fallback_paths": [],
+    "entity_save_no_embed_fallback": False,
+    "entity_save_no_embed_timeout_seconds": 90,
+    "entity_save_lock_timeout_seconds": 120,
+    "entity_save_max_content_bytes": 4 * 1024 * 1024,
 }
 
 
@@ -314,7 +320,9 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.217"
+UI_VERSION = "V1.0.218"
+ENTITY_SAVE_READBACK_ATTEMPTS = 3
+ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.25
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
@@ -2361,6 +2369,85 @@ def run_gbrain_subprocess(*args, input_text=None, timeout=20):
         message = stderr or stdout or f"gbrain exited with status {result.returncode}"
         raise RuntimeError(message)
     return decode_process_output(result.stdout)
+
+
+class EntityPersistenceError(RuntimeError):
+    """Privacy-safe failure for the bounded entity persistence contract."""
+
+    def __init__(self, code):
+        self.code = str(code or "entity_persistence_failed")
+        super().__init__(self.code)
+
+
+def entity_save_no_embed_fallback_enabled():
+    return CONFIG.get("entity_save_no_embed_fallback") is True
+
+
+def entity_save_embedding_failure(error):
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return True
+    message = str(error or "").lower()
+    markers = (
+        "embedding",
+        "embed",
+        "api key",
+        "credentials",
+        "credit",
+        "insufficient_quota",
+        "provider",
+        "rate limit",
+        "capacity",
+        "timed out",
+        "timeout",
+    )
+    return any(marker in message for marker in markers)
+
+
+def entity_save_slug_parts(slug):
+    normalized = str(slug or "").strip("/")
+    parts = normalized.split("/") if normalized else []
+    if (
+        not parts
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", part) for part in parts)
+    ):
+        raise EntityPersistenceError("entity_persistence_invalid_slug")
+    return parts
+
+
+def run_entity_save_no_embed_import(slug, content, timeout=None):
+    parts = entity_save_slug_parts(slug)
+    bounded_timeout = int(timeout or CONFIG.get("entity_save_no_embed_timeout_seconds", 90))
+    try:
+        with tempfile.TemporaryDirectory(prefix="memory-stargraph-entity-save-") as directory:
+            root = Path(directory)
+            target = root.joinpath(*parts[:-1], f"{parts[-1]}.md")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            output = run_gbrain_subprocess(
+                "import",
+                str(root),
+                "--no-embed",
+                "--workers",
+                "1",
+                "--fresh",
+                "--allow-noncanonical-root",
+                "--json",
+                timeout=bounded_timeout,
+            )
+        payload = json.loads(output)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") != "success"
+            or int(payload.get("errors") or 0) != 0
+            or int(payload.get("total_files") or 0) != 1
+        ):
+            raise ValueError("unexpected import result")
+        return payload
+    except EntityPersistenceError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise EntityPersistenceError("entity_persistence_no_embed_failed") from exc
 
 
 def run_remote_gbrain_read(*args, timeout=20):
@@ -7225,6 +7312,7 @@ class GraphStore:
             max_entries=1,
         )
         self.evidence_list_cache = EvidenceListCache()
+        self.entity_save_lock = threading.Lock()
 
     def prewarm_search_evidence(
         self,
@@ -7735,9 +7823,54 @@ class GraphStore:
             return None
         return ensure_media_references_available(parse_media_references(raw))
 
+    def verify_entity_save_readback(self, slug, content):
+        for attempt in range(1, ENTITY_SAVE_READBACK_ATTEMPTS + 1):
+            self.entity_raw_cache.clear()
+            try:
+                actual = self.get_entity_raw(slug, timeout=20)
+            except Exception:  # noqa: BLE001
+                actual = None
+            if isinstance(actual, str) and _raw_readback_matches(content, actual):
+                return attempt
+            if attempt < ENTITY_SAVE_READBACK_ATTEMPTS:
+                time.sleep(ENTITY_SAVE_READBACK_DELAY_SECONDS)
+        raise EntityPersistenceError("entity_persistence_readback_unverified")
+
     def save_entity_raw(self, slug, content):
-        gbrain_call_tool("put_page", {"slug": slug, "content": content})
-        self.invalidate()
+        if not isinstance(content, str):
+            raise EntityPersistenceError("entity_persistence_invalid_content")
+        if len(content.encode("utf-8")) > int(CONFIG.get("entity_save_max_content_bytes", 4 * 1024 * 1024)):
+            raise EntityPersistenceError("entity_persistence_content_too_large")
+        lock_timeout = max(0.1, float(CONFIG.get("entity_save_lock_timeout_seconds", 120)))
+        if not self.entity_save_lock.acquire(timeout=lock_timeout):
+            raise EntityPersistenceError("entity_persistence_busy")
+        try:
+            mode = "indexed"
+            indexing_status = "ready"
+            degraded = False
+            try:
+                gbrain_call_tool("put_page", {"slug": slug, "content": content}, timeout=30)
+            except Exception as exc:  # noqa: BLE001
+                if not entity_save_embedding_failure(exc):
+                    raise EntityPersistenceError("entity_persistence_primary_failed") from exc
+                if not entity_save_no_embed_fallback_enabled():
+                    raise EntityPersistenceError("entity_persistence_indexing_unavailable") from exc
+                run_entity_save_no_embed_import(slug, content)
+                mode = "durable_no_embed"
+                indexing_status = "pending"
+                degraded = True
+            self.invalidate()
+            readback_attempt = self.verify_entity_save_readback(slug, content)
+            return {
+                "persisted": True,
+                "readback_verified": True,
+                "readback_attempt": readback_attempt,
+                "mode": mode,
+                "indexing_status": indexing_status,
+                "degraded": degraded,
+            }
+        finally:
+            self.entity_save_lock.release()
 
     def refresh_after_entity_save(self):
         graph = self.get_seed_graph(force=True)
@@ -11342,11 +11475,44 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                 content = payload.get("content")
                 if not isinstance(content, str):
                     return self.end_json({"error": "content must be a string"}, status=HTTPStatus.BAD_REQUEST)
-                STORE.save_entity_raw(slug, content)
+                persistence = STORE.save_entity_raw(slug, content) or {
+                    "persisted": True,
+                    "readback_verified": False,
+                    "mode": "indexed",
+                    "indexing_status": "ready",
+                    "degraded": False,
+                }
                 graph = STORE.refresh_after_entity_save()
-                return self.end_json({"ok": True, "slug": slug, "graph": graph})
+                return self.end_json(
+                    {
+                        "ok": True,
+                        "slug": slug,
+                        "persisted": bool(persistence.get("persisted")),
+                        "indexing_status": persistence.get("indexing_status"),
+                        "persistence": persistence,
+                        "graph": graph,
+                    }
+                )
+            except EntityPersistenceError as exc:
+                return self.end_json(
+                    {
+                        "ok": False,
+                        "persisted": False,
+                        "indexing_status": "unavailable",
+                        "error": exc.code,
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
             except Exception as exc:  # noqa: BLE001
-                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_GATEWAY)
+                return self.end_json(
+                    {
+                        "ok": False,
+                        "persisted": False,
+                        "indexing_status": "unavailable",
+                        "error": "entity_persistence_failed",
+                    },
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
         if parsed.path.startswith("/api/entity-delete/"):
             slug = unquote(parsed.path.split("/api/entity-delete/", 1)[1]).strip("/")
             try:

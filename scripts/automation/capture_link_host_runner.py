@@ -19,7 +19,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.automation import manage_capture_backlog as capture
-from scripts.automation.worker_persistence import _raw_readback_matches
+from scripts.automation.worker_persistence import (
+    _raw_readback_matches,
+    entity_save_response_persistence,
+)
 
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -212,9 +215,12 @@ def put_entity(slug: str, markdown: str) -> dict[str, object]:
         {"content": markdown},
         timeout=180,
     )
-    if not payload or payload.get("error"):
+    save_persistence = entity_save_response_persistence(payload)
+    if save_persistence is None:
         raise RunnerError(f"worker API save failed closed for {slug}")
-    return verify_entity_persistence(slug, markdown)
+    evidence = verify_entity_persistence(slug, markdown)
+    evidence["save_persistence"] = save_persistence
+    return evidence
 
 
 def mutate_tag(slug: str, tag: str, action: str) -> None:

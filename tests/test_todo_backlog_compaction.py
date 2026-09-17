@@ -224,6 +224,30 @@ class TodoBacklogCompactionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP readback failed"):
                 gbrain_put("notes/private-route-is-not-reported", "# Updated\n")
 
+    def test_save_accepts_indexing_pending_only_after_semantic_readback(self):
+        pending = {
+            "ok": True,
+            "persisted": True,
+            "persistence": {
+                "persisted": True,
+                "readback_verified": True,
+                "mode": "durable_no_embed",
+                "indexing_status": "pending",
+                "degraded": True,
+            },
+        }
+        with (
+            mock.patch(
+                "scripts.automation.compact_sg_todo_backlog.worker_api_post_json",
+                return_value=pending,
+            ),
+            mock.patch(
+                "scripts.automation.compact_sg_todo_backlog.worker_api_get",
+                return_value="# Updated\n",
+            ),
+        ):
+            gbrain_put("notes/pending-index", "# Updated\n")
+
     def test_save_fails_closed_when_http_readback_differs(self):
         with (
             mock.patch("scripts.automation.compact_sg_todo_backlog.worker_api_post_json", return_value=True),

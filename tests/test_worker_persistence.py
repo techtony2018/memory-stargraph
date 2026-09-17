@@ -22,6 +22,44 @@ active_change: false
 
 
 class WorkerPersistenceTests(unittest.TestCase):
+    def test_entity_save_response_accepts_durable_indexing_pending(self):
+        payload = {
+            "ok": True,
+            "persisted": True,
+            "persistence": {
+                "persisted": True,
+                "readback_verified": True,
+                "mode": "durable_no_embed",
+                "indexing_status": "pending",
+                "degraded": True,
+            },
+        }
+
+        result = persistence.entity_save_response_persistence(payload)
+
+        self.assertEqual(result["indexing_status"], "pending")
+        self.assertEqual(result["mode"], "durable_no_embed")
+        self.assertTrue(result["degraded"])
+
+    def test_entity_save_response_rejects_false_or_malformed_durability(self):
+        self.assertIsNone(
+            persistence.entity_save_response_persistence(
+                {"ok": True, "persisted": False, "indexing_status": "pending"}
+            )
+        )
+        self.assertIsNone(
+            persistence.entity_save_response_persistence(
+                {
+                    "ok": True,
+                    "persisted": True,
+                    "persistence": {
+                        "persisted": True,
+                        "indexing_status": "eventually_maybe",
+                    },
+                }
+            )
+        )
+
     def test_route_candidates_prefer_configured_dashboard_route_over_loopback(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "deployment-targets.env"

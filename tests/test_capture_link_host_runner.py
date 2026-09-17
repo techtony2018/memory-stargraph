@@ -105,6 +105,29 @@ tags:
         )
         gbrain.assert_not_called()
 
+    def test_put_entity_preserves_indexing_pending_evidence(self):
+        expected = "---\ntype: organization\n---\n\n# Entity\n"
+        pending = {
+            "ok": True,
+            "persisted": True,
+            "persistence": {
+                "persisted": True,
+                "readback_verified": True,
+                "mode": "durable_no_embed",
+                "indexing_status": "pending",
+                "degraded": True,
+            },
+        }
+        with (
+            mock.patch.object(runner.capture, "worker_api_post_json", return_value=pending),
+            mock.patch.object(runner.capture, "worker_api_get", return_value=expected),
+        ):
+            evidence = runner.put_entity("organizations/example", expected)
+
+        self.assertTrue(evidence["readback_verified"])
+        self.assertEqual(evidence["save_persistence"]["indexing_status"], "pending")
+        self.assertTrue(evidence["save_persistence"]["degraded"])
+
     def test_put_entity_fails_closed_on_api_save_or_partial_readback_without_replay(self):
         expected = "---\ntype: organization\n---\n\n# Entity\n\nExpected body.\n"
         partial = "---\ntype: organization\n---\n\n# Entity\n"

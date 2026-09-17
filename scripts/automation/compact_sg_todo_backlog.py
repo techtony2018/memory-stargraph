@@ -33,6 +33,7 @@ from scripts.automation.worker_persistence import (
     WorkerRoute,
     _frontmatter_values,
     _raw_readback_matches,
+    entity_save_response_persistence,
     resolve_worker_route,
 )
 
@@ -191,7 +192,7 @@ def worker_api_get(slug: str) -> str | None:
     return content if isinstance(content, str) else None
 
 
-def worker_api_post_json(endpoint: str, payload: dict[str, object], timeout: int = 120) -> bool:
+def worker_api_post_json(endpoint: str, payload: dict[str, object], timeout: int = 120) -> dict[str, object] | None:
     route = worker_api_route()
     url = f"{route.base_url}{endpoint}"
     body = json.dumps(payload, ensure_ascii=False)
@@ -201,7 +202,13 @@ def worker_api_post_json(endpoint: str, payload: dict[str, object], timeout: int
         timeout=timeout + 15,
         route=route,
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        return None
+    try:
+        decoded = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) and decoded.get("ok") else None
 
 
 def gbrain_get(slug: str) -> str | None:
@@ -214,7 +221,12 @@ def gbrain_get(slug: str) -> str | None:
 
 def gbrain_put(slug: str, markdown: str) -> None:
     endpoint = f"/api/entity-save/{quote(slug, safe='')}"
-    if not worker_api_post_json(endpoint, {"content": markdown}, timeout=180):
+    save_result = worker_api_post_json(endpoint, {"content": markdown}, timeout=180)
+    if isinstance(save_result, bool):
+        durable_save = save_result
+    else:
+        durable_save = entity_save_response_persistence(save_result) is not None
+    if not durable_save:
         raise RuntimeError(f"Memory Stargraph HTTP save failed for {slug}")
     readback = worker_api_get(slug)
     if readback is None:
@@ -225,11 +237,11 @@ def gbrain_put(slug: str, markdown: str) -> None:
 
 def gbrain_link(source: str, target: str, link_type: str) -> bool:
     endpoint = f"/api/entity-link/{quote(source, safe='')}"
-    return worker_api_post_json(
+    return bool(worker_api_post_json(
         endpoint,
         {"target": target, "link_type": link_type, "context": "memory-stargraph-todo-compaction"},
         timeout=120,
-    )
+    ))
 
 
 def discover_existing_archives(max_archives: int = 200) -> dict[str, list[dict[str, str]]]:

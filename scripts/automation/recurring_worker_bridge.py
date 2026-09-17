@@ -21,7 +21,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.automation import retrieval_quality_benchmark
-from scripts.automation.worker_persistence import _frontmatter_values
+from scripts.automation.worker_persistence import (
+    _frontmatter_values,
+    entity_save_response_persistence,
+)
 
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -442,11 +445,22 @@ def gbrain_get(slug: str, *, timeout: int = 30) -> tuple[bool, str]:
     return False, result.stderr or result.stdout
 
 
-def gbrain_put(slug: str, markdown: str, *, timeout: int = 45) -> None:
-    if not stargraph_save(slug, markdown, timeout=timeout):
+def gbrain_put(slug: str, markdown: str, *, timeout: int = 45) -> dict[str, object]:
+    save_result = stargraph_save(slug, markdown, timeout=timeout)
+    if not save_result:
         result = run_cmd(["gbrain", "put", slug, "--content", markdown], timeout=timeout)
         if result.returncode != 0:
             raise BridgePhaseError("artifact_persistence", f"Stargraph API save and gbrain put failed for {slug}: {(result.stderr or result.stdout).strip()}")
+        save_result = {
+            "persisted": True,
+            "persistence": {
+                "persisted": True,
+                "readback_verified": False,
+                "mode": "legacy_cli",
+                "indexing_status": "unknown",
+                "degraded": False,
+            },
+        }
     raw = stargraph_raw(slug, timeout=timeout)
     if raw is None:
         readback = run_cmd(["gbrain", "get", slug], timeout=timeout)
@@ -455,6 +469,14 @@ def gbrain_put(slug: str, markdown: str, *, timeout: int = 45) -> None:
         raw = readback.stdout
     if not markdown_readback_matches(markdown, raw):
         raise BridgePhaseError("artifact_readback", f"readback mismatch for {slug}")
+    persistence = save_result.get("persistence") if isinstance(save_result, dict) else None
+    return dict(persistence) if isinstance(persistence, dict) else {
+        "persisted": True,
+        "readback_verified": True,
+        "mode": "indexed",
+        "indexing_status": "ready",
+        "degraded": False,
+    }
 
 
 def split_markdown(markdown: str) -> tuple[str, str]:
@@ -532,10 +554,11 @@ def stargraph_json(method: str, endpoint: str, *, payload: dict[str, object] | N
     return decoded if isinstance(decoded, dict) else None
 
 
-def stargraph_save(slug: str, markdown: str, *, timeout: int = 45) -> bool:
+def stargraph_save(slug: str, markdown: str, *, timeout: int = 45) -> dict[str, object] | None:
     endpoint = f"/api/entity-save/{quote(slug, safe='')}"
     payload = stargraph_json("POST", endpoint, payload={"content": markdown}, timeout=timeout)
-    return bool(payload and payload.get("ok"))
+    persistence = entity_save_response_persistence(payload)
+    return {**payload, "persistence": persistence} if payload and persistence else None
 
 
 def stargraph_raw(slug: str, *, timeout: int = 45) -> str | None:

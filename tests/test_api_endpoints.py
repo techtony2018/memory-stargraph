@@ -1298,6 +1298,48 @@ class ApiEndpointTests(unittest.TestCase):
             ],
         )
 
+    def test_entity_save_reports_durable_indexing_pending(self):
+        fake_store = FakeStore()
+        persistence = {
+            "persisted": True,
+            "readback_verified": True,
+            "readback_attempt": 1,
+            "mode": "durable_no_embed",
+            "indexing_status": "pending",
+            "degraded": True,
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch.object(fake_store, "save_entity_raw", return_value=persistence),
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-save/runs%2Ffallback-canary",
+                {"content": "---\ntype: run\n---\n\n# Canary\n"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["persisted"])
+        self.assertEqual(data["indexing_status"], "pending")
+        self.assertEqual(data["persistence"], persistence)
+
+    def test_entity_save_redacts_private_fallback_errors(self):
+        fake_store = FakeStore()
+        private_error = server.EntityPersistenceError("entity_persistence_no_embed_failed")
+        private_error.__cause__ = RuntimeError("/private/tmp/secret/entity.md")
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch.object(fake_store, "save_entity_raw", side_effect=private_error),
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-save/runs%2Ffallback-canary",
+                {"content": "# Canary\n"},
+            )
+
+        self.assertEqual(status, 502)
+        self.assertEqual(data["error"], "entity_persistence_no_embed_failed")
+        self.assertNotIn("private", json.dumps(data).lower())
+
     def test_entity_media_endpoint_returns_detected_media(self):
         fake_store = FakeStore()
         with mock.patch("server.STORE", fake_store):

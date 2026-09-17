@@ -539,6 +539,30 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             bridge.gbrain_put("runs/example", markdown)
         cli.assert_not_called()
 
+    def test_gbrain_put_accepts_and_returns_indexing_pending_evidence(self):
+        markdown = "---\nstatus: completed\n---\nBody"
+        pending = {
+            "ok": True,
+            "persisted": True,
+            "persistence": {
+                "persisted": True,
+                "readback_verified": True,
+                "mode": "durable_no_embed",
+                "indexing_status": "pending",
+                "degraded": True,
+            },
+        }
+        with (
+            mock.patch.object(bridge, "stargraph_raw", return_value=markdown),
+            mock.patch.object(bridge, "stargraph_save", return_value=pending),
+            mock.patch.object(bridge, "run_cmd") as cli,
+        ):
+            persistence = bridge.gbrain_put("runs/example", markdown)
+
+        self.assertEqual(persistence["indexing_status"], "pending")
+        self.assertTrue(persistence["degraded"])
+        cli.assert_not_called()
+
     def test_markdown_readback_allows_normalized_frontmatter_but_rejects_body_change(self):
         expected = "---\ntype: run\nstatus: completed\ntags:\n- synthetic\n- sg0179\n---\n# Title\n\nBody\n"
         normalized = "---\ntype: run\ntitle: Title\nstatus: completed\ntags:\n  - sg0179\n  - synthetic\n---\n# Title\n\nBody\n"

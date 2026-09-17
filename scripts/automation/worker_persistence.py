@@ -31,6 +31,35 @@ class WorkerPersistenceError(RuntimeError):
     """Raised when bounded worker persistence cannot be verified."""
 
 
+def entity_save_response_persistence(payload: object) -> dict[str, object] | None:
+    """Return normalized durable-save evidence, including no-embed pending state."""
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return None
+    if payload.get("persisted", True) is not True:
+        return None
+    raw = payload.get("persistence")
+    if raw is None:
+        return {
+            "persisted": True,
+            "readback_verified": False,
+            "mode": "legacy_api",
+            "indexing_status": "unknown",
+            "degraded": False,
+        }
+    if not isinstance(raw, dict) or raw.get("persisted") is not True:
+        return None
+    indexing_status = str(raw.get("indexing_status") or "")
+    if indexing_status not in {"ready", "pending"}:
+        return None
+    return {
+        "persisted": True,
+        "readback_verified": raw.get("readback_verified") is True,
+        "mode": str(raw.get("mode") or "unknown"),
+        "indexing_status": indexing_status,
+        "degraded": raw.get("degraded") is True,
+    }
+
+
 @dataclass(frozen=True)
 class WorkerRoute:
     base_url: str

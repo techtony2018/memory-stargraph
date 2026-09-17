@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import subprocess
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1251,6 +1252,180 @@ class GraphParsingTests(unittest.TestCase):
             self.assertIs(store.refresh_after_entity_save(), graph)
 
         self.assertIsNone(store.entity_raw_cache.get("people/tony-guan"))
+
+    def test_entity_save_normal_path_reports_index_ready(self):
+        store = GraphStore()
+        expected = "---\ntype: run\nstatus: completed\n---\n\n# Indexed\n"
+        with (
+            mock.patch("server.gbrain_call_tool", return_value={"ok": True}) as put,
+            mock.patch.object(store, "get_entity_raw", return_value=expected),
+        ):
+            result = store.save_entity_raw("runs/indexed", expected)
+
+        self.assertEqual(result["mode"], "indexed")
+        self.assertEqual(result["indexing_status"], "ready")
+        self.assertTrue(result["persisted"])
+        self.assertTrue(result["readback_verified"])
+        put.assert_called_once_with(
+            "put_page",
+            {"slug": "runs/indexed", "content": expected},
+            timeout=30,
+        )
+
+    def test_entity_save_embedding_failure_uses_no_embed_and_reports_pending(self):
+        store = GraphStore()
+        expected = "---\ntype: run\nstatus: completed\n---\n\n# Pending\n"
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding provider capacity unavailable")),
+            mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}) as fallback,
+            mock.patch.object(store, "get_entity_raw", return_value=expected),
+        ):
+            result = store.save_entity_raw("runs/pending", expected)
+
+        self.assertEqual(result["mode"], "durable_no_embed")
+        self.assertEqual(result["indexing_status"], "pending")
+        self.assertTrue(result["degraded"])
+        fallback.assert_called_once_with("runs/pending", expected)
+
+    def test_entity_save_no_embed_fallback_is_disabled_by_default(self):
+        store = GraphStore()
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": False}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding provider unavailable")),
+            mock.patch("server.run_entity_save_no_embed_import") as fallback,
+        ):
+            with self.assertRaisesRegex(
+                server.EntityPersistenceError,
+                "entity_persistence_indexing_unavailable",
+            ):
+                store.save_entity_raw("runs/remote-disabled", "# Disabled\n")
+        fallback.assert_not_called()
+
+    def test_entity_save_no_embed_import_is_single_page_and_cleans_temp_root(self):
+        observed = {}
+
+        def fake_import(*args, **kwargs):
+            root = Path(args[1])
+            observed["root"] = root
+            observed["args"] = args
+            observed["content"] = (root / "runs" / "isolated.md").read_text(encoding="utf-8")
+            observed["timeout"] = kwargs["timeout"]
+            return json.dumps(
+                {
+                    "status": "success",
+                    "imported": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "total_files": 1,
+                }
+            )
+
+        with mock.patch("server.run_gbrain_subprocess", side_effect=fake_import):
+            result = server.run_entity_save_no_embed_import(
+                "runs/isolated",
+                "# Isolated\n",
+                timeout=17,
+            )
+
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(observed["content"], "# Isolated\n")
+        self.assertEqual(observed["timeout"], 17)
+        self.assertIn("--no-embed", observed["args"])
+        self.assertIn("--fresh", observed["args"])
+        self.assertFalse(observed["root"].exists())
+
+    def test_entity_save_fallback_fails_closed_on_readback_mismatch(self):
+        store = GraphStore()
+        expected = "---\ntype: run\n---\n\n# Expected\n"
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding timed out")),
+            mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}),
+            mock.patch.object(store, "get_entity_raw", return_value="# Different\n"),
+            mock.patch("server.time.sleep"),
+        ):
+            with self.assertRaisesRegex(
+                server.EntityPersistenceError,
+                "entity_persistence_readback_unverified",
+            ):
+                store.save_entity_raw("runs/mismatch", expected)
+
+    def test_entity_save_fallback_failure_and_timeout_are_privacy_safe(self):
+        with mock.patch(
+            "server.run_gbrain_subprocess",
+            side_effect=RuntimeError("/private/tmp/secret import provider failed"),
+        ):
+            with self.assertRaisesRegex(
+                server.EntityPersistenceError,
+                "^entity_persistence_no_embed_failed$",
+            ) as failed:
+                server.run_entity_save_no_embed_import("runs/failure", "# Failure\n")
+        self.assertNotIn("private", str(failed.exception).lower())
+
+        with mock.patch(
+            "server.run_gbrain_subprocess",
+            side_effect=subprocess.TimeoutExpired(["gbrain", "import"], 1),
+        ):
+            with self.assertRaisesRegex(
+                server.EntityPersistenceError,
+                "^entity_persistence_no_embed_failed$",
+            ):
+                server.run_entity_save_no_embed_import("runs/timeout", "# Timeout\n")
+
+    def test_entity_save_repeated_fallback_is_idempotent(self):
+        store = GraphStore()
+        expected = "---\ntype: run\n---\n\n# Repeated\n"
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding credentials unavailable")),
+            mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}) as fallback,
+            mock.patch.object(store, "get_entity_raw", return_value=expected),
+        ):
+            first = store.save_entity_raw("runs/repeated", expected)
+            second = store.save_entity_raw("runs/repeated", expected)
+
+        self.assertEqual(first, second)
+        self.assertEqual(fallback.call_count, 2)
+
+    def test_entity_save_serializes_concurrent_fallbacks_without_slug_crossover(self):
+        store = GraphStore()
+        contents = {
+            "runs/one": "# One\n",
+            "runs/two": "# Two\n",
+        }
+        active = 0
+        max_active = 0
+        seen = []
+        state_lock = threading.Lock()
+
+        def fallback(slug, content):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.01)
+            seen.append((slug, content))
+            with state_lock:
+                active -= 1
+            return {"status": "success"}
+
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding unavailable")),
+            mock.patch("server.run_entity_save_no_embed_import", side_effect=fallback),
+            mock.patch.object(store, "get_entity_raw", side_effect=lambda slug, timeout=None: contents[slug]),
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(store.save_entity_raw, slug, content)
+                    for slug, content in contents.items()
+                ]
+                results = [future.result() for future in futures]
+
+        self.assertEqual(max_active, 1)
+        self.assertCountEqual(seen, list(contents.items()))
+        self.assertTrue(all(result["indexing_status"] == "pending" for result in results))
 
     def test_timed_value_cache_expires_and_bounds_entries(self):
         cache = TimedValueCache(ttl_seconds=10, max_entries=2)
