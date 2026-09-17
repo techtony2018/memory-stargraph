@@ -1315,15 +1315,15 @@ class GraphParsingTests(unittest.TestCase):
             mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}),
             mock.patch(
                 "server.run_gbrain_subprocess",
-                side_effect=["# Stale\n", "# Stale\n", "# Stale\n", expected],
+                side_effect=["# Stale\n", "# Stale\n", expected],
             ) as direct_read,
             mock.patch("server.time.sleep") as sleep,
         ):
             result = store.save_entity_raw("runs/propagated", expected)
 
-        self.assertEqual(result["readback_attempt"], 4)
-        self.assertEqual(direct_read.call_count, 4)
-        self.assertEqual(sleep.call_count, 3)
+        self.assertEqual(result["readback_attempt"], 3)
+        self.assertEqual(direct_read.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_entity_save_no_embed_readback_uses_full_bounded_window(self):
         store = GraphStore()

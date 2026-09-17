@@ -307,6 +307,18 @@ tags:
         self.assertTrue(persistence._raw_readback_matches(expected, actual))
         self.assertFalse(persistence._raw_readback_matches(expected, extra))
 
+    def test_save_accepts_canonical_frontmatter_body_separator(self):
+        expected = "---\ntype: run\n---\n# Body Run\n"
+        actual = "---\ntype: run\n---\n\n# Body Run\n"
+
+        self.assertTrue(persistence._raw_readback_matches(expected, actual))
+
+    def test_save_preserves_additional_leading_body_blank_lines(self):
+        expected = "---\ntype: run\n---\n# Body Run\n"
+        actual = "---\ntype: run\n---\n\n\n# Body Run\n"
+
+        self.assertFalse(persistence._raw_readback_matches(expected, actual))
+
 
 if __name__ == "__main__":
     unittest.main()

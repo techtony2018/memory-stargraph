@@ -355,6 +355,10 @@ def _split_frontmatter(markdown: str) -> tuple[str, str]:
     body_start = end + len("\n---")
     if markdown[body_start : body_start + 1] == "\n":
         body_start += 1
+    # GBrain canonicalizes one blank separator after frontmatter. Ignore only
+    # that separator so additional leading blank lines remain body content.
+    if markdown[body_start : body_start + 1] == "\n":
+        body_start += 1
     return markdown[4:end], markdown[body_start:]
 
 
