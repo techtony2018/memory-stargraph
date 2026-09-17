@@ -1279,7 +1279,7 @@ class GraphParsingTests(unittest.TestCase):
             mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
             mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding provider capacity unavailable")),
             mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}) as fallback,
-            mock.patch.object(store, "get_entity_raw", return_value=expected),
+            mock.patch("server.run_gbrain_subprocess", return_value=expected) as readback,
         ):
             result = store.save_entity_raw("runs/pending", expected)
 
@@ -1287,6 +1287,24 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(result["indexing_status"], "pending")
         self.assertTrue(result["degraded"])
         fallback.assert_called_once_with("runs/pending", expected)
+        readback.assert_called_once_with("get", "runs/pending", timeout=20)
+
+    def test_entity_save_no_embed_readback_bypasses_stale_mcp_session(self):
+        store = GraphStore()
+        expected = "---\ntype: run\n---\n\n# Independent readback\n"
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding timed out")),
+            mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}),
+            mock.patch("server.run_gbrain_subprocess", return_value=expected) as direct_read,
+            mock.patch.object(store, "get_entity_raw", return_value="# Stale MCP page\n") as mcp_read,
+        ):
+            result = store.save_entity_raw("runs/independent-readback", expected)
+
+        self.assertTrue(result["readback_verified"])
+        self.assertEqual(result["readback_attempt"], 1)
+        direct_read.assert_called_once_with("get", "runs/independent-readback", timeout=20)
+        mcp_read.assert_not_called()
 
     def test_entity_save_no_embed_fallback_is_disabled_by_default(self):
         store = GraphStore()
@@ -1342,7 +1360,7 @@ class GraphParsingTests(unittest.TestCase):
             mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
             mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding timed out")),
             mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}),
-            mock.patch.object(store, "get_entity_raw", return_value="# Different\n"),
+            mock.patch("server.run_gbrain_subprocess", return_value="# Different\n"),
             mock.patch("server.time.sleep"),
         ):
             with self.assertRaisesRegex(
@@ -1380,7 +1398,7 @@ class GraphParsingTests(unittest.TestCase):
             mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
             mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding credentials unavailable")),
             mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}) as fallback,
-            mock.patch.object(store, "get_entity_raw", return_value=expected),
+            mock.patch("server.run_gbrain_subprocess", return_value=expected),
         ):
             first = store.save_entity_raw("runs/repeated", expected)
             second = store.save_entity_raw("runs/repeated", expected)
@@ -1414,7 +1432,7 @@ class GraphParsingTests(unittest.TestCase):
             mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
             mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding unavailable")),
             mock.patch("server.run_entity_save_no_embed_import", side_effect=fallback),
-            mock.patch.object(store, "get_entity_raw", side_effect=lambda slug, timeout=None: contents[slug]),
+            mock.patch("server.run_gbrain_subprocess", side_effect=lambda command, slug, timeout=None: contents[slug]),
         ):
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [

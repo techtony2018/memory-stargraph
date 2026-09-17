@@ -320,7 +320,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.219"
+UI_VERSION = "V1.0.220"
 ENTITY_SAVE_READBACK_ATTEMPTS = 3
 ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.25
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
@@ -7823,11 +7823,17 @@ class GraphStore:
             return None
         return ensure_media_references_available(parse_media_references(raw))
 
-    def verify_entity_save_readback(self, slug, content):
+    def verify_entity_save_readback(self, slug, content, *, direct=False):
         for attempt in range(1, ENTITY_SAVE_READBACK_ATTEMPTS + 1):
             self.entity_raw_cache.clear()
             try:
-                actual = self.get_entity_raw(slug, timeout=20)
+                if direct:
+                    # A no-embed import writes outside the long-lived MCP
+                    # session. Verify it through an independent uncached read
+                    # so session propagation cannot create a false failure.
+                    actual = run_gbrain_subprocess("get", slug, timeout=20)
+                else:
+                    actual = self.get_entity_raw(slug, timeout=20)
             except Exception:  # noqa: BLE001
                 actual = None
             if isinstance(actual, str) and _raw_readback_matches(content, actual):
@@ -7860,7 +7866,11 @@ class GraphStore:
                 indexing_status = "pending"
                 degraded = True
             self.invalidate()
-            readback_attempt = self.verify_entity_save_readback(slug, content)
+            readback_attempt = self.verify_entity_save_readback(
+                slug,
+                content,
+                direct=mode == "durable_no_embed",
+            )
             return {
                 "persisted": True,
                 "readback_verified": True,
