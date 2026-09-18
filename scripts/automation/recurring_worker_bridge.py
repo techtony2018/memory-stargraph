@@ -1102,7 +1102,7 @@ def prepare_persist_bundle_identity(payload: dict[str, object], *, role: str, in
     return normalize_persist_bundle_decision_type(prepared, role=role)
 
 
-def validate_artifact(role: str, artifact: dict[str, object], seen_todos: set[str]) -> None:
+def validate_artifact(role: str, invocation_id: str, artifact: dict[str, object], seen_todos: set[str]) -> None:
     slug = artifact.get("slug")
     markdown = artifact.get("markdown")
     kind = artifact.get("kind")
@@ -1127,6 +1127,18 @@ def validate_artifact(role: str, artifact: dict[str, object], seen_todos: set[st
     frontmatter = markdown.split("---", 2)[1] if has_frontmatter else ""
     if "status:" not in frontmatter:
         raise BridgePhaseError("artifact_validation", f"artifact missing frontmatter status: {slug}")
+    if role == "daily_learning_intake" and invocation_id.startswith("daily-learning-intake-"):
+        suffix = invocation_id.removeprefix("daily-learning-intake-")
+        expected_slug = None
+        if slug.startswith(ROLE_RUN_PREFIX[role]):
+            expected_slug = f"{ROLE_RUN_PREFIX[role]}{suffix}"
+        elif slug.startswith(ROLE_REPORT_PREFIX[role]):
+            expected_slug = f"{ROLE_REPORT_PREFIX[role]}{suffix}"
+        if expected_slug is not None:
+            if slug != expected_slug:
+                raise BridgePhaseError("artifact_validation", "Daily Learning artifact slug/invocation mismatch")
+            if _frontmatter_values(markdown).get("invocation_id") != invocation_id:
+                raise BridgePhaseError("artifact_validation", "Daily Learning artifact frontmatter/invocation mismatch")
     if role == "daily_learning_intake" and slug.startswith(ROLE_RUN_PREFIX[role]) and "goals/memory-stargraph-continuous-learning-local-knowledge-os" not in markdown:
         raise BridgePhaseError("artifact_validation", "Learning Run missing Goal link")
 
@@ -1150,7 +1162,7 @@ def persist_decision(root: Path, values: dict[str, str]) -> dict[str, object]:
         if not isinstance(artifact, dict):
             raise BridgePhaseError("artifact_validation", "artifact must be object")
         write_phase(root, values, "artifact_validation", processed=index, total=len(artifacts), extra={"slug": artifact.get("slug")})
-        validate_artifact(values["role"], artifact, seen_todos)
+        validate_artifact(values["role"], values["invocation_id"], artifact, seen_todos)
     for index, artifact in enumerate(artifacts, 1):
         slug = str(artifact["slug"])
         write_phase(root, values, "artifact_persistence", processed=index, total=len(artifacts), extra={"slug": slug})

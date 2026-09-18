@@ -608,6 +608,83 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(bridge.BridgePhaseError, "lowercase"):
                 bridge.persist_decision(root, values)
 
+    def test_daily_learning_bundle_rejects_stale_artifact_identity_before_persistence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            invocation_id = "daily-learning-intake-20260917t0510-0700-persistence-recovery"
+            bundle_path = root / "bundles" / "decision.json"
+            bundle = {
+                "role": "daily_learning_intake",
+                "operation": "persist",
+                "invocation_id": invocation_id,
+                "decision_type": "no_action",
+                "artifacts": [{
+                    "kind": "run",
+                    "slug": "runs/memory-stargraph-learning-20260904t0101-0700-scheduled",
+                    "markdown": (
+                        "---\n"
+                        "status: completed\n"
+                        f"invocation_id: {invocation_id}\n"
+                        "---\n"
+                        "# Recovery\n\n"
+                        "Goal: goals/memory-stargraph-continuous-learning-local-knowledge-os\n"
+                    ),
+                }],
+            }
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            values = bridge.validate_request(self.make_request(
+                operation="persist",
+                invocation_id=invocation_id,
+                bundle_file=str(bundle_path),
+            ))
+
+            with (
+                mock.patch.object(bridge, "gbrain_put") as persist,
+                self.assertRaisesRegex(bridge.BridgePhaseError, "slug/invocation mismatch"),
+            ):
+                bridge.persist_decision(root, values)
+
+            persist.assert_not_called()
+
+    def test_daily_learning_bundle_accepts_fresh_artifact_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            invocation_id = "daily-learning-intake-20260917t0510-0700-persistence-recovery"
+            suffix = "20260917t0510-0700-persistence-recovery"
+            bundle_path = root / "bundles" / "decision.json"
+            bundle = {
+                "role": "daily_learning_intake",
+                "operation": "persist",
+                "invocation_id": invocation_id,
+                "decision_type": "no_action",
+                "artifacts": [{
+                    "kind": "run",
+                    "slug": f"runs/memory-stargraph-learning-{suffix}",
+                    "markdown": (
+                        "---\n"
+                        "status: completed\n"
+                        f"invocation_id: {invocation_id}\n"
+                        "---\n"
+                        "# Recovery\n\n"
+                        "Goal: goals/memory-stargraph-continuous-learning-local-knowledge-os\n"
+                    ),
+                }],
+            }
+            bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+            values = bridge.validate_request(self.make_request(
+                operation="persist",
+                invocation_id=invocation_id,
+                bundle_file=str(bundle_path),
+            ))
+
+            with mock.patch.object(bridge, "gbrain_put") as persist:
+                result = bridge.persist_decision(root, values)
+
+            self.assertEqual(result["artifact_count"], 1)
+            persist.assert_called_once()
+
     def test_process_one_evidence_terminalizes_and_releases_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
