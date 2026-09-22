@@ -320,7 +320,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.224"
+UI_VERSION = "V1.0.225"
 ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 30
 ENTITY_SAVE_READBACK_ATTEMPTS = 3
 ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.25
@@ -7830,8 +7830,9 @@ class GraphStore:
             try:
                 if direct:
                     # A no-embed import writes outside the long-lived MCP
-                    # session. Verify it through an independent uncached read
-                    # so session propagation cannot create a false failure.
+                    # session. Prefer an independent uncached read, then accept
+                    # a cleared-cache MCP raw read if the CLI surface has not
+                    # observed the durable page yet.
                     actual = run_gbrain_subprocess("get", slug, timeout=20)
                 else:
                     actual = self.get_entity_raw(slug, timeout=20)
@@ -7839,6 +7840,14 @@ class GraphStore:
                 actual = None
             if isinstance(actual, str) and _raw_readback_matches(content, actual):
                 return attempt
+            if direct:
+                self.entity_raw_cache.clear()
+                try:
+                    actual = self.get_entity_raw(slug, timeout=20)
+                except Exception:  # noqa: BLE001
+                    actual = None
+                if isinstance(actual, str) and _raw_readback_matches(content, actual):
+                    return attempt
             if attempt < ENTITY_SAVE_READBACK_ATTEMPTS:
                 time.sleep(ENTITY_SAVE_READBACK_DELAY_SECONDS)
         raise EntityPersistenceError("entity_persistence_readback_unverified")

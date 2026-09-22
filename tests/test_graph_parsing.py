@@ -1306,6 +1306,23 @@ class GraphParsingTests(unittest.TestCase):
         direct_read.assert_called_once_with("get", "runs/independent-readback", timeout=20)
         mcp_read.assert_not_called()
 
+    def test_entity_save_no_embed_readback_accepts_fresh_mcp_when_direct_is_stale(self):
+        store = GraphStore()
+        expected = "---\ntype: run\n---\n\n# Fresh MCP readback\n"
+        with (
+            mock.patch.dict(server.CONFIG, {"entity_save_no_embed_fallback": True}),
+            mock.patch("server.gbrain_call_tool", side_effect=RuntimeError("embedding timed out")),
+            mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}),
+            mock.patch("server.run_gbrain_subprocess", return_value="# Stale CLI page\n") as direct_read,
+            mock.patch.object(store, "get_entity_raw", return_value=expected) as mcp_read,
+        ):
+            result = store.save_entity_raw("runs/fresh-mcp-readback", expected)
+
+        self.assertTrue(result["readback_verified"])
+        self.assertEqual(result["readback_attempt"], 1)
+        direct_read.assert_called_once_with("get", "runs/fresh-mcp-readback", timeout=20)
+        mcp_read.assert_called_once_with("runs/fresh-mcp-readback", timeout=20)
+
     def test_entity_save_no_embed_readback_waits_for_bounded_propagation(self):
         store = GraphStore()
         expected = "---\ntype: run\n---\n\n# Propagated\n"
@@ -1317,12 +1334,14 @@ class GraphParsingTests(unittest.TestCase):
                 "server.run_gbrain_subprocess",
                 side_effect=["# Stale\n", "# Stale\n", expected],
             ) as direct_read,
+            mock.patch.object(store, "get_entity_raw", return_value="# Stale MCP\n") as mcp_read,
             mock.patch("server.time.sleep") as sleep,
         ):
             result = store.save_entity_raw("runs/propagated", expected)
 
         self.assertEqual(result["readback_attempt"], 3)
         self.assertEqual(direct_read.call_count, 3)
+        self.assertEqual(mcp_read.call_count, 2)
         self.assertEqual(sleep.call_count, 2)
 
     def test_entity_save_no_embed_readback_uses_full_bounded_window(self):
@@ -1337,12 +1356,14 @@ class GraphParsingTests(unittest.TestCase):
                 "server.run_gbrain_subprocess",
                 side_effect=[*stale_reads, expected],
             ) as direct_read,
+            mock.patch.object(store, "get_entity_raw", return_value="# Stale MCP\n") as mcp_read,
             mock.patch("server.time.sleep") as sleep,
         ):
             result = store.save_entity_raw("runs/late-propagation", expected)
 
         self.assertEqual(result["readback_attempt"], server.ENTITY_SAVE_READBACK_ATTEMPTS)
         self.assertEqual(direct_read.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS)
+        self.assertEqual(mcp_read.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS - 1)
         self.assertEqual(sleep.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS - 1)
 
     def test_entity_save_no_embed_fallback_is_disabled_by_default(self):
