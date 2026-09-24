@@ -1419,6 +1419,7 @@ class GraphParsingTests(unittest.TestCase):
             [call.args[0] for call in sleep.call_args_list],
             list(server.ENTITY_SAVE_READBACK_DELAYS_SECONDS),
         )
+        self.assertEqual(sum(server.ENTITY_SAVE_READBACK_DELAYS_SECONDS), 31.75)
 
     def test_entity_save_no_embed_fallback_is_disabled_by_default(self):
         store = GraphStore()

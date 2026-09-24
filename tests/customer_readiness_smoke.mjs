@@ -100,7 +100,7 @@ try {
     });
     console.log(JSON.stringify(state, null, 2));
     if (
-      state.uiVersion !== "V1.0.226"
+      state.uiVersion !== "V1.0.227"
       || state.modalTitle !== "Customer readiness"
       || !state.cardVisible
       || state.itemCount < 8
