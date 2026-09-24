@@ -556,6 +556,30 @@ tags:
         self.assertEqual(deadline["decision"], "fail")
         self.assertEqual(deadline["reason"], "overall_deadline_exceeded")
 
+    def test_curator_polling_allows_bounded_persistence_heartbeat_gap(self):
+        now = runner.pacific_now()
+        payload = {
+            "status": "pending",
+            "daemon_state": {
+                "runner_instance_id": "runner-a",
+                "heartbeat_at": (
+                    now - dt.timedelta(seconds=runner.RUNNER_HEARTBEAT_STALE_SECONDS + 30)
+                ).isoformat(),
+                "phase": "terminal_persistence",
+            },
+        }
+
+        decision = runner.curator_poll_decision(
+            payload,
+            started_at=now - dt.timedelta(minutes=3),
+            now=now,
+            expected_runner_instance_id="runner-a",
+        )
+
+        self.assertEqual(decision["decision"], "continue")
+        self.assertEqual(decision["reason"], "bounded_persistence_wait")
+        self.assertEqual(decision["phase"], "terminal_persistence")
+
     def test_phase_failure_after_run_creation_terminalizes_and_releases_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

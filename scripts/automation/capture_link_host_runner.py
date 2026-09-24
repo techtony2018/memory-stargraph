@@ -689,7 +689,10 @@ def read_status(root: Path, invocation_id: str) -> dict[str, object]:
         "polling_guidance": {
             "max_seconds": CURATOR_POLL_MAX_SECONDS,
             "heartbeat_stale_seconds": RUNNER_HEARTBEAT_STALE_SECONDS,
-            "continue_while": "daemon heartbeat fresh and runner ownership stable",
+            "continue_while": (
+                "daemon heartbeat fresh and runner ownership stable, or a bounded "
+                "persistence phase remains within the overall deadline"
+            ),
         },
         "submitter_context": {
             "network_required": False,
@@ -729,6 +732,16 @@ def curator_poll_decision(
         return {"decision": "fail", "reason": "invalid_daemon_heartbeat", "elapsed_seconds": elapsed}
     heartbeat_age = (current.astimezone(dt.timezone.utc) - heartbeat_at.astimezone(dt.timezone.utc)).total_seconds()
     if heartbeat_age > heartbeat_stale_seconds:
+        phase = daemon_state.get("phase")
+        if isinstance(phase, str) and phase.endswith("_persistence"):
+            return {
+                "decision": "continue",
+                "reason": "bounded_persistence_wait",
+                "elapsed_seconds": elapsed,
+                "heartbeat_age_seconds": heartbeat_age,
+                "phase": phase,
+                "progress": daemon_state.get("progress"),
+            }
         return {
             "decision": "fail",
             "reason": "stale_daemon_heartbeat",
@@ -904,10 +917,13 @@ def write_phase_state(
             "curator_poll_contract": {
                 "max_seconds": CURATOR_POLL_MAX_SECONDS,
                 "heartbeat_stale_seconds": RUNNER_HEARTBEAT_STALE_SECONDS,
-                "continue_while": "daemon heartbeat fresh and runner ownership stable",
+                "continue_while": (
+                    "daemon heartbeat fresh and runner ownership stable, or a bounded "
+                    "persistence phase remains within the overall deadline"
+                ),
                 "fail_early_on": [
                     "terminal_failure",
-                    "stale_heartbeat",
+                    "stale_heartbeat_outside_bounded_persistence",
                     "runner_ownership_change",
                     "hard_overall_deadline",
                 ],
