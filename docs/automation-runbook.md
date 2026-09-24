@@ -380,6 +380,15 @@ applies only bounded documented remediation, verifies recovery, releases its
 lease, and sends a concise result back to the originating task. Incident mode
 must not create resolver events or synthetic resolver/Ask Yoda traffic.
 
+For a manually dispatched `mode=daily_reliability` recovery, the Product Owner
+may remain active only as the named read-only coordinator waiting for that SRE
+turn. The handoff must identify the Product Owner task and explicitly promise
+no source, service, runner, GBrain, resolver, backup, or production-data
+mutation until SRE terminalizes. SRE may accept that single coordinator only
+after verifying clean/current source, clear active Goal tags, and every other Memory Stargraph task idle or not loaded. Any ambiguity or additional activity
+remains non-quiet. This exception does not apply to incident response, weekly
+resilience, scheduled Daily runs, or remediation authority.
+
 ## Product Owner accountability and progress metric
 
 The Product Owner owns progress across roles, not report forwarding. Each daily

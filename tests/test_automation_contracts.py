@@ -563,6 +563,25 @@ class AutomationContractTests(unittest.TestCase):
             sre_bootstrap,
         )
 
+    def test_manual_daily_sre_recovery_allows_one_read_only_owner_coordinator(self):
+        sre = (ROOT / "automations/memory-stargraph-sre/prompt.md").read_text()
+        runbook = (ROOT / "docs/automation-runbook.md").read_text()
+
+        for phrase in (
+            "manually dispatched `mode=daily_reliability` recovery",
+            "exactly one named Product Owner task",
+            "waiting for this SRE recovery",
+            "global active Goal tags are clear",
+            "This exception never applies to `mode=incident_response`",
+        ):
+            self.assertIn(phrase, sre)
+        for phrase in (
+            "named read-only coordinator",
+            "every other Memory Stargraph task idle or not loaded",
+            "does not apply to incident response",
+        ):
+            self.assertIn(phrase, runbook)
+
     def test_product_owner_worker_watch_has_eta_and_silent_failure_mitigation(self):
         directory = ROOT / "automations/memory-stargraph-goal-steward-daily-review"
         definition = tomllib.loads((directory / "automation.toml").read_text())
