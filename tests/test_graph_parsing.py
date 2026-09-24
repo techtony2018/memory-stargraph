@@ -1323,6 +1323,56 @@ class GraphParsingTests(unittest.TestCase):
         direct_read.assert_called_once_with("get", "runs/fresh-mcp-readback", timeout=20)
         mcp_read.assert_called_once_with("runs/fresh-mcp-readback", timeout=20)
 
+    def test_entity_save_quotes_unsafe_frontmatter_integer_identifiers(self):
+        store = GraphStore()
+        submitted = (
+            "---\n"
+            "type: post\n"
+            "post_id: 2102834280980459694\n"
+            "safe_count: 42\n"
+            "---\n\n"
+            "# Post 2102834280980459694\n"
+        )
+        persisted = submitted.replace(
+            "post_id: 2102834280980459694",
+            "post_id: '2102834280980459694'",
+        )
+        with (
+            mock.patch("server.gbrain_call_tool") as save,
+            mock.patch.object(store, "get_entity_raw", return_value=persisted),
+        ):
+            result = store.save_entity_raw("posts/x/test/2102834280980459694", submitted)
+
+        self.assertTrue(result["persisted"])
+        save.assert_called_once_with(
+            "put_page",
+            {
+                "slug": "posts/x/test/2102834280980459694",
+                "content": persisted,
+            },
+            timeout=server.ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS,
+        )
+
+    def test_entity_save_large_integer_protection_is_frontmatter_only(self):
+        submitted = (
+            "---\n"
+            "external_id: -9007199254740992\n"
+            "max_safe_id: 9007199254740991\n"
+            "---\n\n"
+            "post_id: 2102834280980459694\n"
+        )
+
+        self.assertEqual(
+            server.protect_entity_save_frontmatter(submitted),
+            (
+                "---\n"
+                "external_id: '-9007199254740992'\n"
+                "max_safe_id: 9007199254740991\n"
+                "---\n\n"
+                "post_id: 2102834280980459694\n"
+            ),
+        )
+
     def test_entity_save_no_embed_readback_waits_for_bounded_propagation(self):
         store = GraphStore()
         expected = "---\ntype: run\n---\n\n# Propagated\n"
@@ -1365,6 +1415,10 @@ class GraphParsingTests(unittest.TestCase):
         self.assertEqual(direct_read.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS)
         self.assertEqual(mcp_read.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS - 1)
         self.assertEqual(sleep.call_count, server.ENTITY_SAVE_READBACK_ATTEMPTS - 1)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            list(server.ENTITY_SAVE_READBACK_DELAYS_SECONDS),
+        )
 
     def test_entity_save_no_embed_fallback_is_disabled_by_default(self):
         store = GraphStore()

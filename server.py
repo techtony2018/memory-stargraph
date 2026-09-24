@@ -320,10 +320,11 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.225"
+UI_VERSION = "V1.0.226"
 ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 30
-ENTITY_SAVE_READBACK_ATTEMPTS = 3
-ENTITY_SAVE_READBACK_DELAY_SECONDS = 0.25
+ENTITY_SAVE_READBACK_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0)
+ENTITY_SAVE_READBACK_ATTEMPTS = len(ENTITY_SAVE_READBACK_DELAYS_SECONDS) + 1
+MAX_SAFE_YAML_INTEGER = (1 << 53) - 1
 GBRAIN_RERANKER_SUNSET_DATE = "2026-09-04"
 GBRAIN_RERANKER_TARGET_MODEL = "voyage:rerank-2.5"
 GBRAIN_RERANKER_READINESS_CACHE_SECONDS = 5 * 60
@@ -2414,6 +2415,30 @@ def entity_save_slug_parts(slug):
     ):
         raise EntityPersistenceError("entity_persistence_invalid_slug")
     return parts
+
+
+def protect_entity_save_frontmatter(content):
+    """Keep large identifier scalars lossless through GBrain's YAML path."""
+    if not content.startswith("---\n"):
+        return content
+    end = content.find("\n---", 4)
+    if end < 0:
+        return content
+    frontmatter = content[4:end]
+    protected = []
+    changed = False
+    scalar_pattern = re.compile(r"^([A-Za-z0-9_.-]+:\s*)([+-]?\d+)(\s*)$")
+    for line in frontmatter.splitlines(keepends=True):
+        newline = "\n" if line.endswith("\n") else ""
+        value_line = line[:-1] if newline else line
+        match = scalar_pattern.fullmatch(value_line)
+        if match and abs(int(match.group(2))) > MAX_SAFE_YAML_INTEGER:
+            value_line = f"{match.group(1)}'{match.group(2)}'{match.group(3)}"
+            changed = True
+        protected.append(value_line + newline)
+    if not changed:
+        return content
+    return content[:4] + "".join(protected) + content[end:]
 
 
 def run_entity_save_no_embed_import(slug, content, timeout=None):
@@ -7849,7 +7874,7 @@ class GraphStore:
                 if isinstance(actual, str) and _raw_readback_matches(content, actual):
                     return attempt
             if attempt < ENTITY_SAVE_READBACK_ATTEMPTS:
-                time.sleep(ENTITY_SAVE_READBACK_DELAY_SECONDS)
+                time.sleep(ENTITY_SAVE_READBACK_DELAYS_SECONDS[attempt - 1])
         raise EntityPersistenceError("entity_persistence_readback_unverified")
 
     def save_entity_raw(self, slug, content):
@@ -7861,13 +7886,14 @@ class GraphStore:
         if not self.entity_save_lock.acquire(timeout=lock_timeout):
             raise EntityPersistenceError("entity_persistence_busy")
         try:
+            persisted_content = protect_entity_save_frontmatter(content)
             mode = "indexed"
             indexing_status = "ready"
             degraded = False
             try:
                 gbrain_call_tool(
                     "put_page",
-                    {"slug": slug, "content": content},
+                    {"slug": slug, "content": persisted_content},
                     timeout=ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -7875,14 +7901,14 @@ class GraphStore:
                     raise EntityPersistenceError("entity_persistence_primary_failed") from exc
                 if not entity_save_no_embed_fallback_enabled():
                     raise EntityPersistenceError("entity_persistence_indexing_unavailable") from exc
-                run_entity_save_no_embed_import(slug, content)
+                run_entity_save_no_embed_import(slug, persisted_content)
                 mode = "durable_no_embed"
                 indexing_status = "pending"
                 degraded = True
             self.invalidate()
             readback_attempt = self.verify_entity_save_readback(
                 slug,
-                content,
+                persisted_content,
                 direct=mode == "durable_no_embed",
             )
             return {
