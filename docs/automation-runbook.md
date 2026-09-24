@@ -216,6 +216,12 @@ ownership change, stale source/schema identity, or hard deadline. Only `.85` ena
 `.102` receives code but keeps Learning/SRE evidence and mutation runner
 operations disabled by default.
 
+The recurring bridge uses an OS advisory lock with a PID receipt. A restart may
+reclaim a legacy lock only after the recorded PID is confirmed dead or reused
+by an unrelated process. A live bridge owner, malformed PID, unverifiable
+owner, or concurrent advisory lock fails closed. Release clears the receipt
+while retaining the lock inode, avoiding unlink-and-recreate races.
+
 Daily Learning evidence includes service health, bounded raw Goal/product/TODO
 and runbook context, a 10-question evaluator evidence slot with
 model/fallback/context status, production feedback and no-action review state,

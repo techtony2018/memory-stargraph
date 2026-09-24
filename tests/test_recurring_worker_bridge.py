@@ -73,6 +73,59 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(bridge.BridgeError, "replay"):
                 bridge.submit_request(root, changed)
 
+    def test_runner_lock_prevents_concurrent_acquisition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = bridge.acquire_lock(root)
+            try:
+                with self.assertRaisesRegex(bridge.BridgeError, "already active"):
+                    bridge.acquire_lock(root)
+            finally:
+                bridge.release_lock(root, first)
+
+    def test_runner_lock_reclaims_confirmed_dead_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bridge.lock_path(root).write_text("987654", encoding="utf-8")
+            with mock.patch.object(bridge, "bridge_pid_status", return_value="dead"):
+                fd = bridge.acquire_lock(root)
+            try:
+                self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), str(os.getpid()))
+            finally:
+                bridge.release_lock(root, fd)
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "")
+
+    def test_runner_lock_preserves_live_legacy_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bridge.lock_path(root).write_text("12345", encoding="utf-8")
+            with (
+                mock.patch.object(bridge, "bridge_pid_status", return_value="bridge"),
+                self.assertRaisesRegex(bridge.BridgeError, "already active"),
+            ):
+                bridge.acquire_lock(root)
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "12345")
+
+    def test_runner_lock_fails_closed_on_malformed_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bridge.lock_path(root).write_text("not-a-pid", encoding="utf-8")
+            with self.assertRaisesRegex(bridge.BridgeError, "invalid bridge lock owner"):
+                bridge.acquire_lock(root)
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "not-a-pid")
+
+    def test_runner_lock_reclaims_reused_pid_owned_by_unrelated_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge.ensure_dirs(root)
+            bridge.lock_path(root).write_text("12345", encoding="utf-8")
+            with mock.patch.object(bridge, "bridge_pid_status", return_value="unrelated"):
+                fd = bridge.acquire_lock(root)
+            bridge.release_lock(root, fd)
+
     def test_submit_cli_preserves_weekly_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -702,7 +755,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result["runner_identity"]["runner_host_commit"], "abc123")
             self.assertTrue(result["runner_identity"]["deployed_source_match"])
             self.assertIn("memory-stargraph-learning-evidence-v1", result["runner_identity"]["supported_evidence_schemas"])
-            self.assertFalse(bridge.lock_path(root).exists())
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "")
 
     def test_process_one_fails_closed_when_runner_commit_is_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -722,7 +775,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result["evidence"]["failed_phase"], "runner_identity")
             self.assertTrue(result["runner_identity"]["stale_runner"])
             self.assertIn("expected_commit_mismatch", result["runner_identity"]["stale_reason"])
-            self.assertFalse(bridge.lock_path(root).exists())
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "")
 
     def test_process_one_fails_closed_when_expected_schema_is_unsupported(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -745,7 +798,7 @@ class RecurringWorkerBridgeTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["result"], "runner_identity_failed")
             self.assertIn("expected_evidence_schema_unsupported", result["runner_identity"]["stale_reason"])
-            self.assertFalse(bridge.lock_path(root).exists())
+            self.assertEqual(bridge.lock_path(root).read_text(encoding="utf-8"), "")
 
     def test_crash_recovery_terminalizes_stale_processing(self):
         with tempfile.TemporaryDirectory() as tmp:

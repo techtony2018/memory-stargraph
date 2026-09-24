@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import re
@@ -1199,20 +1200,70 @@ def process_values(root: Path, values: dict[str, str], claim: dict[str, object])
 def acquire_lock(root: Path) -> int:
     ensure_dirs(root)
     path = lock_path(root)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(os.getpid()).encode("utf-8"))
-        return fd
-    except FileExistsError as exc:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(fd)
         raise BridgeError("bridge runner already active") from exc
+
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        owner_text = os.read(fd, 64).decode("utf-8", errors="replace").strip()
+        if owner_text:
+            try:
+                owner_pid = int(owner_text)
+            except ValueError as exc:
+                raise BridgeError("invalid bridge lock owner; refusing recovery") from exc
+            if owner_pid <= 0:
+                raise BridgeError("invalid bridge lock owner; refusing recovery")
+            owner_status = bridge_pid_status(owner_pid)
+            if owner_status == "bridge":
+                raise BridgeError("bridge runner already active")
+            if owner_status == "unknown":
+                raise BridgeError("bridge lock owner could not be verified; refusing recovery")
+
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        os.fsync(fd)
+        return fd
+    except Exception:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+        raise
+
+
+def bridge_pid_status(pid: int) -> str:
+    """Classify a legacy lock PID without trusting PID existence alone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "unknown"
+
+    result = run_cmd(["ps", "-p", str(pid), "-o", "command="], timeout=5)
+    if result.returncode != 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return "dead"
+        except PermissionError:
+            return "unknown"
+        return "unknown"
+    command = result.stdout.strip()
+    markers = (Path(__file__).name, "scripts.automation.recurring_worker_bridge")
+    return "bridge" if any(marker in command for marker in markers) else "unrelated"
 
 
 def release_lock(root: Path, fd: int) -> None:
-    os.close(fd)
     try:
-        lock_path(root).unlink()
-    except FileNotFoundError:
-        pass
+        os.ftruncate(fd, 0)
+        os.fsync(fd)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def recover_stale_processing(root: Path) -> list[str]:
