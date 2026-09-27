@@ -179,10 +179,8 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('return `/media/${relativePath.replace', script)
         self.assertIn('document.createElement("strong")', script)
         self.assertIn('document.createElement("em")', script)
-        self.assertIn("function underscoreEmphasisIsValid", script)
-        self.assertIn(r"/[\p{L}\p{N}]/u", script)
-        self.assertIn("!underscoreEmphasisIsValid(text, offset, match)", script)
-        self.assertIn("appendTextWithBreaks(parent, match)", script)
+        self.assertIn(r"(?<![\p{L}\p{N}])__([^_]+?)__(?![\p{L}\p{N}])", script)
+        self.assertIn(r"(?<![\p{L}\p{N}])_([^_]+?)_(?![\p{L}\p{N}])", script)
         self.assertIn('document.createElement("blockquote")', script)
         self.assertIn('document.createElement("table")', script)
 
