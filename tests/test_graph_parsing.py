@@ -4156,17 +4156,107 @@ cover_image: companies/example-inc/logo.jpg
                 store.reconcile_terminal_todo_lifecycle(slug, child)
         update_tags.assert_not_called()
 
-    def test_terminal_todo_reconcile_is_bounded_to_active_table_slugs(self):
+    def test_terminal_todo_reconcile_rejects_child_without_canonical_parent_row(self):
         store = GraphStore()
         parent = (
             "| SG-0229 | completed | P2 | Done | "
             "[[notes/memory-starmap-todo-list/done]] | 2026-09-27 | Complete. |\n"
         )
-        with mock.patch.object(store, "get_entity_raw", return_value=parent):
-            with self.assertRaisesRegex(ValueError, "terminal child in the active TODO table"):
+        child = (
+            "---\ntype: task\nparent: notes/memory-starmap-todo-list\n"
+            "status: completed\ntodo_id: SG-0998\n---\n\n# Missing\n"
+        )
+        with (
+            mock.patch.object(store, "get_entity_raw", side_effect=[child, parent]),
+            mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", Path("/missing/archive.json")),
+        ):
+            with self.assertRaisesRegex(
+                server.EntityPersistenceError,
+                "todo_lifecycle_archive_readback_unavailable",
+            ):
                 store.reconcile_terminal_todo_children(
                     ["notes/memory-starmap-todo-list/not-in-parent"]
                 )
+
+    def test_terminal_todo_lifecycle_accepts_validated_completed_archive_row(self):
+        store = GraphStore()
+        slug = "notes/memory-starmap-todo-list/archived"
+        child = (
+            "---\ntype: task\nparent: notes/memory-starmap-todo-list\n"
+            "status: completed\ntodo_id: SG-0192\ntags:\n"
+            "  - completed\n  - todo\n---\n\n# Archived\n"
+        )
+        archive = {
+            "schema": "memory-stargraph-completed-todo-archive-index-v1",
+            "archives": [
+                {
+                    "first_id": "SG-0192",
+                    "last_id": "SG-0192",
+                    "count": 1,
+                    "rows": [
+                        {
+                            "id": "SG-0192",
+                            "status": "completed",
+                            "priority": "P1",
+                            "title": "Archived",
+                            "slug": slug,
+                            "updated": "2026-08-08T08:26:09-07:00",
+                        }
+                    ],
+                }
+            ],
+        }
+        with TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "index.json"
+            archive_path.write_text(json.dumps(archive), encoding="utf-8")
+            with (
+                mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", archive_path),
+                mock.patch.object(store, "get_entity_raw", side_effect=["", child, ""]),
+                mock.patch.object(
+                    store,
+                    "get_entity_tags",
+                    side_effect=[["completed", "implementing", "todo"], ["completed", "todo"]],
+                ),
+                mock.patch.object(store, "update_tags") as update_tags,
+            ):
+                evidence = store.reconcile_terminal_todo_lifecycle(slug, child)
+
+        self.assertEqual(evidence["parent_row"]["parent_source"], "completed_archive_index")
+        self.assertEqual(evidence["stale_lifecycle_tags"], [])
+        update_tags.assert_has_calls(
+            [
+                mock.call(slug, remove_tags=["completed", "implementing"]),
+                mock.call(slug, add_tags=["completed"]),
+            ]
+        )
+
+    def test_terminal_todo_lifecycle_rejects_duplicate_archive_rows(self):
+        descriptor = {
+            "todo_id": "SG-0192",
+            "slug": "notes/memory-starmap-todo-list/archived",
+            "status": "completed",
+        }
+        row = {
+            "id": "SG-0192",
+            "status": "completed",
+            "slug": descriptor["slug"],
+        }
+        archive = {
+            "schema": "memory-stargraph-completed-todo-archive-index-v1",
+            "archives": [
+                {"first_id": "SG-0192", "last_id": "SG-0192", "count": 1, "rows": [row]},
+                {"first_id": "SG-0192", "last_id": "SG-0192", "count": 1, "rows": [row]},
+            ],
+        }
+        with TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "index.json"
+            archive_path.write_text(json.dumps(archive), encoding="utf-8")
+            with mock.patch("server.COMPLETED_TODO_ARCHIVE_INDEX_PATH", archive_path):
+                with self.assertRaisesRegex(
+                    server.EntityPersistenceError,
+                    "todo_lifecycle_parent_readback_unverified",
+                ):
+                    server.verify_terminal_sg_todo_parent_row("", descriptor)
 
     def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
         store = GraphStore()

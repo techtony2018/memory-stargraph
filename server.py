@@ -8035,16 +8035,6 @@ class GraphStore:
         if len(set(requested)) != len(requested):
             raise ValueError("slugs must be unique")
 
-        parent_raw = self.get_entity_raw(SG_TODO_ROOT_SLUG, timeout=20)
-        terminal_rows = {
-            row["node"]: row
-            for row in parse_todo_table_rows(parent_raw)
-            if row.get("node") and row.get("status") in SG_TODO_TERMINAL_STATUSES
-        }
-        unknown = [slug for slug in requested if slug not in terminal_rows]
-        if unknown:
-            raise ValueError("every slug must be a terminal child in the active TODO table")
-
         results = []
         for slug in requested:
             content = self.get_entity_raw(slug, timeout=20)
@@ -10088,13 +10078,64 @@ def verify_terminal_sg_todo_parent_row(markdown, descriptor):
         row for row in parse_todo_table_rows(markdown)
         if row.get("id") == descriptor["todo_id"]
     ]
+    if len(matches) > 1:
+        raise EntityPersistenceError("todo_lifecycle_parent_readback_unverified")
+    if matches:
+        row = matches[0]
+        if row.get("node") != descriptor["slug"] or row.get("status") != descriptor["status"]:
+            raise EntityPersistenceError("todo_lifecycle_parent_readback_unverified")
+        return {**row, "parent_source": "active_parent"}
+
+    try:
+        payload = json.loads(COMPLETED_TODO_ARCHIVE_INDEX_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise EntityPersistenceError("todo_lifecycle_archive_readback_unavailable") from exc
+    if payload.get("schema") != "memory-stargraph-completed-todo-archive-index-v1":
+        raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified")
+
+    archived_matches = []
+    archives = payload.get("archives")
+    if not isinstance(archives, list):
+        raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified")
+    for archive in archives:
+        if not isinstance(archive, dict) or not isinstance(archive.get("rows"), list):
+            raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified")
+        rows = archive["rows"]
+        try:
+            expected_count = int(archive.get("count"))
+        except (TypeError, ValueError) as exc:
+            raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified") from exc
+        if not rows or len(rows) != expected_count or not all(isinstance(row, dict) for row in rows):
+            raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified")
+        ids = [str(row.get("id") or "").strip().upper() for row in rows]
+        if (
+            ids[0] != str(archive.get("first_id") or "").strip().upper()
+            or ids[-1] != str(archive.get("last_id") or "").strip().upper()
+        ):
+            raise EntityPersistenceError("todo_lifecycle_archive_readback_unverified")
+        archived_matches.extend(
+            row for row in rows
+            if str(row.get("id") or "").strip().upper() == descriptor["todo_id"]
+        )
+
+    if len(archived_matches) != 1:
+        raise EntityPersistenceError("todo_lifecycle_parent_readback_unverified")
+    row = archived_matches[0]
     if (
-        len(matches) != 1
-        or matches[0].get("node") != descriptor["slug"]
-        or matches[0].get("status") != descriptor["status"]
+        str(row.get("slug") or "").strip() != descriptor["slug"]
+        or str(row.get("status") or "").strip() != descriptor["status"]
     ):
         raise EntityPersistenceError("todo_lifecycle_parent_readback_unverified")
-    return matches[0]
+    return {
+        "id": str(row.get("id") or "").strip().upper(),
+        "status": str(row.get("status") or "").strip(),
+        "priority": str(row.get("priority") or "").strip(),
+        "title": str(row.get("title") or "").strip(),
+        "node": str(row.get("slug") or "").strip(),
+        "updated": str(row.get("updated") or "").strip(),
+        "notes": "",
+        "parent_source": "completed_archive_index",
+    }
 
 
 def listify_frontmatter_value(value):
