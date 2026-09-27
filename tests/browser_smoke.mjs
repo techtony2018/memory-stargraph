@@ -811,7 +811,8 @@ try {
     window.__MEMORY_STARGRAPH__.renderMarkdownView([
       "# Format Probe",
       "",
-      "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, `code`, and ~~old~~ text.",
+      "A [[Signal Foundry]] link with **bold**, *italic*, ***both***, _underscore italic_, __underscore bold__, `code`, and ~~old~~ text.",
+      "Technical tokens: source_kind ingested_via source_sync_preflight worker_task_id product_owner_notification_status.",
       "Source file: /Users/tony/work/WeChat/MSN Blogs/blog.txt",
       "File leaves: scripts/automation/recurring_worker_bridge.py and automations/memory-stargraph-sre/reports/weekly-resilience-85.md; valid domain example.com; explicit URL https://bridge.py.",
       "Timeline link: 2023-11-01T00:00:00.000Z HHS recap [posts/tony-guan-2023-year-in-review-good-fight-good-life-2023-12-31]",
@@ -832,6 +833,16 @@ try {
       unicodeSlug: [...root.querySelectorAll("a[data-entity-query]")].find((link) => link.dataset.entityQuery === "人物/张三")?.textContent,
       strong: root.querySelector("strong")?.textContent,
       em: root.querySelector("em")?.textContent,
+      underscoreStrong: [...root.querySelectorAll("strong")].find((node) => node.textContent === "underscore bold")?.textContent,
+      underscoreEm: [...root.querySelectorAll("em")].find((node) => node.textContent === "underscore italic")?.textContent,
+      technicalTokensPreserved: [
+        "source_kind",
+        "ingested_via",
+        "source_sync_preflight",
+        "worker_task_id",
+        "product_owner_notification_status",
+        "scripts/automation/recurring_worker_bridge.py",
+      ].every((token) => root.textContent.includes(token)),
       code: root.querySelector("code")?.textContent,
       del: root.querySelector("del")?.textContent,
       barePyLinks: [...root.querySelectorAll("a")].filter((link) => link.textContent === "bridge.py").length,
@@ -851,6 +862,9 @@ try {
     markdownFormatting.unicodeSlug !== "人物/张三" ||
     markdownFormatting.strong !== "bold" ||
     markdownFormatting.em !== "italic" ||
+    markdownFormatting.underscoreStrong !== "underscore bold" ||
+    markdownFormatting.underscoreEm !== "underscore italic" ||
+    !markdownFormatting.technicalTokensPreserved ||
     markdownFormatting.code !== "code" ||
     markdownFormatting.del !== "old" ||
     markdownFormatting.barePyLinks !== 0 ||

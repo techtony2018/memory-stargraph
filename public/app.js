@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.228";
+const UI_VERSION = "V1.0.229";
 const SEARCH_TIMEOUT_MS = 10000;
 const YODA_LOG_HYDRATION_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
@@ -3233,6 +3233,14 @@ function createEntityMarkdownLink(query, label = query) {
   return link;
 }
 
+function underscoreEmphasisIsValid(text, offset, match) {
+  const source = String(text || "");
+  const before = source[offset - 1] || "";
+  const after = source[offset + match.length] || "";
+  const wordCharacter = /[\p{L}\p{N}]/u;
+  return !wordCharacter.test(before) && !wordCharacter.test(after);
+}
+
 function appendInlineMarkdown(parent, text) {
   const pattern = /(!?)\[([^\]]+)\]\(([^)]+)\)|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\[([^\]\s/]+(?:\/[^\]\s/]+)+)\]|`([^`]+)`|\*\*\*([^*]+?)\*\*\*|\*\*([^*]+?)\*\*\*?|\*([^*]+?)\*|__([^_]+?)__|_([^_]+?)_|~~([^~]+?)~~/g;
   let cursor = 0;
@@ -3249,6 +3257,10 @@ function appendInlineMarkdown(parent, text) {
       appendInlineMarkdown(em, boldItalic);
       strong.appendChild(em);
       parent.appendChild(strong);
+    } else if (boldUnderscore !== undefined && !underscoreEmphasisIsValid(text, offset, match)) {
+      appendTextWithBreaks(parent, match);
+    } else if (italicUnderscore !== undefined && !underscoreEmphasisIsValid(text, offset, match)) {
+      appendTextWithBreaks(parent, match);
     } else if (bold !== undefined || boldUnderscore !== undefined) {
       const strong = document.createElement("strong");
       appendInlineMarkdown(strong, bold ?? boldUnderscore);
