@@ -1083,7 +1083,30 @@ class AutomationContractTests(unittest.TestCase):
         self.assertIn("targetOrigin", probe)
         self.assertIn("createdPage", probe)
         self.assertIn("if (createdPage)", probe)
+        self.assertIn("originalViewport", probe)
+        self.assertIn("if (!createdPage && originalViewport)", probe)
         self.assertNotIn("finally {\n  await page.close().catch", probe)
+
+    def test_cdp_probe_checks_current_followups_search_history_and_mobile_contracts(self):
+        probe = (ROOT / "scripts" / "automation" / "cdp_probe.mjs").read_text()
+
+        self.assertIn('"navResolverButton", "autopilotFindingsButton", "navSettingsButton"', probe)
+        self.assertIn("followupsNestedUnderAutopilot", probe)
+        self.assertIn("followupsTopLevelCount", probe)
+        toolbar_line = next(line for line in probe.splitlines() if "const expectedToolbar" in line)
+        self.assertNotIn("autopilotFindingsButton", toolbar_line)
+        self.assertIn('phase = "followups"', probe)
+        self.assertIn('followups.state === "error"', probe)
+        self.assertIn('"No follow-ups match this state."', probe)
+        self.assertIn('phase = "search"', probe)
+        self.assertIn('await page.fill("#searchInput", "SG-0231")', probe)
+        self.assertIn('phase = "history"', probe)
+        self.assertIn("navigateSelectionHistory(-1)", probe)
+        self.assertIn("navigateSelectionHistory(1)", probe)
+        self.assertIn('phase = "mobile"', probe)
+        self.assertIn("modalWithinViewport", probe)
+        self.assertIn("horizontalOverflow", probe)
+        self.assertIn("browserErrors: errors", probe)
 
     def test_slug_link_and_browser_hygiene_contract_is_tracked(self):
         canonical = "http://127.0.0.1:8788/?slug=<URL-encoded-slug>"
