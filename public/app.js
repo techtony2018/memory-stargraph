@@ -1,4 +1,4 @@
-const UI_VERSION = "V1.0.229";
+const UI_VERSION = "V1.0.230";
 const SEARCH_TIMEOUT_MS = 10000;
 const YODA_LOG_HYDRATION_TIMEOUT_MS = 10000;
 const RELATIONSHIP_PAGE_SIZE = 10;
@@ -4281,6 +4281,12 @@ function formatYodaDiagnosticEntry(slug, log, index) {
     `fallback_used: ${Boolean(diagnostics.fallback_used || log.source === "fallback")}`,
     `model_backend: ${diagnostics.model_backend || "unknown"}`,
     `model_name: ${diagnostics.model_name || "default"}`,
+    `model_provider: ${diagnostics.model_provider || "unknown"}`,
+    `model_runtime: ${diagnostics.model_runtime || "unknown"}`,
+    `runtime_status: ${diagnostics.runtime_status || "unknown"}`,
+    `runtime_version: ${diagnostics.runtime_version || "unknown"}`,
+    `runtime_mode: ${diagnostics.runtime_mode || "unknown"}`,
+    `structured_output: ${Boolean(diagnostics.structured_output)}`,
     `model_status: ${provenance.status}`,
     `openclaw_status: ${diagnostics.openclaw_status || "unknown"}`,
     "timing phases:",
@@ -5263,7 +5269,7 @@ function renderYodaModelForm(config = {}) {
   modalForm.innerHTML = "";
   const backendSelect = document.createElement("select");
   backendSelect.id = "operationYodaBackend";
-  const backends = config.backends || ["gbrain_think", "ollama", "openai", "openai_compatible", "openclaw"];
+  const backends = config.backends || ["codex", "gbrain_think", "ollama", "openai", "openai_compatible", "openclaw"];
   backends.forEach((backend) => {
     const option = document.createElement("option");
     option.value = backend;
@@ -5329,7 +5335,9 @@ function renderYodaModelForm(config = {}) {
     agentInput.closest("label").hidden = backend !== "openclaw";
     status.textContent = backend === "openclaw"
       ? "OpenClaw backend uses the configured agent/default model unless Model is set here."
-      : `${backend.replace(/_/g, " ")} backend uses this model directly; ${keyState}.`;
+      : backend === "codex"
+        ? `Codex uses an ephemeral read-only local runtime session with structured output. Runtime: ${config.runtime?.status || "unknown"}.`
+        : `${backend.replace(/_/g, " ")} backend uses this model directly; ${keyState}.`;
   };
   [backendSelect, modelInput, baseUrlInput, apiKeyEnvInput, agentInput, timeoutInput, graphQueryTimeoutInput].forEach((input) => input.addEventListener("input", updateStatus));
   updateStatus();

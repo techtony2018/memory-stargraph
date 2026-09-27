@@ -189,6 +189,10 @@ DEFAULT_CONFIG = {
     "yoda_gbrain_mcp_sessions": 5,
     "yoda_node_path": "",
     "yoda_node_fallback_paths": [],
+    "yoda_codex_command": "codex",
+    "yoda_codex_reasoning_effort": "low",
+    "yoda_codex_max_concurrent": 2,
+    "yoda_codex_queue_timeout_seconds": 2,
     "entity_save_no_embed_fallback": False,
     "entity_save_no_embed_timeout_seconds": 90,
     "entity_save_lock_timeout_seconds": 120,
@@ -261,6 +265,9 @@ def apply_runtime_config(config):
 
 
 CONFIG = load_config()
+CODEX_YODA_SEMAPHORE = threading.BoundedSemaphore(
+    max(1, min(8, int(CONFIG.get("yoda_codex_max_concurrent", 2))))
+)
 PUBLIC_DIR = resolve_project_path(CONFIG["public_dir"])
 DATA_DIR = resolve_project_path(CONFIG["data_dir"])
 CACHE_PATH = DATA_DIR / "graph_cache.json"
@@ -318,9 +325,9 @@ GBRAIN_FILES_BRIDGE_SSH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRID
 GBRAIN_FILES_BRIDGE_PATH = str(os.environ.get("MEMORY_STARGRAPH_GBRAIN_FILES_BRIDGE_PATH", CONFIG.get("gbrain_files_bridge_path", "gbrain"))).strip() or "gbrain"
 MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8))
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
-YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
+YODA_BACKENDS = {"codex", "openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.229"
+UI_VERSION = "V1.0.230"
 ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 30
 ENTITY_SAVE_READBACK_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 ENTITY_SAVE_READBACK_ATTEMPTS = len(ENTITY_SAVE_READBACK_DELAYS_SECONDS) + 1
@@ -1020,6 +1027,12 @@ def sanitize_diagnostics(diagnostics):
         "openclaw_status",
         "model_backend",
         "model_name",
+        "model_provider",
+        "model_runtime",
+        "runtime_status",
+        "runtime_version",
+        "runtime_mode",
+        "structured_output",
         "error_summary",
         "stdout_preview",
         "stderr_preview",
@@ -3621,6 +3634,32 @@ def yoda_runtime_config():
         configured_fallbacks = [configured_fallbacks]
     if isinstance(configured_fallbacks, list):
         fallback_paths.extend(str(path) for path in configured_fallbacks if str(path).strip())
+    codex_command = str(
+        os.environ.get("MEMORY_STARGRAPH_YODA_CODEX_COMMAND")
+        or config.get("yoda_codex_command")
+        or "codex"
+    ).strip() or "codex"
+    codex_reasoning_effort = str(
+        os.environ.get("MEMORY_STARGRAPH_YODA_CODEX_REASONING_EFFORT")
+        or config.get("yoda_codex_reasoning_effort")
+        or "low"
+    ).strip().lower()
+    if codex_reasoning_effort not in {"none", "minimal", "low", "medium", "high"}:
+        codex_reasoning_effort = "low"
+    try:
+        codex_queue_timeout = max(
+            0.1,
+            min(
+                10.0,
+                float(
+                    os.environ.get("MEMORY_STARGRAPH_YODA_CODEX_QUEUE_TIMEOUT_SECONDS")
+                    or config.get("yoda_codex_queue_timeout_seconds")
+                    or 2
+                ),
+            ),
+        )
+    except (TypeError, ValueError):
+        codex_queue_timeout = 2.0
     return {
         "backend": backend,
         "model": model,
@@ -3632,11 +3671,65 @@ def yoda_runtime_config():
         "broad_graph_budget": broad_graph_budget,
         "node_path": node_path,
         "node_fallback_paths": fallback_paths,
+        "codex_command": codex_command,
+        "codex_reasoning_effort": codex_reasoning_effort,
+        "codex_queue_timeout": codex_queue_timeout,
+    }
+
+
+def codex_subprocess_env():
+    env = dict(os.environ)
+    for key in ("CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR"):
+        env.pop(key, None)
+    env["NO_COLOR"] = "1"
+    env["TERM"] = "dumb"
+    return env
+
+
+@lru_cache(maxsize=4)
+def codex_runtime_status(command="codex"):
+    executable = shutil.which(str(command or "codex"))
+    if not executable:
+        return {
+            "provider": "openai",
+            "runtime": "codex_cli",
+            "status": "unavailable",
+            "version": "",
+            "mode": "ephemeral_read_only",
+            "structured_output": True,
+        }
+    try:
+        result = subprocess.run(
+            [executable, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+            env=codex_subprocess_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    version = ""
+    if result is not None and result.returncode == 0:
+        match = re.search(r"codex-cli\s+([0-9][0-9A-Za-z.-]*)", decode_process_output(result.stdout))
+        version = match.group(1) if match else "available"
+    return {
+        "provider": "openai",
+        "runtime": "codex_cli",
+        "status": "ready" if version else "unavailable",
+        "version": version,
+        "mode": "ephemeral_read_only",
+        "structured_output": True,
     }
 
 
 def public_yoda_model_config():
     config = yoda_runtime_config()
+    runtime = (
+        codex_runtime_status(config["codex_command"])
+        if config["backend"] == "codex"
+        else {"runtime": config["backend"], "status": "configured"}
+    )
     return {
         "backend": config["backend"],
         "model": config["model"],
@@ -3648,6 +3741,17 @@ def public_yoda_model_config():
         "api_key_available": bool(os.environ.get(config["api_key_env"])) if config["api_key_env"] else False,
         "backends": sorted(YODA_BACKENDS),
         "node_runtime": select_openclaw_node_runtime(config) if config["backend"] == "openclaw" else {"status": "not_used"},
+        "runtime": runtime,
+    }
+
+
+def public_yoda_model_diagnostics():
+    config = public_yoda_model_config()
+    return {
+        "backend": config["backend"],
+        "model": config["model"],
+        "timeout_seconds": config["timeout_seconds"],
+        "runtime": config["runtime"],
     }
 
 
@@ -3668,7 +3772,7 @@ def save_yoda_model_config(payload):
         graph_query_timeout_seconds = max(5, min(300, int(payload.get("graph_query_timeout_seconds") or 30)))
     except (TypeError, ValueError):
         graph_query_timeout_seconds = 30
-    if backend in {"openai", "openai_compatible", "ollama", "gbrain_think"} and not model:
+    if backend in {"codex", "openai", "openai_compatible", "ollama", "gbrain_think"} and not model:
         raise ValueError("model is required for the selected Yoda backend")
     if backend == "openai_compatible" and not base_url:
         raise ValueError("base_url is required for openai_compatible")
@@ -4016,6 +4120,136 @@ def run_gbrain_think_yoda(prompt, config, return_details=False):
     return {"output": answer or None, **details} if return_details else (answer or None)
 
 
+def run_codex_yoda(prompt, config, return_details=False):
+    model = str(config.get("model") or "").strip()
+    timeout = max(5, int(config.get("timeout") or 45))
+    details = yoda_details("codex", model, timeout)
+    details.update({
+        "model_provider": "openai",
+        "model_runtime": "codex_cli",
+        "runtime_status": "unknown",
+        "runtime_version": "",
+        "runtime_mode": "ephemeral_read_only",
+        "structured_output": True,
+    })
+    if not model:
+        details.update({"model_status": "unavailable", "runtime_status": "unavailable", "error_summary": "Codex model is not configured"})
+        return {"output": None, **details} if return_details else None
+    if len(str(prompt or "")) > 120_000:
+        details.update({"model_status": "prompt_too_large", "runtime_status": "ready", "error_summary": "Codex prompt exceeds the bounded context limit"})
+        return {"output": None, **details} if return_details else None
+
+    runtime = codex_runtime_status(str(config.get("codex_command") or "codex"))
+    details.update({
+        "runtime_status": runtime["status"],
+        "runtime_version": runtime["version"],
+    })
+    executable = shutil.which(str(config.get("codex_command") or "codex"))
+    if runtime["status"] != "ready" or not executable:
+        details.update({"model_status": "unavailable", "error_summary": "Codex runtime is unavailable"})
+        return {"output": None, **details} if return_details else None
+
+    queue_timeout = float(config.get("codex_queue_timeout") or 2)
+    if not CODEX_YODA_SEMAPHORE.acquire(timeout=queue_timeout):
+        details.update({"model_status": "busy", "runtime_status": "busy", "error_summary": "Codex runtime is busy"})
+        return {"output": None, **details} if return_details else None
+    try:
+        with tempfile.TemporaryDirectory(prefix="memory-stargraph-yoda-codex-") as directory:
+            workspace = Path(directory)
+            schema_path = workspace / "answer.schema.json"
+            output_path = workspace / "answer.json"
+            schema_path.write_text(
+                json.dumps({
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                }),
+                encoding="utf-8",
+            )
+            command = [
+                executable,
+                "exec",
+                "--ephemeral",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+            ]
+            for feature in (
+                "shell_tool",
+                "apps",
+                "browser_use",
+                "computer_use",
+                "multi_agent",
+                "image_generation",
+                "plugins",
+                "skill_search",
+            ):
+                command.extend(("--disable", feature))
+            command.extend((
+                "-c",
+                'approval_policy="never"',
+                "-c",
+                f'model_reasoning_effort="{config.get("codex_reasoning_effort") or "low"}"',
+                "--model",
+                model,
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(output_path),
+                "--color",
+                "never",
+                "-C",
+                str(workspace),
+                "-",
+            ))
+            bounded_prompt = (
+                "Use only the supplied Memory Stargraph context. Do not call tools, inspect files, "
+                "or request additional data. Return the schema-required answer only.\n\n"
+                + str(prompt or "")
+            )
+            try:
+                result = subprocess.run(
+                    command,
+                    input=bounded_prompt.encode("utf-8"),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=timeout,
+                    check=False,
+                    env=codex_subprocess_env(),
+                )
+            except subprocess.TimeoutExpired:
+                details.update({"model_status": "timeout", "runtime_status": "timeout", "error_summary": f"Codex model timed out after {timeout}s"})
+                return {"output": None, **details} if return_details else None
+            except OSError:
+                details.update({"model_status": "unavailable", "runtime_status": "unavailable", "error_summary": "Codex runtime could not start"})
+                return {"output": None, **details} if return_details else None
+            if result.returncode != 0:
+                details.update({"model_status": "runtime_error", "runtime_status": "error", "error_summary": "Codex runtime returned a nonzero status"})
+                return {"output": None, **details} if return_details else None
+            try:
+                raw_output = output_path.read_text(encoding="utf-8")
+                if len(raw_output) > 16_384:
+                    raise ValueError("oversized")
+                payload = json.loads(raw_output)
+                answer = str(payload.get("answer") or "").strip() if isinstance(payload, dict) else ""
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+                details.update({"model_status": "malformed_output", "runtime_status": "ready", "error_summary": "Codex returned malformed structured output"})
+                return {"output": None, **details} if return_details else None
+            if not answer:
+                details.update({"model_status": "empty_output", "runtime_status": "ready", "error_summary": "Codex returned an empty answer"})
+                return {"output": None, **details} if return_details else None
+            if len(answer) > 12_000:
+                details.update({"model_status": "malformed_output", "runtime_status": "ready", "error_summary": "Codex answer exceeds the bounded output limit"})
+                return {"output": None, **details} if return_details else None
+            details.update({"model_status": "answered", "runtime_status": "ready"})
+            return {"output": answer, **details} if return_details else answer
+    finally:
+        CODEX_YODA_SEMAPHORE.release()
+
+
 def extract_yoda_prompt_field(prompt, label):
     pattern = rf"(?m)^{re.escape(str(label))}:\s*(.+?)\s*$"
     match = re.search(pattern, str(prompt or ""))
@@ -4024,6 +4258,8 @@ def extract_yoda_prompt_field(prompt, label):
 
 def run_yoda_model(prompt, return_details=False):
     config = yoda_runtime_config()
+    if config["backend"] == "codex":
+        return run_codex_yoda(prompt, config, return_details=return_details)
     if config["backend"] == "openclaw":
         return run_openclaw_agent(prompt, config=config, return_details=return_details)
     if config["backend"] in {"openai", "openai_compatible"}:
@@ -8839,6 +9075,12 @@ class GraphStore:
             "openclaw_status": agent_result.get("openclaw_status", "unknown") if isinstance(agent_result, dict) else "unknown",
             "model_backend": agent_result.get("backend", "unknown") if isinstance(agent_result, dict) else "unknown",
             "model_name": agent_result.get("model", "") if isinstance(agent_result, dict) else "",
+            "model_provider": agent_result.get("model_provider", "") if isinstance(agent_result, dict) else "",
+            "model_runtime": agent_result.get("model_runtime", "") if isinstance(agent_result, dict) else "",
+            "runtime_status": agent_result.get("runtime_status", "") if isinstance(agent_result, dict) else "",
+            "runtime_version": agent_result.get("runtime_version", "") if isinstance(agent_result, dict) else "",
+            "runtime_mode": agent_result.get("runtime_mode", "") if isinstance(agent_result, dict) else "",
+            "structured_output": bool(agent_result.get("structured_output")) if isinstance(agent_result, dict) else False,
             "error_summary": agent_result.get("error_summary", "") if isinstance(agent_result, dict) else "",
             "stdout_preview": agent_result.get("stdout_preview", "") if isinstance(agent_result, dict) else "",
             "stderr_preview": agent_result.get("stderr_preview", "") if isinstance(agent_result, dict) else "",
@@ -9808,6 +10050,8 @@ def customer_readiness(weekly_digest=None):
     if model_backend in {"openai", "openai_compatible"} and not model_config.get("api_key_available"):
         model_status = "degraded"
     if model_backend == "openclaw" and (model_config.get("node_runtime") or {}).get("status") not in {"ok", "not_used"}:
+        model_status = "degraded"
+    if model_backend == "codex" and (model_config.get("runtime") or {}).get("status") != "ready":
         model_status = "degraded"
     storage_status = "ready" if storage.get("available") else "blocked"
     weekly_status = str(weekly.get("status") or "missing")
@@ -11307,6 +11551,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "attachment_storage": attachment_storage_status(),
                     "persistent_search": PERSISTENT_GBRAIN_SEARCH.status(),
                     "ask_yoda_mcp": YODA_GBRAIN_MCP_POOL.status(),
+                    "ask_yoda_model": public_yoda_model_diagnostics(),
                 }
             )
         if parsed.path == "/api/setup-diagnostics":

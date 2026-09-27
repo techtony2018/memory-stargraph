@@ -967,6 +967,21 @@ class ApiEndpointTests(unittest.TestCase):
                     "metrics": {},
                 },
             ),
+            mock.patch(
+                "server.public_yoda_model_diagnostics",
+                return_value={
+                    "backend": "codex",
+                    "model": "gpt-5.6-sol",
+                    "runtime": {
+                        "provider": "openai",
+                        "runtime": "codex_cli",
+                        "status": "ready",
+                        "version": "0.146.0",
+                        "mode": "ephemeral_read_only",
+                        "structured_output": True,
+                    },
+                },
+            ),
         ):
             status, data = self.dispatch_get("/api/health")
 
@@ -982,6 +997,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertTrue(
             data["ask_yoda_mcp"]["operating_contract"]["write_safety_ready"]
         )
+        self.assertEqual(data["ask_yoda_model"]["backend"], "codex")
+        self.assertEqual(data["ask_yoda_model"]["runtime"]["status"], "ready")
         serialized = json.dumps(data)
         self.assertNotIn("replaces the whole page", serialized)
 
@@ -1722,6 +1739,241 @@ class ApiEndpointTests(unittest.TestCase):
             self.assertEqual(saved["yoda_api_key_env"], "LOCAL_MODEL_API_KEY")
             self.assertEqual(saved["yoda_timeout_seconds"], 90)
             self.assertEqual(saved["yoda_node_path"], "/opt/local/bin/node")
+
+    def test_yoda_model_config_supports_privacy_safe_codex_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "local.json"
+            config_path.write_text(json.dumps({"host": "127.0.0.1", "port": 8788}))
+            runtime = {
+                "provider": "openai",
+                "runtime": "codex_cli",
+                "status": "ready",
+                "version": "0.146.0",
+                "mode": "ephemeral_read_only",
+                "structured_output": True,
+            }
+            with (
+                mock.patch("server.config_path", return_value=config_path),
+                mock.patch("server.codex_runtime_status", return_value=runtime),
+                mock.patch.dict("os.environ", {}, clear=True),
+            ):
+                status, data = self.dispatch_post(
+                    "/api/yoda-model-config",
+                    {
+                        "backend": "codex",
+                        "model": "gpt-5.6-sol",
+                        "timeout_seconds": 75,
+                        "graph_query_timeout_seconds": 25,
+                    },
+                )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(data["backend"], "codex")
+            self.assertEqual(data["runtime"], runtime)
+            self.assertNotIn("path", data["runtime"])
+            saved = json.loads(config_path.read_text())
+            self.assertEqual(saved["yoda_backend"], "codex")
+            self.assertEqual(saved["yoda_model"], "gpt-5.6-sol")
+
+    def test_codex_yoda_uses_supported_bounded_structured_contract(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps({"answer": "Grounded Codex answer."}))
+            return subprocess.CompletedProcess(command, 0)
+
+        runtime = {
+            "provider": "openai",
+            "runtime": "codex_cli",
+            "status": "ready",
+            "version": "0.146.0",
+            "mode": "ephemeral_read_only",
+            "structured_output": True,
+        }
+        with (
+            mock.patch("server.codex_runtime_status", return_value=runtime),
+            mock.patch("server.shutil.which", return_value="/safe/codex"),
+            mock.patch("server.subprocess.run", side_effect=fake_run),
+        ):
+            result = server.run_codex_yoda(
+                "Selected node: products/memory-stargraph\nQuestion: Summarize it.",
+                {
+                    "model": "gpt-5.6-sol",
+                    "timeout": 30,
+                    "codex_command": "codex",
+                    "codex_reasoning_effort": "low",
+                    "codex_queue_timeout": 1,
+                },
+                return_details=True,
+            )
+
+        self.assertEqual(result["output"], "Grounded Codex answer.")
+        self.assertEqual(result["model_status"], "answered")
+        self.assertEqual(result["model_provider"], "openai")
+        self.assertEqual(result["model_runtime"], "codex_cli")
+        self.assertEqual(result["runtime_status"], "ready")
+        self.assertEqual(result["runtime_version"], "0.146.0")
+        self.assertTrue(result["structured_output"])
+        command = captured["command"]
+        for required in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--output-schema"):
+            self.assertIn(required, command)
+        self.assertNotIn("openclaw", " ".join(command).lower())
+        self.assertIn(b'Use only the supplied Memory Stargraph context.', captured["kwargs"]["input"])
+        self.assertIs(captured["kwargs"]["stdout"], subprocess.DEVNULL)
+        self.assertIs(captured["kwargs"]["stderr"], subprocess.DEVNULL)
+        self.assertEqual(result["stdout_preview"], "")
+        self.assertEqual(result["stderr_preview"], "")
+        self.assertNotIn("Summarize it", json.dumps(result))
+
+    def test_codex_yoda_fails_closed_for_unavailable_busy_timeout_and_bad_output(self):
+        base_config = {
+            "model": "gpt-5.6-sol",
+            "timeout": 30,
+            "codex_command": "codex",
+            "codex_reasoning_effort": "low",
+            "codex_queue_timeout": 1,
+        }
+        unavailable = {
+            "provider": "openai",
+            "runtime": "codex_cli",
+            "status": "unavailable",
+            "version": "",
+            "mode": "ephemeral_read_only",
+            "structured_output": True,
+        }
+        with (
+            mock.patch("server.codex_runtime_status", return_value=unavailable),
+            mock.patch("server.shutil.which", return_value=None),
+            mock.patch("server.subprocess.run") as run,
+        ):
+            result = server.run_codex_yoda("private prompt", base_config, return_details=True)
+        self.assertEqual(result["model_status"], "unavailable")
+        run.assert_not_called()
+
+        semaphore = mock.Mock()
+        semaphore.acquire.return_value = False
+        with (
+            mock.patch("server.CODEX_YODA_SEMAPHORE", semaphore),
+            mock.patch("server.codex_runtime_status", return_value={**unavailable, "status": "ready", "version": "0.146.0"}),
+            mock.patch("server.shutil.which", return_value="/safe/codex"),
+        ):
+            result = server.run_codex_yoda("private prompt", base_config, return_details=True)
+        self.assertEqual(result["model_status"], "busy")
+        semaphore.release.assert_not_called()
+
+        def output_run(output):
+            def fake_run(command, **kwargs):
+                del kwargs
+                Path(command[command.index("--output-last-message") + 1]).write_text(output)
+                return subprocess.CompletedProcess(command, 0)
+            return fake_run
+
+        ready = {**unavailable, "status": "ready", "version": "0.146.0"}
+        for output, expected in ((json.dumps({"answer": ""}), "empty_output"), ("not-json", "malformed_output")):
+            with self.subTest(expected=expected):
+                with (
+                    mock.patch("server.codex_runtime_status", return_value=ready),
+                    mock.patch("server.shutil.which", return_value="/safe/codex"),
+                    mock.patch("server.subprocess.run", side_effect=output_run(output)),
+                ):
+                    result = server.run_codex_yoda("private prompt", base_config, return_details=True)
+                self.assertEqual(result["model_status"], expected)
+                self.assertNotIn("private prompt", json.dumps(result))
+
+        with (
+            mock.patch("server.codex_runtime_status", return_value=ready),
+            mock.patch("server.shutil.which", return_value="/safe/codex"),
+            mock.patch("server.subprocess.run", side_effect=subprocess.TimeoutExpired(["codex"], 30)),
+        ):
+            result = server.run_codex_yoda("private prompt", base_config, return_details=True)
+        self.assertEqual(result["model_status"], "timeout")
+        self.assertEqual(result["runtime_status"], "timeout")
+
+    def test_run_yoda_model_dispatches_to_codex_backend(self):
+        with (
+            mock.patch("server.yoda_runtime_config", return_value={"backend": "codex"}),
+            mock.patch("server.run_codex_yoda", return_value={"output": "answer"}) as run,
+            mock.patch("server.run_openclaw_agent") as openclaw,
+            mock.patch("server.run_gbrain_think_yoda") as gbrain_think,
+        ):
+            result = server.run_yoda_model("prompt", return_details=True)
+
+        self.assertEqual(result, {"output": "answer"})
+        run.assert_called_once_with("prompt", {"backend": "codex"}, return_details=True)
+        openclaw.assert_not_called()
+        gbrain_think.assert_not_called()
+
+    def test_codex_yoda_bounds_concurrent_sessions(self):
+        entered = threading.Event()
+        finish = threading.Event()
+        first_result = []
+
+        def blocking_run(command, **kwargs):
+            del kwargs
+            entered.set()
+            self.assertTrue(finish.wait(2))
+            Path(command[command.index("--output-last-message") + 1]).write_text(
+                json.dumps({"answer": "first answer"})
+            )
+            return subprocess.CompletedProcess(command, 0)
+
+        runtime = {
+            "provider": "openai",
+            "runtime": "codex_cli",
+            "status": "ready",
+            "version": "0.146.0",
+            "mode": "ephemeral_read_only",
+            "structured_output": True,
+        }
+        config = {
+            "model": "gpt-5.6-sol",
+            "timeout": 30,
+            "codex_command": "codex",
+            "codex_reasoning_effort": "low",
+            "codex_queue_timeout": 0.1,
+        }
+        with (
+            mock.patch("server.CODEX_YODA_SEMAPHORE", threading.BoundedSemaphore(1)),
+            mock.patch("server.codex_runtime_status", return_value=runtime),
+            mock.patch("server.shutil.which", return_value="/safe/codex"),
+            mock.patch("server.subprocess.run", side_effect=blocking_run),
+        ):
+            thread = threading.Thread(
+                target=lambda: first_result.append(
+                    server.run_codex_yoda("first prompt", config, return_details=True)
+                )
+            )
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            second = server.run_codex_yoda("second prompt", config, return_details=True)
+            finish.set()
+            thread.join(2)
+
+        self.assertEqual(second["model_status"], "busy")
+        self.assertEqual(first_result[0]["model_status"], "answered")
+
+    def test_codex_diagnostics_keep_provider_state_and_drop_private_fields(self):
+        safe = server.sanitize_diagnostics({
+            "model_backend": "codex",
+            "model_name": "gpt-5.6-sol",
+            "model_provider": "openai",
+            "model_runtime": "codex_cli",
+            "runtime_status": "ready",
+            "runtime_version": "0.146.0",
+            "runtime_mode": "ephemeral_read_only",
+            "structured_output": True,
+            "runtime_path": "/private/codex",
+            "raw_prompt": "private prompt",
+        })
+
+        self.assertEqual(safe["model_provider"], "openai")
+        self.assertEqual(safe["model_runtime"], "codex_cli")
+        self.assertTrue(safe["structured_output"])
+        self.assertNotIn("runtime_path", safe)
+        self.assertNotIn("raw_prompt", safe)
 
     def test_openclaw_node_runtime_version_gate_matches_launcher_contract(self):
         self.assertTrue(server.openclaw_supports_node_version("v22.22.3"))
