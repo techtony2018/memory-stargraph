@@ -320,7 +320,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.227"
+UI_VERSION = "V1.0.228"
 ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 30
 ENTITY_SAVE_READBACK_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 ENTITY_SAVE_READBACK_ATTEMPTS = len(ENTITY_SAVE_READBACK_DELAYS_SECONDS) + 1
@@ -354,6 +354,10 @@ TAKES_VIEW_FETCH_LIMIT = 500
 AUTOPILOT_FINDINGS_MAX_LIMIT = 200
 MAX_DISPLAY_LABEL_CHARS = int(CONFIG.get("max_display_label_chars", 20))
 ROOT_INDEX_SLUG = "index"
+SG_TODO_ROOT_SLUG = "notes/memory-starmap-todo-list"
+SG_TODO_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+SG_TODO_LIFECYCLE_TAGS = frozenset({"active", "planned", "implementing", "completed", "failed"})
+SG_TODO_RECONCILE_MAX_SLUGS = 25
 PART_SLUG_RE = re.compile(r"^(?P<base>.+?)/part-\d{1,3}$", re.IGNORECASE)
 PART_LABEL_RE = re.compile(r"^(?P<base>.+?)\s*[-–]\s*Part\s+\d{1,3}$", re.IGNORECASE)
 GBRAIN_USAGE_RE = re.compile(r"^agent/reports/gbrain-usage-\d{4}-\d{2}-\d{2}$", re.IGNORECASE)
@@ -377,6 +381,7 @@ NODE_OPERATION_ENDPOINTS = [
     {"action": "remove-link", "method": "POST", "endpoint": "/api/entity-unlink/<slug>", "mutates_gbrain": True},
     {"action": "tags", "method": "POST", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": True},
     {"action": "read-tags", "method": "GET", "endpoint": "/api/entity-tags/<slug>", "mutates_gbrain": False},
+    {"action": "todo-lifecycle-reconcile", "method": "POST", "endpoint": "/api/todo-lifecycle-reconcile", "mutates_gbrain": True},
     {"action": "list-pages", "method": "GET", "endpoint": "/api/pages", "mutates_gbrain": False},
     {"action": "timeline-view", "method": "GET", "endpoint": "/api/entity-timeline-view/<slug>", "mutates_gbrain": False},
     {"action": "timeline", "method": "POST", "endpoint": "/api/entity-timeline/<slug>", "mutates_gbrain": True},
@@ -7976,6 +7981,81 @@ class GraphStore:
             gbrain_call_tool("remove_tag", {"slug": slug, "tag": tag})
         self.invalidate()
 
+    def reconcile_terminal_todo_lifecycle(self, slug, content):
+        descriptor = terminal_sg_todo_descriptor(slug, content)
+        if descriptor is None:
+            return None
+
+        parent_raw = self.get_entity_raw(SG_TODO_ROOT_SLUG, timeout=20)
+        parent_row = verify_terminal_sg_todo_parent_row(parent_raw, descriptor)
+        current_tags = self.get_entity_tags(slug)
+        removable = sorted(SG_TODO_LIFECYCLE_TAGS.intersection(current_tags))
+        if removable:
+            self.update_tags(slug, remove_tags=removable)
+        self.update_tags(slug, add_tags=[descriptor["status"]])
+
+        self.entity_raw_cache.clear()
+        child_raw = self.get_entity_raw(slug, timeout=20)
+        child_meta, _child_body = parse_frontmatter(child_raw or "")
+        child_tags = self.get_entity_tags(slug)
+        raw_tags = listify_frontmatter_value(child_meta.get("tags"))
+        stale_tags = sorted(
+            tag for tag in ("active", "planned", "implementing")
+            if tag in child_tags or tag in raw_tags
+        )
+        terminal_tags = [tag for tag in raw_tags if tag in SG_TODO_TERMINAL_STATUSES]
+        child_verified = (
+            str(child_meta.get("status") or "").strip() == descriptor["status"]
+            and str(child_meta.get("todo_id") or child_meta.get("id") or "").strip() == descriptor["todo_id"]
+            and str(child_meta.get("parent") or "").strip() == SG_TODO_ROOT_SLUG
+            and descriptor["status"] in child_tags
+            and terminal_tags == [descriptor["status"]]
+            and not stale_tags
+        )
+
+        self.entity_raw_cache.clear()
+        parent_after = self.get_entity_raw(SG_TODO_ROOT_SLUG, timeout=20)
+        parent_row_after = verify_terminal_sg_todo_parent_row(parent_after, descriptor)
+        if not child_verified:
+            raise EntityPersistenceError("todo_lifecycle_readback_unverified")
+        return {
+            "status": descriptor["status"],
+            "todo_id": descriptor["todo_id"],
+            "child_status_verified": True,
+            "parent_status_verified": True,
+            "stale_lifecycle_tags": stale_tags,
+            "tags": child_tags,
+            "parent_row": parent_row_after or parent_row,
+        }
+
+    def reconcile_terminal_todo_children(self, slugs):
+        requested = [str(slug or "").strip() for slug in slugs or [] if str(slug or "").strip()]
+        if not requested or len(requested) > SG_TODO_RECONCILE_MAX_SLUGS:
+            raise ValueError(f"slugs must contain 1-{SG_TODO_RECONCILE_MAX_SLUGS} entries")
+        if len(set(requested)) != len(requested):
+            raise ValueError("slugs must be unique")
+
+        parent_raw = self.get_entity_raw(SG_TODO_ROOT_SLUG, timeout=20)
+        terminal_rows = {
+            row["node"]: row
+            for row in parse_todo_table_rows(parent_raw)
+            if row.get("node") and row.get("status") in SG_TODO_TERMINAL_STATUSES
+        }
+        unknown = [slug for slug in requested if slug not in terminal_rows]
+        if unknown:
+            raise ValueError("every slug must be a terminal child in the active TODO table")
+
+        results = []
+        for slug in requested:
+            content = self.get_entity_raw(slug, timeout=20)
+            if not isinstance(content, str):
+                raise EntityPersistenceError("todo_lifecycle_child_unavailable")
+            evidence = self.reconcile_terminal_todo_lifecycle(slug, content)
+            if evidence is None:
+                raise EntityPersistenceError("todo_lifecycle_child_invalid")
+            results.append({"slug": slug, **evidence})
+        return {"requested_count": len(requested), "reconciled_count": len(results), "results": results}
+
     def add_timeline_event(self, slug, date, summary, detail="", source=""):
         payload = {"slug": slug, "date": date, "summary": summary}
         if detail:
@@ -9980,6 +10060,43 @@ def parse_todo_table_rows(markdown):
     return rows
 
 
+def terminal_sg_todo_descriptor(slug, markdown):
+    meta, _body = parse_frontmatter(markdown or "")
+    status = str(meta.get("status") or "").strip()
+    parent = str(meta.get("parent") or "").strip()
+    todo_id = str(meta.get("todo_id") or meta.get("id") or "").strip()
+    entity_type = str(meta.get("type") or "").strip()
+    normalized_slug = str(slug or "").strip()
+    if (
+        status not in SG_TODO_TERMINAL_STATUSES
+        or parent != SG_TODO_ROOT_SLUG
+        or entity_type not in {"task", "todo"}
+        or not re.fullmatch(r"SG-\d{4}", todo_id)
+        or not normalized_slug.startswith(f"{SG_TODO_ROOT_SLUG}/")
+    ):
+        return None
+    return {
+        "slug": normalized_slug,
+        "status": status,
+        "todo_id": todo_id,
+        "parent": parent,
+    }
+
+
+def verify_terminal_sg_todo_parent_row(markdown, descriptor):
+    matches = [
+        row for row in parse_todo_table_rows(markdown)
+        if row.get("id") == descriptor["todo_id"]
+    ]
+    if (
+        len(matches) != 1
+        or matches[0].get("node") != descriptor["slug"]
+        or matches[0].get("status") != descriptor["status"]
+    ):
+        raise EntityPersistenceError("todo_lifecycle_parent_readback_unverified")
+    return matches[0]
+
+
 def listify_frontmatter_value(value):
     if value is None:
         return []
@@ -11532,6 +11649,7 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     "indexing_status": "ready",
                     "degraded": False,
                 }
+                todo_lifecycle = STORE.reconcile_terminal_todo_lifecycle(slug, content)
                 try:
                     graph = STORE.refresh_after_entity_save()
                     graph_refresh_status = "ready"
@@ -11541,17 +11659,18 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     # into a false 502; callers can refresh the graph later.
                     graph = None
                     graph_refresh_status = "pending"
-                return self.end_json(
-                    {
-                        "ok": True,
-                        "slug": slug,
-                        "persisted": bool(persistence.get("persisted")),
-                        "indexing_status": persistence.get("indexing_status"),
-                        "graph_refresh_status": graph_refresh_status,
-                        "persistence": persistence,
-                        "graph": graph,
-                    }
-                )
+                response = {
+                    "ok": True,
+                    "slug": slug,
+                    "persisted": bool(persistence.get("persisted")),
+                    "indexing_status": persistence.get("indexing_status"),
+                    "graph_refresh_status": graph_refresh_status,
+                    "persistence": persistence,
+                    "graph": graph,
+                }
+                if todo_lifecycle is not None:
+                    response["todo_lifecycle"] = todo_lifecycle
+                return self.end_json(response)
             except EntityPersistenceError as exc:
                 return self.end_json(
                     {
@@ -11572,6 +11691,21 @@ class MemoryStargraphHandler(SimpleHTTPRequestHandler):
                     },
                     status=HTTPStatus.BAD_GATEWAY,
                 )
+        if parsed.path == "/api/todo-lifecycle-reconcile":
+            try:
+                payload = self.read_json_body()
+                slugs = payload.get("slugs")
+                if not isinstance(slugs, list):
+                    return self.end_json({"error": "slugs must be a list"}, status=HTTPStatus.BAD_REQUEST)
+                result = STORE.reconcile_terminal_todo_children(slugs)
+                graph = STORE.get_seed_graph(force=True)
+                return self.end_json({"ok": True, **result, "graph": graph})
+            except ValueError as exc:
+                return self.end_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except EntityPersistenceError as exc:
+                return self.end_json({"error": exc.code}, status=HTTPStatus.BAD_GATEWAY)
+            except Exception:  # noqa: BLE001
+                return self.end_json({"error": "todo_lifecycle_reconcile_failed"}, status=HTTPStatus.BAD_GATEWAY)
         if parsed.path.startswith("/api/entity-delete/"):
             slug = unquote(parsed.path.split("/api/entity-delete/", 1)[1]).strip("/")
             try:

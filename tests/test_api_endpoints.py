@@ -60,6 +60,18 @@ class FakeStore:
     def save_entity_raw(self, slug, content):
         self.calls.append(("save_entity_raw", slug, content))
 
+    def reconcile_terminal_todo_lifecycle(self, slug, content):
+        self.calls.append(("reconcile_terminal_todo_lifecycle", slug, content))
+        return None
+
+    def reconcile_terminal_todo_children(self, slugs):
+        self.calls.append(("reconcile_terminal_todo_children", tuple(slugs)))
+        return {
+            "requested_count": len(slugs),
+            "reconciled_count": len(slugs),
+            "results": [{"slug": slug, "child_status_verified": True} for slug in slugs],
+        }
+
     def refresh_after_entity_save(self):
         self.calls.append(("refresh_after_entity_save",))
         return TEST_GRAPH
@@ -1294,9 +1306,55 @@ class ApiEndpointTests(unittest.TestCase):
             fake_store.calls,
             [
                 ("save_entity_raw", "people/tony-guan", content),
+                ("reconcile_terminal_todo_lifecycle", "people/tony-guan", content),
                 ("refresh_after_entity_save",),
             ],
         )
+
+    def test_entity_save_returns_terminal_todo_lifecycle_evidence(self):
+        fake_store = FakeStore()
+        content = "---\ntype: task\nstatus: completed\ntodo_id: SG-0229\n---\n\n# Done\n"
+        evidence = {
+            "status": "completed",
+            "todo_id": "SG-0229",
+            "child_status_verified": True,
+            "parent_status_verified": True,
+            "stale_lifecycle_tags": [],
+            "tags": ["completed", "memory-stargraph", "todo"],
+        }
+        with (
+            mock.patch("server.STORE", fake_store),
+            mock.patch.object(fake_store, "reconcile_terminal_todo_lifecycle", return_value=evidence),
+        ):
+            status, data = self.dispatch_post(
+                "/api/entity-save/notes%2Fmemory-starmap-todo-list%2Fdone",
+                {"content": content},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["todo_lifecycle"], evidence)
+
+    def test_bounded_todo_lifecycle_reconcile_endpoint(self):
+        fake_store = FakeStore()
+        slugs = ["notes/memory-starmap-todo-list/done"]
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post(
+                "/api/todo-lifecycle-reconcile",
+                {"slugs": slugs},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["requested_count"], 1)
+        self.assertIn(("reconcile_terminal_todo_children", tuple(slugs)), fake_store.calls)
+
+    def test_todo_lifecycle_reconcile_requires_explicit_slug_list(self):
+        fake_store = FakeStore()
+        with mock.patch("server.STORE", fake_store):
+            status, data = self.dispatch_post("/api/todo-lifecycle-reconcile", {"slugs": "all"})
+
+        self.assertEqual(status, 400)
+        self.assertEqual(data["error"], "slugs must be a list")
 
     def test_entity_save_reports_durable_indexing_pending(self):
         fake_store = FakeStore()

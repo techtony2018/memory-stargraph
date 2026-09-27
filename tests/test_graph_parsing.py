@@ -4075,6 +4075,99 @@ cover_image: companies/example-inc/logo.jpg
         )
         self.assertEqual(invalidate.call_count, 6)
 
+    def test_terminal_todo_lifecycle_normalizes_completed_tags_and_verifies_parent(self):
+        store = GraphStore()
+        slug = "notes/memory-starmap-todo-list/done"
+        child = (
+            "---\ntype: task\nparent: notes/memory-starmap-todo-list\n"
+            "status: completed\ntodo_id: SG-0229\ntags:\n"
+            "  - completed\n  - memory-stargraph\n  - todo\n---\n\n# Done\n"
+        )
+        parent = (
+            "| SG-0229 | completed | P2 | Done | "
+            "[[notes/memory-starmap-todo-list/done]] | 2026-09-27 | Complete. |\n"
+        )
+        with (
+            mock.patch.object(store, "get_entity_raw", side_effect=[parent, child, parent]),
+            mock.patch.object(
+                store,
+                "get_entity_tags",
+                side_effect=[
+                    ["active", "completed", "implementing", "memory-stargraph", "planned", "todo"],
+                    ["completed", "memory-stargraph", "todo"],
+                ],
+            ),
+            mock.patch.object(store, "update_tags") as update_tags,
+        ):
+            evidence = store.reconcile_terminal_todo_lifecycle(slug, child)
+
+        update_tags.assert_has_calls(
+            [
+                mock.call(
+                    slug,
+                    remove_tags=["active", "completed", "implementing", "planned"],
+                ),
+                mock.call(slug, add_tags=["completed"]),
+            ]
+        )
+        self.assertTrue(evidence["child_status_verified"])
+        self.assertTrue(evidence["parent_status_verified"])
+        self.assertEqual(evidence["stale_lifecycle_tags"], [])
+
+    def test_terminal_todo_lifecycle_failed_retry_is_idempotent(self):
+        store = GraphStore()
+        slug = "notes/memory-starmap-todo-list/failed"
+        child = (
+            "---\ntype: todo\nparent: notes/memory-starmap-todo-list\n"
+            "status: failed\nid: SG-0999\ntags:\n  - failed\n  - todo\n---\n\n# Failed\n"
+        )
+        parent = (
+            "| SG-0999 | failed | P2 | Failed | "
+            "[[notes/memory-starmap-todo-list/failed]] | 2026-09-27 | Failed. |\n"
+        )
+        with (
+            mock.patch.object(store, "get_entity_raw", side_effect=[parent, child, parent]),
+            mock.patch.object(store, "get_entity_tags", side_effect=[["failed", "todo"], ["failed", "todo"]]),
+            mock.patch.object(store, "update_tags") as update_tags,
+        ):
+            evidence = store.reconcile_terminal_todo_lifecycle(slug, child)
+
+        update_tags.assert_has_calls(
+            [mock.call(slug, remove_tags=["failed"]), mock.call(slug, add_tags=["failed"])]
+        )
+        self.assertEqual(evidence["status"], "failed")
+
+    def test_terminal_todo_lifecycle_fails_closed_on_parent_mismatch(self):
+        store = GraphStore()
+        slug = "notes/memory-starmap-todo-list/done"
+        child = (
+            "---\ntype: task\nparent: notes/memory-starmap-todo-list\n"
+            "status: completed\ntodo_id: SG-0229\n---\n\n# Done\n"
+        )
+        parent = (
+            "| SG-0229 | planned | P2 | Done | "
+            "[[notes/memory-starmap-todo-list/done]] | 2026-09-27 | Planned. |\n"
+        )
+        with (
+            mock.patch.object(store, "get_entity_raw", return_value=parent),
+            mock.patch.object(store, "update_tags") as update_tags,
+        ):
+            with self.assertRaisesRegex(server.EntityPersistenceError, "todo_lifecycle_parent_readback_unverified"):
+                store.reconcile_terminal_todo_lifecycle(slug, child)
+        update_tags.assert_not_called()
+
+    def test_terminal_todo_reconcile_is_bounded_to_active_table_slugs(self):
+        store = GraphStore()
+        parent = (
+            "| SG-0229 | completed | P2 | Done | "
+            "[[notes/memory-starmap-todo-list/done]] | 2026-09-27 | Complete. |\n"
+        )
+        with mock.patch.object(store, "get_entity_raw", return_value=parent):
+            with self.assertRaisesRegex(ValueError, "terminal child in the active TODO table"):
+                store.reconcile_terminal_todo_children(
+                    ["notes/memory-starmap-todo-list/not-in-parent"]
+                )
+
     def test_ask_yoda_returns_fallback_when_openclaw_unavailable(self):
         store = GraphStore()
 

@@ -42,6 +42,13 @@ ROUTES = [
         "curl_shape": "curl -sS --fail <base-url>/api/entity-tags/<URL-encoded-slug>",
     },
     {
+        "action": "reconcile-terminal-todo-lifecycle",
+        "method": "POST",
+        "endpoint": "/api/todo-lifecycle-reconcile",
+        "mutates_gbrain": True,
+        "curl_shape": "curl -sS --fail -X POST -H 'Content-Type: application/json' -d @- <base-url>/api/todo-lifecycle-reconcile",
+    },
+    {
         "action": "list-pages",
         "method": "GET",
         "endpoint": "/api/pages?tag=<tag>&type=<type>&limit=<N>",
