@@ -789,6 +789,23 @@ class GraphParsingTests(unittest.TestCase):
                 expected = sorted(value) if tool_name == "get_tags" else value
                 self.assertEqual(yoda_gbrain_call_tool(tool_name, {}), expected)
 
+    def test_yoda_mcp_validator_normalizes_legacy_compiled_truth_page(self):
+        legacy_page = {
+            "slug": "people/legacy",
+            "compiled_truth": "# Legacy Person\n\nGrounded local evidence.",
+            "tags": ["private"],
+        }
+        with mock.patch(
+            "server.YODA_GBRAIN_MCP_POOL.call_tool", return_value=legacy_page
+        ):
+            result = yoda_gbrain_call_tool(
+                "get_page", {"slug": "people/legacy", "include_content": True}
+            )
+
+        self.assertEqual(result["content"], legacy_page["compiled_truth"])
+        self.assertEqual(result["slug"], "people/legacy")
+        self.assertNotIn("content", legacy_page)
+
     def test_ask_yoda_structured_context_never_uses_cli_fallback(self):
         store = GraphStore()
 

@@ -327,7 +327,7 @@ MEDIA_FETCH_TIMEOUT_SECONDS = float(CONFIG.get("media_fetch_timeout_seconds", 8)
 MAX_UPLOAD_BYTES = int(CONFIG.get("max_upload_bytes", 25 * 1024 * 1024))
 YODA_BACKENDS = {"codex", "openclaw", "openai", "openai_compatible", "ollama", "gbrain_think"}
 VIEW_SCHEMA_VERSION = 5
-UI_VERSION = "V1.0.230"
+UI_VERSION = "V1.0.231"
 ENTITY_SAVE_PRIMARY_TIMEOUT_SECONDS = 30
 ENTITY_SAVE_READBACK_DELAYS_SECONDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 ENTITY_SAVE_READBACK_ATTEMPTS = len(ENTITY_SAVE_READBACK_DELAYS_SECONDS) + 1
@@ -2351,6 +2351,10 @@ def yoda_gbrain_call_tool(tool_name, payload=None, timeout=30):
         raise ValueError("Ask Yoda GBrain MCP payload must be an object")
     value = YODA_GBRAIN_MCP_POOL.call_tool(name, dict(payload or {}), timeout=timeout)
     if name == "get_page":
+        if isinstance(value, dict) and not isinstance(value.get("content"), str):
+            legacy_content = value.get("compiled_truth")
+            if isinstance(legacy_content, str):
+                value = {**value, "content": legacy_content}
         if not isinstance(value, dict) or not isinstance(value.get("content"), str):
             raise RuntimeError("Ask Yoda GBrain get_page returned invalid structured content")
         return value
