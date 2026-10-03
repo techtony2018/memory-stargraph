@@ -2459,6 +2459,17 @@ def protect_entity_save_frontmatter(content):
     return content[:4] + "".join(protected) + content[end:]
 
 
+def save_entity_markdown_with_fallback(slug, content):
+    try:
+        run_gbrain("put", slug, input_text=content)
+        return {"mode": "gbrain_put", "degraded": False}
+    except Exception as exc:  # noqa: BLE001
+        if not entity_save_no_embed_fallback_enabled() or not entity_save_embedding_failure(exc):
+            raise
+        run_entity_save_no_embed_import(slug, content)
+        return {"mode": "durable_no_embed", "degraded": True}
+
+
 def run_entity_save_no_embed_import(slug, content, timeout=None):
     parts = entity_save_slug_parts(slug)
     bounded_timeout = int(timeout or CONFIG.get("entity_save_no_embed_timeout_seconds", 90))
@@ -5626,6 +5637,34 @@ def parse_gbrain_durable_evidence(output, relative_path, source_bytes):
     ):
         raise RuntimeError("GBrain durable storage evidence did not match the attachment path, size, and SHA-256.")
     return payload
+
+
+def durable_evidence_from_store(relative_path, source_bytes, disposition="existing"):
+    safe_path = safe_media_relative_path(str(relative_path or ""))
+    expected = bytes(source_bytes or b"")
+    expected_hash = hashlib.sha256(expected).hexdigest()
+    if not safe_path:
+        raise RuntimeError("GBrain durable storage evidence did not match the attachment path, size, and SHA-256.")
+    for root in GBRAIN_FILE_STORE_ROOTS:
+        candidate = root.expanduser() / safe_path
+        try:
+            candidate.resolve().relative_to(root.expanduser().resolve())
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        actual = candidate.read_bytes()
+        actual_hash = hashlib.sha256(actual).hexdigest()
+        if len(actual) == len(expected) and actual_hash == expected_hash:
+            return {
+                "durable_storage_verified": True,
+                "storage_path": safe_path.as_posix(),
+                "filename": safe_path.name,
+                "size_bytes": len(actual),
+                "sha256": actual_hash,
+                "disposition": disposition,
+            }
+    raise RuntimeError("GBrain durable storage evidence did not match the attachment path, size, and SHA-256.")
 
 
 def parse_multipart_form(content_type, body):
@@ -9259,13 +9298,16 @@ class GraphStore:
                 ) from exc
             ledger_output = run_gbrain_files_bridge(file_path, slug)
             upload_transport = "ssh-bridge"
-        durable_evidence = parse_gbrain_durable_evidence(ledger_output, relative_path, source_bytes)
         if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
             ledger_output = f"{ledger_output or ''}\n{run_gbrain('files', 'list', slug)}"
         if not gbrain_file_ledger_has_relative_path(slug, relative_path, ledger_output=ledger_output):
             raise RuntimeError(
                 f"Attachment upload was not visible in GBrain files for {slug}; markdown was not updated."
             )
+        try:
+            durable_evidence = parse_gbrain_durable_evidence(ledger_output, relative_path, source_bytes)
+        except RuntimeError:
+            durable_evidence = durable_evidence_from_store(relative_path, source_bytes)
         markdown_updated = False
         copy_file_to_gbrain_store(file_path, relative_path)
         if raw and relative_path:
@@ -9295,8 +9337,11 @@ class GraphStore:
                 description,
             )
             if updated_raw != latest_raw:
-                run_gbrain("put", slug, input_text=updated_raw)
+                save_result = save_entity_markdown_with_fallback(slug, updated_raw)
                 markdown_updated = True
+                if local_media:
+                    local_media["persistence_mode"] = save_result.get("mode")
+                    local_media["persistence_degraded"] = bool(save_result.get("degraded"))
         self.invalidate()
         if local_media:
             local_media["markdown_updated"] = markdown_updated

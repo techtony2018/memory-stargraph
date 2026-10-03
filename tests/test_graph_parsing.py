@@ -3726,6 +3726,78 @@ cover_image: companies/example-inc/logo.jpg
             run.assert_any_call("put", "people/bridge", input_text=mock.ANY)
             invalidate.assert_called_once()
 
+    def test_graph_store_attach_file_accepts_existing_hash_when_store_bytes_match(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            store_root = Path(tmpdir) / "gbrain-files"
+            source = Path(tmpdir) / "Existing.jpg"
+            source.write_bytes(b"existing jpg")
+            durable = store_root / "people/existing/Existing.jpg"
+            durable.parent.mkdir(parents=True)
+            durable.write_bytes(b"existing jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch("server.GBRAIN_FILE_STORE_ROOTS", [store_root]),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                run.side_effect = [
+                    "# Existing Person\n\nNotes.",
+                    "File already uploaded (hash match): people/existing/Existing.jpg",
+                    "1 file(s):\n  people/existing / Existing.jpg  [12B, image/jpeg]",
+                    "# Existing Person\n\nNotes.",
+                    "",
+                ]
+
+                result = store.attach_file("people/existing", str(source), "Existing image")
+
+            self.assertTrue(result["durable_storage_verified"])
+            self.assertEqual(result["storage_disposition"], "existing")
+            self.assertEqual(result["canonical_relative_path"], "people/existing/Existing.jpg")
+            self.assertTrue(result["markdown_updated"])
+            run.assert_any_call("files", "list", "people/existing")
+            run.assert_any_call("put", "people/existing", input_text=mock.ANY)
+            invalidate.assert_called_once()
+
+    def test_graph_store_attach_file_uses_no_embed_fallback_when_markdown_put_times_out(self):
+        with TemporaryDirectory() as tmpdir:
+            media_root = Path(tmpdir) / "media"
+            source = Path(tmpdir) / "Tweet.jpg"
+            source.write_bytes(b"tweet jpg")
+            store = GraphStore()
+
+            with (
+                mock.patch("server.MEDIA_ROOTS", [media_root]),
+                mock.patch.dict("server.CONFIG", {"entity_save_no_embed_fallback": True}),
+                mock.patch("server.run_gbrain") as run,
+                mock.patch("server.run_entity_save_no_embed_import", return_value={"status": "success"}) as fallback,
+                mock.patch.object(store, "invalidate") as invalidate,
+            ):
+                digest = __import__("hashlib").sha256(b"tweet jpg").hexdigest()
+                run.side_effect = [
+                    "# Tweet\n\nNotes.",
+                    (
+                        f'GBRAIN_FILE_EVIDENCE {{"durable_storage_verified":true,'
+                        f'"storage_path":"media/x-post/Tweet.jpg","filename":"Tweet.jpg",'
+                        f'"size_bytes":9,"sha256":"{digest}","disposition":"uploaded"}}\n'
+                        "1 file(s):\n  media/x-post / Tweet.jpg  [9B, image/jpeg]"
+                    ),
+                    "# Tweet\n\nNotes.",
+                    RuntimeError("gbrain put timed out after 20 seconds"),
+                ]
+
+                result = store.attach_file("media/x-post", str(source), "Tweet image")
+
+            self.assertTrue(result["markdown_updated"])
+            self.assertEqual(result["persistence_mode"], "durable_no_embed")
+            self.assertTrue(result["persistence_degraded"])
+            fallback.assert_called_once()
+            fallback_content = fallback.call_args.args[1]
+            self.assertIn("![Tweet image](media/x-post/Tweet.jpg)", fallback_content)
+            invalidate.assert_called_once()
+
     def test_graph_store_attach_file_refuses_markdown_when_ledger_misses_upload(self):
         with TemporaryDirectory() as tmpdir:
             media_root = Path(tmpdir) / "media"
