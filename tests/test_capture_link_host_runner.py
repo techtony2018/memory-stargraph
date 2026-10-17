@@ -452,11 +452,79 @@ tags:
         self.assertTrue(selection["no_eligible_candidate"])
         self.assertFalse(selection["no_eligible_candidate_within_inspected_scope"])
         self.assertTrue(selection["scope_complete"])
+        self.assertTrue(selection["listing_scope_complete"])
+        self.assertEqual(selection["listing_limit_reached_types"], [])
+        self.assertFalse(selection["unknown_unlisted_count"])
         self.assertEqual(selection["total_scope_count"], 7)
         self.assertEqual(selection["uninspected_count"], 0)
         self.assertEqual(selection["candidate_count"], 0)
         self.assertEqual(selection["exclusion_counts"]["not_public_or_no_reliable_public_source"], 7)
         self.assertEqual(selection["selection_version"], runner.ENRICHMENT_SELECTION_VERSION)
+
+    def test_capped_listing_cannot_claim_global_no_candidate(self):
+        people = [
+            {
+                "slug": f"people/private-{index:03d}",
+                "type": "person",
+                "updated": "",
+                "title": f"Private {index:03d}",
+            }
+            for index in range(runner.MAX_ENRICHMENT_CANDIDATES)
+        ]
+
+        def fake_list(entity_type, limit=runner.MAX_ENRICHMENT_CANDIDATES):
+            return people if entity_type == "person" else []
+
+        with (
+            mock.patch.object(runner, "list_entities", side_effect=fake_list),
+            mock.patch.object(
+                runner,
+                "get_entity",
+                return_value="---\ntype: person\nvisibility: private\n---\n# Private\n",
+            ) as get_entity,
+        ):
+            selection = runner.inspect_enrichment_candidates()
+
+        self.assertEqual(get_entity.call_count, runner.MAX_ENRICHMENT_CANDIDATES)
+        self.assertFalse(selection["scope_complete"])
+        self.assertFalse(selection["listing_scope_complete"])
+        self.assertEqual(selection["listing_limit_reached_types"], ["person"])
+        self.assertTrue(selection["unknown_unlisted_count"])
+        self.assertEqual(selection["scope_incomplete_reasons"], ["listing_limit_reached:person"])
+        self.assertEqual(selection["uninspected_count"], 0)
+        self.assertFalse(selection["selection_truncated"])
+        self.assertEqual(selection["stop_reason"], "listed_scope_exhausted_listing_limit_reached")
+        self.assertFalse(selection["no_eligible_candidate"])
+        self.assertTrue(selection["no_eligible_candidate_within_inspected_scope"])
+        self.assertFalse(selection["inspected_scope"][0]["scope_complete"])
+
+    def test_listing_below_cap_can_prove_global_no_candidate(self):
+        people = [
+            {"slug": "people/private-a", "type": "person", "updated": "", "title": "Private A"},
+            {"slug": "people/private-b", "type": "person", "updated": "", "title": "Private B"},
+        ]
+
+        def fake_list(entity_type, limit=runner.MAX_ENRICHMENT_CANDIDATES):
+            return people if entity_type == "person" else []
+
+        with (
+            mock.patch.object(runner, "list_entities", side_effect=fake_list),
+            mock.patch.object(
+                runner,
+                "get_entity",
+                return_value="---\ntype: person\nvisibility: private\n---\n# Private\n",
+            ),
+        ):
+            selection = runner.inspect_enrichment_candidates()
+
+        self.assertTrue(selection["scope_complete"])
+        self.assertTrue(selection["listing_scope_complete"])
+        self.assertEqual(selection["listing_limit_reached_types"], [])
+        self.assertFalse(selection["unknown_unlisted_count"])
+        self.assertTrue(selection["no_eligible_candidate"])
+        self.assertFalse(selection["no_eligible_candidate_within_inspected_scope"])
+        self.assertEqual(selection["stop_reason"], "scope_exhausted")
+        self.assertTrue(all(scope["scope_complete"] for scope in selection["inspected_scope"]))
 
     def test_truncated_bounded_scope_cannot_claim_global_no_candidate(self):
         rows = [

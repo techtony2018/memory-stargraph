@@ -36,7 +36,7 @@ STALE_LOCK_SECONDS = 60
 MAX_LOG_BYTES = 512 * 1024
 DEFAULT_MODE = "auto"
 ALLOWED_MODES = {"auto", "capture_drain", "empty_queue_enrichment"}
-ENRICHMENT_SELECTION_VERSION = "empty-queue-enrichment-v1"
+ENRICHMENT_SELECTION_VERSION = "empty-queue-enrichment-v2"
 MAX_ENRICHMENT_CANDIDATES = 500
 MAX_ENRICHMENT_ATTEMPTS = 2
 MAX_ENRICHMENT_INSPECTIONS = 20
@@ -1027,12 +1027,17 @@ def inspect_enrichment_candidates(
     ]
     rows_by_scope: list[tuple[int, dict[str, object], list[dict[str, str]]]] = []
     total_scope_count = 0
+    listing_limit_reached_types: list[str] = []
     for type_rank, scope in enumerate(inspected_scope):
         if root is not None and values is not None:
             write_phase_state(root, values, "candidate_listing", processed=type_rank, total=len(inspected_scope), extra={"current_type": scope["type"]})
         rows = list_entities(str(scope["type"]), int(scope["limit"]))
         rows_by_scope.append((type_rank, scope, rows))
         scope["listed_count"] = len(rows)
+        scope["listing_limit_reached"] = len(rows) >= int(scope["limit"])
+        scope["scope_complete"] = not scope["listing_limit_reached"]
+        if scope["listing_limit_reached"]:
+            listing_limit_reached_types.append(str(scope["type"]))
         total_scope_count += len(rows)
 
     exclusions: dict[str, int] = {}
@@ -1086,7 +1091,18 @@ def inspect_enrichment_candidates(
     for index, candidate in enumerate(candidates, 1):
         candidate["selection_order"] = index
         candidate.pop("order_key", None)
-    scope_complete = inspected_count >= total_scope_count and not selection_truncated
+    listing_scope_complete = not listing_limit_reached_types
+    scope_complete = (
+        listing_scope_complete
+        and inspected_count >= total_scope_count
+        and not selection_truncated
+    )
+    if (
+        not listing_scope_complete
+        and not selection_truncated
+        and inspected_count >= total_scope_count
+    ):
+        stop_reason = "listed_scope_exhausted_listing_limit_reached"
     uninspected_count = max(total_scope_count - inspected_count, 0)
     no_eligible_candidate = len(candidates) == 0 and scope_complete
     no_eligible_within_inspected = len(candidates) == 0 and not scope_complete
@@ -1095,6 +1111,13 @@ def inspect_enrichment_candidates(
         "selection_version": ENRICHMENT_SELECTION_VERSION,
         "inspected_scope": inspected_scope,
         "scope_complete": scope_complete,
+        "listing_scope_complete": listing_scope_complete,
+        "listing_limit_reached_types": listing_limit_reached_types,
+        "unknown_unlisted_count": bool(listing_limit_reached_types),
+        "scope_incomplete_reasons": [
+            f"listing_limit_reached:{entity_type}"
+            for entity_type in listing_limit_reached_types
+        ],
         "total_scope_count": total_scope_count,
         "inspected_count": inspected_count,
         "uninspected_count": uninspected_count,
