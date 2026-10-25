@@ -34,7 +34,7 @@ This bounded .85 Product Strategy review completed with no new SG TODO, no strat
 
 Three changes matter since the October 18 review. Ask Yoda's managed Codex runtime changed from ready to unavailable and is already owned by SG-0238. Disk usage reached 84.18%, leaving 0.82 percentage points before warning, and Product Owner created SG-0240 for read-only attribution. Capture Link now truthfully distinguishes inspected-scope absence from global absence on both current and recovery evidence, but SG-0236 remains failed despite the later `.102 code deployed` and disabled-runner evidence. That last item needs Product Owner closure review, not a duplicate TODO from Strategy.
 
-One lifecycle inconsistency is also current: the terminal October 25 X Intelligence Run was accepted by Product Owner and its report says active-tag release was authorized, but the live tag surface still returns that Run as the sole active page. Strategy did not remove the tag. Product Owner should reconcile the already-authorized terminal release and verify quiescence before dispatching mutating work.
+One lifecycle inconsistency was observed during review: the terminal October 25 X Intelligence Run was accepted by Product Owner and its report said active-tag release was authorized, but the live tag surface still returned that Run as the sole active page. Strategy did not remove the tag. After Strategy delivery, Product Owner follow-up completed the authorized release and final readback returned zero active pages.
 
 ## Source-Sync Preflight
 
@@ -67,7 +67,7 @@ One lifecycle inconsistency is also current: the terminal October 25 X Intellige
 - Capture Link's October 25 evidence inspected 615 listed entities, hit the 500-person listing cap, and correctly returned `scope_complete=false`, `unknown_unlisted_count=true`, and `no_eligible_candidate_within_inspected_scope=true` without a global absence claim. The October 19 recovery evidence also says `.102 code deployed` and the remote runner remains disabled.
 - Resolver is read-only and ready through the local ledger fallback, pending=0, auto-approval=false. Detailed event listing remains unavailable from the backend tool.
 - The newest X Learnings sharpen productization around transparent service/model cost, account scope, export/migration, visible execution identity, portable ownership, and coordinated writes. They are discovery input, not implementation authority.
-- The sole active-tag result is the completed [runs/gbrain-x-intelligence-capture-2026-10-25-001607-85](http://127.0.0.1:8788/?slug=runs%2Fgbrain-x-intelligence-capture-2026-10-25-001607-85), despite acknowledged terminal evidence and authorization to release it.
+- During review, the sole active-tag result was the completed [runs/gbrain-x-intelligence-capture-2026-10-25-001607-85](http://127.0.0.1:8788/?slug=runs%2Fgbrain-x-intelligence-capture-2026-10-25-001607-85), despite acknowledged terminal evidence and authorization to release it. Product Owner follow-up cleared it; final active-tag count is zero.
 - No browser run or external research was needed. Recent deployed UX and primary-source-backed local Learnings supplied current evidence without additional collection.
 
 ## Perspective Review
@@ -94,7 +94,7 @@ One lifecycle inconsistency is also current: the terminal October 25 X Intellige
 
 - Target user: Product Owner, operator, and automation workers.
 - Job to be done: know that a terminal outcome is represented consistently in status, tags, operational readiness, and canonical backlog state.
-- Evidence: the October 25 X Run is completed and acknowledged but still has the sole active tag. SG-0236 remains failed even though later recovery/current runner evidence proves truthful capped-scope behavior, `.102` deployment, and disabled remote-runner state.
+- Evidence: the October 25 X Run was completed and acknowledged but initially retained the sole active tag; Product Owner follow-up then cleared it. SG-0236 remains failed even though later recovery/current runner evidence proves truthful capped-scope behavior, `.102` deployment, and disabled remote-runner state.
 - Capability or experiment: perform a read-only reconciliation of these two cases, then use already-authorized lifecycle paths to release the X tag and decide whether SG-0236 can close or needs explicit remaining acceptance evidence.
 - Expected value: restores quiescence trust, prevents false worker blocking, and keeps weekly readiness aligned with deployed behavior.
 - Success metric: terminal X status/tag/readback agree; SG-0236 has one explicit Product Owner decision with cited evidence; no duplicate row or status is invented.
@@ -178,7 +178,7 @@ Memory Stargraph's near-term product gap is not a shortage of capabilities. It i
 - No production Ask Yoda usage or feedback was observed; all 30 sampled entries are synthetic/test.
 - No direct first-time-user completion session exists.
 - No Product Owner decision yet reconciles SG-0236 against the October 19 and 25 recovery evidence.
-- The terminal X active tag remains present after authorized release; Strategy did not mutate it.
+- The terminal X active tag was present after authorized release, then cleared by Product Owner follow-up; final active-tag count is zero.
 - Detailed resolver events remain unavailable, though aggregate resolver health is ready.
 - No customer willingness-to-pay, comprehension, or cross-client sandbox evidence exists for the new pricing/identity hypotheses.
 - No product code, deployment, TODO mutation, strategy-parent mutation, resolver approval, reranker configuration, browser mutation, backup/restore action, production prompt, or production/user-data mutation occurred.
@@ -187,8 +187,8 @@ Memory Stargraph's near-term product gap is not a shortage of capabilities. It i
 
 - Destination task: `019faa62-6058-7643-b9cc-a2627083af07`.
 - Status: `acknowledged_by_product_owner` at `2026-10-25T04:07:33-07:00`.
-- Readback: accepted `completed_no_new_todo_strategy_candidates`; keep all five proposals as strategy-only approval-packet inputs with no TODO promotion or Developer dispatch. SG-0234, SG-0235, SG-0237, SG-0238, SG-0239, and SG-0240 retain current ownership. Product Owner is following up on the already-authorized X lifecycle release and reviewing SG-0236 against newer `.102` deployment/runner evidence without altering its failed history.
-- Compact payload: Product Strategy 2026-10-25 completed on clean/current `1958ce00`, V1.0.231 / GBrain V0.46.28.0. No new TODO, Learning, code, deploy, configuration, resolver, browser, or production-data mutation. Backlog now planned=6, failed=2, completed=32; SG-0237/0238/0239/0240 own large-Run rendering, Codex runtime, long pair-ID, and disk-headroom findings. Readiness fell to 5/9 because Codex runtime is unavailable; weekly outcomes are 7/9; retrieval remains 10/10, 10/10, 9/9; backup current; restore Critical under SG-0234. Capture Link now truthfully reports incomplete capped scope and later evidence says `.102 code deployed`, so failed SG-0236 needs Product Owner closure review. The completed/acknowledged October 25 X Run still carries the sole active tag after release authorization. Preserve five opportunities as approval-packet inputs only: terminal-evidence finality, personal-memory contract card, Ask Yoda value diary after SG-0238, guided activation, and visible identity/coordinated-write sandbox. Requested follow-up: reconcile the authorized X tag release, decide SG-0236 closure evidence, and do not dispatch new Strategy-created work.
+- Readback: accepted `completed_no_new_todo_strategy_candidates`; keep all five proposals as strategy-only approval-packet inputs with no TODO promotion or Developer dispatch. SG-0234, SG-0235, SG-0237, SG-0238, SG-0239, and SG-0240 retain current ownership. Product Owner follow-up cleared the X lifecycle tag; SG-0236 remains failed while its newer `.102` deployment/runner evidence is reviewed without altering failed history.
+- Compact payload: Product Strategy 2026-10-25 completed on clean/current `1958ce00`, V1.0.231 / GBrain V0.46.28.0. No new TODO, Learning, code, deploy, configuration, resolver, browser, or production-data mutation. Backlog now planned=6, failed=2, completed=32; SG-0237/0238/0239/0240 own large-Run rendering, Codex runtime, long pair-ID, and disk-headroom findings. Readiness fell to 5/9 because Codex runtime is unavailable; weekly outcomes are 7/9; retrieval remains 10/10, 10/10, 9/9; backup current; restore Critical under SG-0234. Capture Link now truthfully reports incomplete capped scope and later evidence says `.102 code deployed`, so failed SG-0236 needs Product Owner closure review. The completed/acknowledged October 25 X Run initially retained the sole active tag after release authorization; Product Owner follow-up cleared it and final active count is zero. Preserve five opportunities as approval-packet inputs only: terminal-evidence finality, personal-memory contract card, Ask Yoda value diary after SG-0238, guided activation, and visible identity/coordinated-write sandbox. Requested follow-up: decide SG-0236 closure evidence and do not dispatch new Strategy-created work.
 
 ## Artifacts
 

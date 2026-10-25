@@ -38,7 +38,7 @@ tags:
 - Backlog: planned=6, implementing=0, failed=2, completed=32.
 - Decision: no new SG TODO, no strategy-row update, and no new Learning.
 - Current owners: SG-0234 restore recency, SG-0235 Escape, SG-0237 large Run View, SG-0238 Codex runtime, SG-0239 long pair ID, SG-0240 disk headroom, failed SG-0236 capped-scope deployment history.
-- Material changes: Ask Yoda runtime unavailable; disk at 84.18% with 0.82 warning-headroom points; Capture Link scope truth deployed; terminal X Run still carries the sole active tag after acknowledged release authorization.
+- Material changes: Ask Yoda runtime unavailable; disk at 84.18% with 0.82 warning-headroom points; Capture Link scope truth deployed; terminal X Run initially retained the sole active tag after acknowledged release authorization, then Product Owner follow-up cleared it.
 - Retained candidates: terminal-evidence finality, personal-memory contract card, Ask Yoda diary after SG-0238, guided activation, and visible identity/coordinated-write sandbox.
 - Mutation boundary: no code, deploy, configuration, TODO, strategy-parent, resolver, reranker, browser, backup/restore, production prompt, or production/user-data mutation.
 
@@ -52,7 +52,7 @@ tags:
 - SRE: backup current; restore evidence Critical under SG-0234; CPU critical single sample without correlated impact; disk headroom owned by SG-0240.
 - Capture Link: 615 listed entities inspected; person cap reached; scope correctly incomplete and no global absence claim.
 - Resolver: ready, pending=0, auto-approval=false; detailed event tool unavailable.
-- Active tags: one completed/acknowledged X Run remains active and needs Product Owner reconciliation.
+- Active tags: one completed/acknowledged X Run remained active during review; Product Owner follow-up cleared it and final count is zero.
 
 ## Durable Artifacts
 
@@ -64,5 +64,5 @@ tags:
 - Destination task: `019faa62-6058-7643-b9cc-a2627083af07`.
 - Status: `acknowledged_by_product_owner` at `2026-10-25T04:07:33-07:00`.
 - Pending: false; direct Product Owner readback accepted the terminal decision.
-- Readback: preserve all five proposals as strategy-only approval-packet inputs with no TODO promotion or Developer dispatch. Existing SG ownership remains unchanged. Product Owner owns follow-up for the X lifecycle release and SG-0236 evidence review without erasing its failed history.
-- Compact payload: Product Strategy 2026-10-25 completed_no_new_todo_strategy_candidates on clean/current `1958ce00`, V1.0.231. Existing SG-0234/0235/0237/0238/0239/0240 own current defects and capacity work; failed SG-0236 needs closure review against later successful deployment/runtime evidence. Ask Yoda runtime is unavailable and blocks the recurring-value diary. One completed/acknowledged X Run still has the sole active tag after release authorization. Keep all five strategy opportunities as approval-packet inputs; reconcile X tag and SG-0236 closure without duplicate work or product mutation.
+- Readback: preserve all five proposals as strategy-only approval-packet inputs with no TODO promotion or Developer dispatch. Existing SG ownership remains unchanged. Product Owner cleared the X lifecycle tag and continues SG-0236 evidence review without erasing its failed history.
+- Compact payload: Product Strategy 2026-10-25 completed_no_new_todo_strategy_candidates on clean/current `1958ce00`, V1.0.231. Existing SG-0234/0235/0237/0238/0239/0240 own current defects and capacity work; failed SG-0236 needs closure review against later successful deployment/runtime evidence. Ask Yoda runtime is unavailable and blocks the recurring-value diary. One completed/acknowledged X Run initially retained the sole active tag after release authorization; Product Owner follow-up cleared it and final active count is zero. Keep all five strategy opportunities as approval-packet inputs; review SG-0236 without duplicate work or product mutation.
