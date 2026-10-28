@@ -672,10 +672,11 @@ The canonical `add-sg-todo` source is `${CODEX_HOME:-$HOME/.codex}/skills/add-sg
 
 - Include active root rows and every validated completed archive in the high-water calculation. Missing, duplicate, gapped, or inconsistent archive evidence fails closed.
 - Stage a new child as `capture-recovery`; write the parent row and `has_todo` relationship before finalizing the child to `planned`. This prevents a crash or partial write from leaving an orphan child falsely marked planned.
+- Normalize escaped paragraph separators in prose descriptions to real Markdown blank lines before staging. Preserve escaped text inside inline and fenced code, keep the operation idempotent across retries, and flatten only the parent-table notes cell.
 - Return `ok: true` only after the parent row ID, child `todo_id`/status, and graph relationship all read back durably.
 - Lock contention and failed commit/readback return a structured retryable result. Bounded rollback must restore the parent and prior child or remove the new child and relationship; cleanup uncertainty remains a failure.
 
-Release verification must run both mirror suites and include concurrent text-only allocation, lock contention, partial parent/link failure, archive high-water, and mirror-identity coverage:
+Release verification must run both mirror suites and include concurrent text-only allocation, prose paragraph normalization, idempotent retry/readback, lock contention, partial parent/link failure, archive high-water, and mirror-identity coverage:
 
 ```bash
 python3 -m unittest discover -s "$HOME/.codex/skills/add-sg-todo/tests"
